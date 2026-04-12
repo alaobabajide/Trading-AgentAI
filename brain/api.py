@@ -49,6 +49,14 @@ class SignalResponse(BaseModel):
     take_profit_pct: float
     agent_views: dict[str, str]
     passed_confidence_gate: bool
+    # Vote-based fields
+    vote_tally: dict = {}
+    votes_for_action: int = 0
+    regime_label: str = "UNKNOWN"
+    tier: str = "WARM"
+    devil_advocate_score: int = 0
+    devil_advocate_case: str = ""
+    strategy_fit: str = "ALIGNED"
 
 
 # ── App factory ────────────────────────────────────────────────────────────────
@@ -158,6 +166,13 @@ def generate_signal(req: SignalRequest):
         take_profit_pct=d["take_profit_pct"],
         agent_views=d["agent_views"],
         passed_confidence_gate=(d["action"] != "HOLD"),
+        vote_tally=d.get("vote_tally", {}),
+        votes_for_action=d.get("votes_for_action", 0),
+        regime_label=d.get("regime_label", "UNKNOWN"),
+        tier=d.get("tier", "WARM"),
+        devil_advocate_score=d.get("devil_advocate_score", 0),
+        devil_advocate_case=d.get("devil_advocate_case", ""),
+        strategy_fit=d.get("strategy_fit", "ALIGNED"),
     )
 
 
@@ -167,6 +182,16 @@ def get_latest_signal(symbol: str):
     if not cached:
         raise HTTPException(status_code=404, detail=f"No cached signal for {symbol}")
     return cached
+
+
+@app.get("/signals/cached", response_model=list)
+def get_all_cached_signals():
+    """Return all signals currently in the in-memory cache, newest first."""
+    return sorted(
+        _signal_cache.values(),
+        key=lambda s: s.get("generated_at", ""),
+        reverse=True,
+    )
 
 
 @app.get("/portfolio")

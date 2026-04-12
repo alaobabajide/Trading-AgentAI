@@ -1,29 +1,69 @@
-"""Market Regime Detector agent."""
+"""Market Regime Detector — deterministic rules, no LLM call.
+
+Rules (evaluated in priority order):
+  HIGH_VOLATILITY  ATR% > 3.0 %
+  TRENDING_DOWN    MACD < signal AND RSI < 50
+  TRENDING_UP      MACD > signal AND RSI > 50
+  RANGING          all other cases (mixed/low-momentum signals)
+"""
 from __future__ import annotations
 
-from .base import BaseAnalyst
-
-_SYSTEM = """
-You are a market regime specialist responsible for classifying the current market environment
-and advising whether the prevailing regime favours trend-following or mean-reversion strategies.
-
-Given a JSON context with OHLCV bars and computed indicators (RSI, MACD, ATR, Bollinger Bands),
-your job is to:
-1. Classify the current regime into one of: TRENDING_UP / TRENDING_DOWN / RANGING / HIGH_VOLATILITY.
-2. Assess whether momentum indicators (MACD, RSI) are aligned or diverging from price action —
-   divergence signals regime transitions.
-3. Evaluate the Bollinger Band width trend: expanding bands signal a breakout/trending regime,
-   contracting bands signal a ranging/low-volatility regime.
-4. Recommend whether the current regime favours: (a) trend-following entry, (b) mean-reversion
-   entry, or (c) standing aside due to choppy/unpredictable conditions.
-5. Provide a directional view: BULLISH / BEARISH / NEUTRAL for the asset in this regime.
-
-Respond in this exact format:
-DIRECTION: <BULLISH|BEARISH|NEUTRAL>
-REASONING: <regime classification and strategy recommendation in 2-4 sentences>
-""".strip()
+from typing import Any
 
 
-class RegimeDetector(BaseAnalyst):
+class RegimeDetector:
+    """Classifies regime from technical indicators without an LLM call.
+
+    The client argument is accepted for API compatibility with other agents
+    (which do need it) but is never used here.
+    """
     role = "regime"
-    system_prompt = _SYSTEM
+
+    def __init__(self, client=None) -> None:  # noqa: ARG002
+        pass
+
+    def analyse(self, ctx: dict[str, Any]) -> str:
+        ind      = ctx.get("indicators", {})
+        price    = float(ind.get("price",       1.0) or 1.0)
+        atr      = float(ind.get("atr_14",      0.0))
+        rsi      = float(ind.get("rsi_14",     50.0))
+        macd     = float(ind.get("macd",        0.0))
+        macd_sig = float(ind.get("macd_signal", 0.0))
+        bb_width = float(ind.get("bb_width",    0.05))
+
+        atr_pct = atr / price
+
+        if atr_pct > 0.030:
+            label, direction = "HIGH_VOLATILITY", "NEUTRAL"
+            reasoning = (
+                f"ATR is {atr_pct * 100:.1f}% of price (threshold 3.0%). "
+                "Elevated volatility degrades both trend-following and mean-reversion strategies. "
+                "Recommend standing aside or cutting position sizes ≥ 50%."
+            )
+        elif macd < macd_sig and rsi < 50:
+            label, direction = "TRENDING_DOWN", "BEARISH"
+            reasoning = (
+                f"MACD {macd:.4f} below signal {macd_sig:.4f}; RSI {rsi:.1f} < 50. "
+                "Confirmed downtrend with bearish momentum alignment. "
+                "Trend-following SHORT entries favoured; avoid counter-trend longs."
+            )
+        elif macd > macd_sig and rsi > 50:
+            label, direction = "TRENDING_UP", "BULLISH"
+            reasoning = (
+                f"MACD {macd:.4f} above signal {macd_sig:.4f}; RSI {rsi:.1f} > 50. "
+                "Confirmed uptrend with bullish momentum alignment. "
+                "Trend-following LONG entries favoured with ATR-based trailing stop."
+            )
+        else:
+            label, direction = "RANGING", "NEUTRAL"
+            reasoning = (
+                f"MACD/RSI signals mixed (RSI {rsi:.1f}, BB width {bb_width:.4f}). "
+                "No confirmed trending regime — mean-reversion probability elevated. "
+                "Wait for regime confirmation before entering directional positions."
+            )
+
+        return (
+            f"DIRECTION: {direction}\n"
+            f"REGIME: {label}\n"
+            f"REASONING: {reasoning}"
+        )

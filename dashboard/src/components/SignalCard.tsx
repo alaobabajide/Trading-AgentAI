@@ -1,53 +1,67 @@
 import { useState } from "react";
 import { ChevronDown, ChevronUp, ShieldAlert } from "lucide-react";
 import { format } from "date-fns";
-import { Signal } from "../lib/types";
+import { Signal, VoteTally } from "../lib/types";
 import { SignalBadge } from "./SignalBadge";
-import { ConfidenceBar } from "./ConfidenceBar";
 import { TIER_CONFIG, FIT_CONFIG } from "../lib/hitl";
 import clsx from "clsx";
 
-// ── Analyst rows config ───────────────────────────────────────────────────────
+// ── Analyst rows ──────────────────────────────────────────────────────────────
 
 const ANALYSTS = [
-  { key: "fundamental",  label: "Fundamental",  color: "text-blue-400"    },
-  { key: "technical",    label: "Technical",    color: "text-cyan-400"    },
-  { key: "sentiment",    label: "Sentiment",    color: "text-purple-400"  },
-  { key: "macro",        label: "Macro",        color: "text-yellow-400"  },
-  { key: "quant",        label: "Quant",        color: "text-teal-400"    },
-  { key: "options_flow", label: "Options Flow", color: "text-orange-400"  },
-  { key: "regime",       label: "Regime",       color: "text-pink-400"    },
+  { key: "fundamental",  label: "Fundamental",  color: "text-blue-400"   },
+  { key: "technical",    label: "Technical",    color: "text-cyan-400"   },
+  { key: "sentiment",    label: "Sentiment",    color: "text-purple-400" },
+  { key: "macro",        label: "Macro",        color: "text-yellow-400" },
+  { key: "quant",        label: "Quant",        color: "text-teal-400"   },
+  { key: "options_flow", label: "Options Flow", color: "text-orange-400" },
+  { key: "regime",       label: "Regime",       color: "text-pink-400"   },
 ] as const;
 
-// ── Devil's Advocate bar ──────────────────────────────────────────────────────
+// ── Vote tally display (replaces confidence bar) ──────────────────────────────
 
-function DevilAdvocateBar({ score, caseText }: { score: number; caseText: string }) {
-  const barColor =
-    score >= 70 ? "bg-red-500"    :
-    score >= 40 ? "bg-amber-500"  :
-                  "bg-emerald-500";
+function VoteTallyRow({ tally, action, votesForAction }: {
+  tally: VoteTally;
+  action: string;
+  votesForAction: number;
+}) {
+  const total = tally.bullish + tally.bearish + tally.neutral;
 
   return (
-    <div className="bg-surface-700 rounded-xl p-3 space-y-2">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5">
-          <ShieldAlert className="w-3.5 h-3.5 text-slate-400" />
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-            Devil's Advocate
-          </span>
-        </div>
-        <span className={clsx(
-          "text-[10px] font-mono font-bold",
-          score >= 70 ? "text-red-400" : score >= 40 ? "text-amber-400" : "text-emerald-400",
-        )}>
-          {score}/100
-        </span>
+    <div className="flex items-center gap-3">
+      {/* Vote counts */}
+      <div className="flex items-center gap-2 text-[11px] font-mono">
+        <span className="text-emerald-400">{tally.bullish}B</span>
+        <span className="text-slate-600">·</span>
+        <span className="text-red-400">{tally.bearish}Br</span>
+        <span className="text-slate-600">·</span>
+        <span className="text-slate-400">{tally.neutral}N</span>
       </div>
-      <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
-        <div
-          className={clsx("h-full rounded-full transition-all", barColor)}
-          style={{ width: `${score}%` }}
-        />
+      {/* Majority summary */}
+      {action !== "HOLD" && (
+        <span className={clsx(
+          "text-[10px] font-semibold px-1.5 py-0.5 rounded",
+          action === "BUY"
+            ? "bg-emerald-500/15 text-emerald-300"
+            : "bg-red-500/15 text-red-300",
+        )}>
+          {votesForAction}/{total} {action === "BUY" ? "BULLISH" : "BEARISH"}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ── Devil's Advocate (text only — score bar removed) ─────────────────────────
+
+function DevilAdvocate({ caseText }: { caseText: string }) {
+  return (
+    <div className="bg-surface-700 rounded-xl p-3 space-y-1.5">
+      <div className="flex items-center gap-1.5">
+        <ShieldAlert className="w-3.5 h-3.5 text-slate-400" />
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+          Contrarian View
+        </span>
       </div>
       <p className="text-xs text-slate-400 italic">&ldquo;{caseText}&rdquo;</p>
     </div>
@@ -92,8 +106,20 @@ function StrategyFitBadge({ signal }: { signal: Signal }) {
 export function SignalCard({ signal }: { signal: Signal }) {
   const [expanded, setExpanded] = useState(false);
 
-  const tier   = signal.tier ?? "WARM";
+  const tier    = signal.tier ?? "WARM";
   const tierCfg = TIER_CONFIG[tier];
+
+  // Vote tally — use real data if present, else derive from confidence for mock signals
+  const tally: VoteTally = signal.vote_tally ?? {
+    bullish: signal.action === "BUY"  ? Math.round(signal.confidence * 7) : 1,
+    bearish: signal.action === "SELL" ? Math.round(signal.confidence * 7) : 1,
+    neutral: 7 - Math.round(signal.confidence * 7) - 1,
+  };
+  const votesForAction = signal.votes_for_action ?? (
+    signal.action === "BUY"  ? tally.bullish :
+    signal.action === "SELL" ? tally.bearish : 0
+  );
+  const regimeLabel = signal.regime_label;
 
   return (
     <div className={clsx("glass rounded-2xl overflow-hidden border", tierCfg.border)}>
@@ -104,17 +130,12 @@ export function SignalCard({ signal }: { signal: Signal }) {
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
             {/* Tier dot */}
-            <div className="flex flex-col items-center gap-1">
-              <span className={clsx(
-                "relative flex h-2 w-2",
-                tier === "HOT" && "animate-pulse",
-              )}>
-                {tier === "HOT" && (
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                )}
-                <span className={clsx("relative inline-flex rounded-full h-2 w-2", tierCfg.dot)} />
-              </span>
-            </div>
+            <span className={clsx("relative flex h-2 w-2 mt-1", tier === "HOT" && "animate-pulse")}>
+              {tier === "HOT" && (
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+              )}
+              <span className={clsx("relative inline-flex rounded-full h-2 w-2", tierCfg.dot)} />
+            </span>
 
             <div className="flex flex-col">
               <div className="flex items-center gap-2">
@@ -125,6 +146,11 @@ export function SignalCard({ signal }: { signal: Signal }) {
                 <span className={clsx("text-[10px] px-1.5 py-0.5 rounded-full font-semibold", tierCfg.bg, tierCfg.color)}>
                   {tierCfg.label}
                 </span>
+                {regimeLabel && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-700 text-slate-500 font-mono">
+                    {regimeLabel.replace(/_/g, " ")}
+                  </span>
+                )}
               </div>
               <span className="text-xs text-slate-500 mt-0.5">
                 {format(new Date(signal.generated_at), "HH:mm:ss · MMM d")}
@@ -135,13 +161,14 @@ export function SignalCard({ signal }: { signal: Signal }) {
           <div className="flex items-center gap-3 shrink-0">
             <SignalBadge action={signal.action} />
             {expanded
-              ? <ChevronUp  className="w-4 h-4 text-slate-500" />
+              ? <ChevronUp   className="w-4 h-4 text-slate-500" />
               : <ChevronDown className="w-4 h-4 text-slate-500" />}
           </div>
         </div>
 
-        <div className="mt-3 space-y-1">
-          <ConfidenceBar value={signal.confidence} />
+        {/* Vote tally row (replaces confidence bar) */}
+        <div className="mt-3 space-y-1.5">
+          <VoteTallyRow tally={tally} action={signal.action} votesForAction={votesForAction} />
           <p className="text-xs text-slate-400 line-clamp-2">{signal.rationale}</p>
         </div>
       </button>
@@ -152,8 +179,8 @@ export function SignalCard({ signal }: { signal: Signal }) {
           <div className="grid grid-cols-3 gap-2 text-center">
             {[
               { label: "Position", value: `${(signal.suggested_position_pct * 100).toFixed(1)}%` },
-              { label: "Stop",     value: `${(signal.stop_loss_pct * 100).toFixed(1)}%`           },
-              { label: "Target",   value: `${(signal.take_profit_pct * 100).toFixed(1)}%`          },
+              { label: "Stop",     value: `-${(signal.stop_loss_pct * 100).toFixed(1)}%`         },
+              { label: "Target",   value: `+${(signal.take_profit_pct * 100).toFixed(1)}%`       },
             ].map(({ label, value }) => (
               <div key={label} className="bg-surface-700 rounded-xl p-2">
                 <div className="text-[10px] text-slate-500 uppercase tracking-wider">{label}</div>
@@ -162,11 +189,10 @@ export function SignalCard({ signal }: { signal: Signal }) {
             ))}
           </div>
 
-          {/* Devil's Advocate */}
-          <DevilAdvocateBar
-            score={signal.devil_advocate_score ?? 0}
-            caseText={signal.devil_advocate_case ?? "No material counter-case identified."}
-          />
+          {/* Devil's Advocate — text only, no score */}
+          {signal.devil_advocate_case && (
+            <DevilAdvocate caseText={signal.devil_advocate_case} />
+          )}
 
           {/* Strategy Coach */}
           <StrategyFitBadge signal={signal} />
@@ -176,7 +202,7 @@ export function SignalCard({ signal }: { signal: Signal }) {
             <h4 className="text-[10px] text-slate-500 uppercase tracking-widest">
               Analyst Views{" "}
               <span className="text-slate-600 normal-case tracking-normal font-normal">
-                7 analysts · 1 risk manager
+                7 analysts · vote-based arbiter
               </span>
             </h4>
             {ANALYSTS.map(({ key, label, color }) => {
@@ -206,16 +232,16 @@ export function SignalCard({ signal }: { signal: Signal }) {
             })}
           </div>
 
-          {/* Gate status */}
+          {/* Vote gate status */}
           <div className={clsx(
             "text-xs font-mono rounded-xl px-3 py-2 text-center",
-            signal.passed_confidence_gate
+            signal.action !== "HOLD"
               ? "bg-emerald-500/10 text-emerald-400"
               : "bg-yellow-500/10 text-yellow-400",
           )}>
-            {signal.passed_confidence_gate
-              ? "✓ Passed confidence gate — eligible for execution"
-              : "⚠ Below threshold — downgraded to HOLD"}
+            {signal.action !== "HOLD"
+              ? `✓ Vote gate passed — ${votesForAction}/7 analysts ${signal.action === "BUY" ? "BULLISH" : "BEARISH"}`
+              : "⚠ No majority — signal downgraded to HOLD"}
           </div>
         </div>
       )}

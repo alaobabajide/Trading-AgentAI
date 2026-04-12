@@ -1,8 +1,9 @@
-"""Brain orchestration — 9-agent HITL debate with tier classification and regime weight decay."""
+"""Brain orchestration — 9-agent debate with deterministic vote-count tier classification."""
 from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Any, Literal
 
@@ -28,14 +29,10 @@ from brain.agents.risk_manager import RiskManager
 log = logging.getLogger(__name__)
 
 
-# ── Strategic-layer cache (Solution 7: edge-cached inference) ─────────────────
+# ── Strategic-layer cache (60s TTL for slow/stable macro + regime) ────────────
 
 class _StrategicCache:
-    """
-    Caches the outputs of slow/stable agents (macro, regime) for 60 s so that
-    intraday price ticks only need to re-run the fast tactical agents.
-    """
-    TTL = 60  # seconds
+    TTL = 60
 
     def __init__(self) -> None:
         self._store: dict[str, tuple[float, Any]] = {}
@@ -53,16 +50,11 @@ class _StrategicCache:
 _cache = _StrategicCache()
 
 
-# ── Regime-aware weight tracker (Solution 4) ─────────────────────────────────
+# ── Regime weight tracker (purges on >20% ATR shift) ─────────────────────────
 
 class _RegimeWeightTracker:
-    """
-    Tracks per-agent override win rates but purges learned weights when
-    the volatility regime changes significantly (>20% shift in ATR z-score),
-    preventing the overfitting trap.
-    """
-    PURGE_THRESHOLD = 0.20   # 20% regime shift triggers purge
-    PURGE_LOCKOUT = 7 * 86400  # 1 week in seconds
+    PURGE_THRESHOLD = 0.20
+    PURGE_LOCKOUT   = 7 * 86400
 
     def __init__(self) -> None:
         self._weights: dict[str, float] = {}
@@ -70,19 +62,14 @@ class _RegimeWeightTracker:
         self._last_purge: float = 0.0
 
     def record_atr(self, atr_pct: float) -> bool:
-        """Returns True if regime has shifted and weights were purged."""
         if self._atr_baseline is None:
             self._atr_baseline = atr_pct
             return False
-
         shift = abs(atr_pct - self._atr_baseline) / max(self._atr_baseline, 1e-9)
         if shift > self.PURGE_THRESHOLD:
             now = time.monotonic()
             if (now - self._last_purge) > self.PURGE_LOCKOUT:
-                log.warning(
-                    "Regime shift detected (ATR Δ=%.1f%%) — purging learned agent weights",
-                    shift * 100,
-                )
+                log.warning("Regime shift %.1f%% — purging agent weights", shift * 100)
                 self._weights.clear()
                 self._atr_baseline = atr_pct
                 self._last_purge = now
@@ -96,16 +83,103 @@ class _RegimeWeightTracker:
 _regime_tracker = _RegimeWeightTracker()
 
 
+# ── Vote-counting helpers ─────────────────────────────────────────────────────
+
+def _parse_direction(view: str) -> Literal["BULLISH", "BEARISH", "NEUTRAL"]:
+    """Extract DIRECTION: from agent output text."""
+    m = re.search(r"DIRECTION:\s*(BULLISH|BEARISH|NEUTRAL)", view, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()  # type: ignore[return-value]
+    return "NEUTRAL"
+
+
+def _parse_regime_label(regime_view: str) -> str:
+    """Extract REGIME: label from deterministic regime output."""
+    m = re.search(r"REGIME:\s*(\w+)", regime_view, re.IGNORECASE)
+    return m.group(1).upper() if m else "UNKNOWN"
+
+
+def _count_votes(analyst_views: dict[str, str]) -> dict[str, int]:
+    """
+    Count BULLISH / BEARISH / NEUTRAL across the 7 specialist analysts.
+    Excludes the strategy coach and risk manager (they don't cast direction votes).
+    """
+    VOTERS = {"fundamental", "technical", "sentiment", "macro", "quant", "options_flow", "regime"}
+    tally = {"bullish": 0, "bearish": 0, "neutral": 0}
+    for key, view in analyst_views.items():
+        if key not in VOTERS:
+            continue
+        direction = _parse_direction(view)
+        if direction == "BULLISH":
+            tally["bullish"] += 1
+        elif direction == "BEARISH":
+            tally["bearish"] += 1
+        else:
+            tally["neutral"] += 1
+    return tally
+
+
+def _action_from_votes(
+    tally: dict[str, int],
+    threshold: int = 4,
+) -> Literal["BUY", "SELL", "HOLD"]:
+    """
+    Majority-vote arbiter.  Requires threshold/7 agents to agree.
+    Default threshold = 4 (simple majority).
+    """
+    if tally["bullish"] >= threshold:
+        return "BUY"
+    if tally["bearish"] >= threshold:
+        return "SELL"
+    return "HOLD"
+
+
+def _compute_tier(
+    tally: dict[str, int],
+    action: str,
+    regime_label: str,
+    indicators: dict[str, Any],
+) -> Literal["HOT", "WARM", "COLD"]:
+    """
+    Deterministic tier from vote count + regime — no LLM confidence involved.
+
+    HOT  = 6 or 7 analysts aligned AND regime is TRENDING (not HIGH_VOL / RANGING)
+    WARM = 4 or 5 analysts aligned AND regime allows trading
+    COLD = 3 or fewer aligned  OR  HIGH_VOLATILITY  OR  RANGING regime
+    """
+    aligned  = tally["bullish"] if action == "BUY" else tally["bearish"] if action == "SELL" else 0
+    high_vol = (
+        "HIGH_VOLATILITY" in regime_label
+        or (indicators.get("atr_14", 0) / max(indicators.get("price", 1), 1)) > 0.03
+    )
+    blocked  = high_vol or "RANGING" in regime_label or action == "HOLD"
+
+    if blocked or aligned <= 3:
+        return "COLD"
+    if aligned >= 6:
+        return "HOT"
+    return "WARM"
+
+
+def _parse_strategy_fit(
+    strategy_raw: str,
+) -> Literal["ALIGNED", "MISALIGNED", "PARTIAL"]:
+    m = strategy_raw.upper()
+    if "MISALIGNED" in m:
+        return "MISALIGNED"
+    if "PARTIAL" in m:
+        return "PARTIAL"
+    return "ALIGNED"
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _bars_to_dicts(snapshot: MarketSnapshot) -> list[dict]:
     return [
         {
             "date":   b.timestamp.date().isoformat(),
-            "open":   b.open,
-            "high":   b.high,
-            "low":    b.low,
-            "close":  b.close,
+            "open":   b.open, "high": b.high,
+            "low":    b.low,  "close": b.close,
             "volume": b.volume,
         }
         for b in snapshot.bars[-60:]
@@ -120,59 +194,27 @@ def _compute_indicators(snapshot: MarketSnapshot) -> dict[str, Any]:
     lows   = pd.Series([b.low   for b in snapshot.bars])
 
     rsi         = ta.momentum.RSIIndicator(closes).rsi().iloc[-1]
-    macd_line   = ta.trend.MACD(closes).macd().iloc[-1]
-    macd_signal = ta.trend.MACD(closes).macd_signal().iloc[-1]
+    macd_ind    = ta.trend.MACD(closes)
     atr         = ta.volatility.AverageTrueRange(highs, lows, closes).average_true_range().iloc[-1]
     bb          = ta.volatility.BollingerBands(closes)
-    bb_width    = float(bb.bollinger_wband().iloc[-1])
 
     return {
         "rsi_14":      round(float(rsi), 2),
-        "macd":        round(float(macd_line), 4),
-        "macd_signal": round(float(macd_signal), 4),
+        "macd":        round(float(macd_ind.macd().iloc[-1]), 4),
+        "macd_signal": round(float(macd_ind.macd_signal().iloc[-1]), 4),
         "atr_14":      round(float(atr), 4),
         "bb_upper":    round(float(bb.bollinger_hband().iloc[-1]), 4),
         "bb_lower":    round(float(bb.bollinger_lband().iloc[-1]), 4),
-        "bb_width":    round(bb_width, 4),
+        "bb_width":    round(float(bb.bollinger_wband().iloc[-1]), 4),
         "price":       snapshot.bars[-1].close,
     }
 
 
-def _compute_tier(
-    confidence: float,
-    indicators: dict[str, Any],
-) -> Literal["HOT", "WARM", "COLD"]:
-    """
-    Solution 1 — Tiered Confirmation.
-    HOT  (confidence ≥ 0.85, low volatility)  → auto-execute in Auto mode
-    WARM (confidence 0.70–0.85)               → 10-second veto window in Assisted mode
-    COLD (confidence < 0.70 OR high vol)      → requires explicit click in all modes
-    """
-    price   = indicators.get("price", 1.0) or 1.0
-    atr     = indicators.get("atr_14", 0.0)
-    atr_pct = atr / price
-
-    if confidence < 0.70 or atr_pct > 0.03:
-        return "COLD"
-    if confidence >= 0.85 and atr_pct < 0.02:
-        return "HOT"
-    return "WARM"
-
-
-def _parse_strategy_fit(strategy_raw: str) -> Literal["ALIGNED", "MISALIGNED", "PARTIAL"]:
-    m = strategy_raw.upper()
-    if "MISALIGNED" in m:
-        return "MISALIGNED"
-    if "PARTIAL" in m:
-        return "PARTIAL"
-    return "ALIGNED"
-
-
-# ── Default user profile (overridden when profile is passed in) ───────────────
+# ── Default user profile ──────────────────────────────────────────────────────
 
 DEFAULT_PROFILE = {
-    "mode":            "assisted",
-    "time_horizon":    "swing",
+    "mode":             "assisted",
+    "time_horizon":     "swing",
     "max_drawdown_pct": 10,
     "max_position_pct": 5,
 }
@@ -181,32 +223,27 @@ DEFAULT_PROFILE = {
 # ── Main orchestrator ─────────────────────────────────────────────────────────
 
 class DebateOrchestrator:
-    """Runs all nine agents and returns a final TradingSignal with HITL metadata."""
+    """Runs all nine agents and returns a TradingSignal gated by majority vote."""
 
     def __init__(
         self,
         anthropic_api_key: str,
-        confidence_threshold: float = 0.7,
+        confidence_threshold: float = 0.7,   # retained for Risk Manager compat; not used for gating
         max_position_pct: float = 0.05,
         max_crypto_pct: float = 0.30,
         circuit_breaker_drawdown: float = 0.10,
     ) -> None:
         client = anthropic.Anthropic(api_key=anthropic_api_key)
 
-        # Seven specialist market analysts
         self._fundamental     = FundamentalAnalyst(client)
         self._technical       = TechnicalAnalyst(client)
         self._sentiment_agent = SentimentAnalyst(client)
         self._macro           = MacroEconomist(client)
         self._quant           = QuantAnalyst(client)
         self._options_flow    = OptionsFlowAnalyst(client)
-        self._regime          = RegimeDetector(client)
-
-        # Ninth agent: Strategy Coach (profile-decoupled)
-        self._strategy = StrategyCoach(client)
-
-        # Final arbitrator with adversarial DA scoring
-        self._risk = RiskManager(client)
+        self._regime          = RegimeDetector(client)   # deterministic — client ignored
+        self._strategy        = StrategyCoach(client)
+        self._risk            = RiskManager(client)
 
         self._threshold   = confidence_threshold
         self._max_pos     = max_position_pct
@@ -224,42 +261,38 @@ class DebateOrchestrator:
         symbol      = market.symbol
         asset_class = market.asset_class
         profile     = user_profile or DEFAULT_PROFILE
-        log.info("9-agent debate starting for %s (%s)", symbol, asset_class)
+        log.info("9-agent debate starting: %s (%s)", symbol, asset_class)
 
         bars_dicts = _bars_to_dicts(market)
         indicators = _compute_indicators(market)
 
-        # Regime weight tracking (Solution 4)
         price   = indicators.get("price", 1.0) or 1.0
         atr_pct = indicators.get("atr_14", 0.0) / price
-        regime_purged = _regime_tracker.record_atr(atr_pct)
-        if regime_purged:
-            log.info("Agent weights reset to equal — regime shift detected")
+        _regime_tracker.record_atr(atr_pct)
 
-        # ── Strategic layer (cache-backed, Solution 7) ────────────────────────
+        # ── Strategic layer (cache-backed: macro + regime) ────────────────────
         cache_key = f"{symbol}:strategic"
         cached = _cache.get(cache_key)
         if cached:
             macro_view, regime_view = cached
             log.debug("Strategic layer served from cache for %s", symbol)
         else:
-            macro_ctx = {
-                "symbol": symbol,
-                "asset_class": asset_class,
-                "bars_last_60": bars_dicts,
-                "indicators": indicators,
+            macro_view  = self._macro.analyse({
+                "symbol": symbol, "asset_class": asset_class,
+                "bars_last_60": bars_dicts, "indicators": indicators,
                 "portfolio_equity": portfolio.equity,
                 "daily_pnl_pct": portfolio.daily_pnl_pct,
-            }
-            regime_ctx = {"symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators}
-            macro_view  = self._macro.analyse(macro_ctx)
-            regime_view = self._regime.analyse(regime_ctx)
+            })
+            regime_view = self._regime.analyse({   # deterministic — fast
+                "symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators,
+            })
             _cache.set(cache_key, (macro_view, regime_view))
 
         # ── Tactical layer (always fresh) ─────────────────────────────────────
         fundamental_view  = self._fundamental.analyse({
             "symbol": symbol, "asset_class": asset_class,
-            "bars_last_60": bars_dicts, "onchain": onchain.__dict__ if onchain else {},
+            "bars_last_60": bars_dicts,
+            "onchain": onchain.__dict__ if onchain else {},
             "portfolio_equity": portfolio.equity,
         })
         technical_view    = self._technical.analyse({
@@ -279,31 +312,36 @@ class DebateOrchestrator:
             "symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators,
         })
 
-        for role, view in [
-            ("Fundamental",  fundamental_view),
-            ("Technical",    technical_view),
-            ("Sentiment",    sentiment_view),
-            ("Macro",        macro_view),
-            ("Quant",        quant_view),
-            ("OptionsFlow",  options_flow_view),
-            ("Regime",       regime_view),
-        ]:
-            log.info("%s: %s", role, view[:80])
+        analyst_views = {
+            "fundamental":  fundamental_view,
+            "technical":    technical_view,
+            "sentiment":    sentiment_view,
+            "macro":        macro_view,
+            "quant":        quant_view,
+            "options_flow": options_flow_view,
+            "regime":       regime_view,
+        }
 
-        # ── Risk Manager — synthesises all 7 analysts with DA scoring ─────────
-        daily_drawdown = abs(portfolio.daily_pnl_pct) / 100
+        for role, view in analyst_views.items():
+            log.info("%s: %s", role.title(), view[:80])
+
+        # ── Vote counting — determines action (replaces LLM confidence gate) ──
+        vote_tally       = _count_votes(analyst_views)
+        action           = _action_from_votes(vote_tally, threshold=4)
+        regime_label     = _parse_regime_label(regime_view)
+        votes_for_action = vote_tally["bullish"] if action == "BUY" else vote_tally["bearish"] if action == "SELL" else 0
+
+        log.info(
+            "Vote tally: %s → action=%s regime=%s",
+            vote_tally, action, regime_label,
+        )
+
+        # ── Risk Manager — sizing, rationale, DA case (NOT used for action) ───
         risk_ctx = {
-            "symbol": symbol,
-            "asset_class": asset_class,
-            "analyst_opinions": {
-                "fundamental":  fundamental_view,
-                "technical":    technical_view,
-                "sentiment":    sentiment_view,
-                "macro":        macro_view,
-                "quant":        quant_view,
-                "options_flow": options_flow_view,
-                "regime":       regime_view,
-            },
+            "symbol": symbol, "asset_class": asset_class,
+            "action_from_votes": action,
+            "vote_tally": vote_tally,
+            "analyst_opinions": analyst_views,
             "portfolio": {
                 "equity":                portfolio.equity,
                 "daily_pnl_pct":         portfolio.daily_pnl_pct,
@@ -320,45 +358,39 @@ class DebateOrchestrator:
         try:
             parsed = json.loads(risk_raw)
         except json.JSONDecodeError:
-            log.warning("Risk manager returned non-JSON — defaulting to HOLD: %s", risk_raw)
+            log.warning("Risk manager non-JSON — using defaults: %s", risk_raw[:120])
             parsed = {
-                "action": "HOLD", "confidence": 0.0, "rationale": risk_raw,
+                "action": action, "confidence": 0.0, "rationale": risk_raw,
                 "devil_advocate_score": 0, "devil_advocate_case": "",
             }
 
-        confidence = float(parsed.get("confidence", 0.0))
-        action     = parsed.get("action", "HOLD")
-
-        # ── Strategy Coach — profile-decoupled coaching (Solution 3) ──────────
-        strategy_ctx = {
+        # ── Strategy Coach ────────────────────────────────────────────────────
+        strategy_view = self._strategy.analyse({
             "market_analysis": {
-                "symbol": symbol, "action": action, "confidence": confidence,
+                "symbol": symbol, "action": action,
+                "vote_tally": vote_tally,
                 "rationale": parsed.get("rationale", ""),
             },
             "trader_profile": profile,
-            "portfolio": {"equity": portfolio.equity, "daily_pnl_pct": portfolio.daily_pnl_pct},
-        }
-        strategy_view = self._strategy.analyse(strategy_ctx)
-        strategy_fit  = _parse_strategy_fit(strategy_view)
+            "portfolio": {
+                "equity": portfolio.equity, "daily_pnl_pct": portfolio.daily_pnl_pct,
+            },
+        })
+        strategy_fit = _parse_strategy_fit(strategy_view)
 
-        # ── Tier classification — drives HITL confirmation UX ─────────────────
-        tier = _compute_tier(confidence, indicators)
-
-        # ── Confidence gate ───────────────────────────────────────────────────
-        if confidence < self._threshold and action != "HOLD":
-            log.info(
-                "Signal for %s below threshold (%.2f < %.2f) — downgrading to HOLD",
-                symbol, confidence, self._threshold,
-            )
-            action = "HOLD"
+        # ── Tier — deterministic from votes + regime ──────────────────────────
+        tier = _compute_tier(vote_tally, action, regime_label, indicators)
 
         signal = TradingSignal(
             symbol=symbol,
             asset_class=asset_class,
             action=action,
-            confidence=confidence,
-            rationale=parsed.get("rationale", ""),
+            confidence=float(parsed.get("confidence", 0.0)),  # kept for display only
+            rationale=parsed.get("rationale", f"Vote: {vote_tally}"),
             tier=tier,
+            vote_tally=vote_tally,
+            votes_for_action=votes_for_action,
+            regime_label=regime_label,
             suggested_position_pct=float(parsed.get("suggested_position_pct", 0.0)),
             stop_loss_pct=float(parsed.get("stop_loss_pct", 0.02)),
             take_profit_pct=float(parsed.get("take_profit_pct", 0.05)),
@@ -377,8 +409,7 @@ class DebateOrchestrator:
         )
 
         log.info(
-            "Final signal: %s %s tier=%s confidence=%.2f da_score=%d fit=%s",
-            signal.action, symbol, signal.tier,
-            signal.confidence, signal.devil_advocate_score, signal.strategy_fit,
+            "Signal: %s %s tier=%s votes=%d/7 regime=%s fit=%s",
+            action, symbol, tier, votes_for_action, regime_label, strategy_fit,
         )
         return signal

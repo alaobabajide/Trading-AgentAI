@@ -3,20 +3,31 @@ export type SignalAction = "BUY" | "SELL" | "HOLD";
 export type SignalTier   = "HOT" | "WARM" | "COLD";
 export type StrategyFit  = "ALIGNED" | "MISALIGNED" | "PARTIAL";
 
+export interface VoteTally {
+  bullish: number;
+  bearish: number;
+  neutral: number;
+}
+
 export interface Signal {
   symbol: string;
   asset_class: AssetClass;
   action: SignalAction;
-  confidence: number;
+  confidence: number;   // retained for display; NOT used for execution gating
   rationale: string;
   generated_at: string;
   suggested_position_pct: number;
   stop_loss_pct: number;
   take_profit_pct: number;
 
+  // Vote-based fields (new)
+  vote_tally?: VoteTally;
+  votes_for_action?: number;
+  regime_label?: string;
+
   // HITL fields
   tier:                 SignalTier;
-  devil_advocate_score: number;       // 0-100
+  devil_advocate_score: number;   // display only — not an execution gate
   devil_advocate_case:  string;
   strategy_fit:         StrategyFit;
 

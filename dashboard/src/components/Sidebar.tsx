@@ -1,5 +1,6 @@
 import { Activity, BarChart2, BookOpen, Brain, CandlestickChart, LayoutDashboard, Settings, Zap } from "lucide-react";
 import clsx from "clsx";
+import { useBrainHealth } from "../lib/api";
 
 type Page = "dashboard" | "signals" | "positions" | "technical" | "fundamental" | "charts" | "brain" | "settings";
 
@@ -12,14 +13,28 @@ const NAV: { id: Page; label: string; icon: typeof LayoutDashboard; group?: stri
   { id: "dashboard",   label: "Dashboard",   icon: LayoutDashboard },
   { id: "signals",     label: "Signals",     icon: Zap },
   { id: "positions",   label: "Positions",   icon: BarChart2 },
-  { id: "technical",   label: "Technical",   icon: Activity,           group: "Analysis" },
-  { id: "fundamental", label: "Fundamental", icon: BookOpen,           group: "Analysis" },
-  { id: "charts",      label: "TV Charts",   icon: CandlestickChart,   group: "Analysis" },
+  { id: "technical",   label: "Technical",   icon: Activity,         group: "Analysis" },
+  { id: "fundamental", label: "Fundamental", icon: BookOpen,         group: "Analysis" },
+  { id: "charts",      label: "TV Charts",   icon: CandlestickChart, group: "Analysis" },
   { id: "brain",       label: "Brain",       icon: Brain },
   { id: "settings",    label: "Settings",    icon: Settings },
 ];
 
 export function Sidebar({ active, onNav }: Props) {
+  const brainOnline = useBrainHealth();
+
+  // null = still checking, true = online, false = offline
+  const dotColor =
+    brainOnline === null  ? "bg-slate-400" :
+    brainOnline           ? "bg-emerald-500" :
+                            "bg-red-500";
+  const pingColor =
+    brainOnline === true ? "bg-emerald-400" : "bg-red-400";
+  const label =
+    brainOnline === null  ? "Checking…" :
+    brainOnline           ? "Brain live" :
+                            "Brain offline";
+
   return (
     <aside className="w-56 shrink-0 glass border-r border-white/5 flex flex-col py-6 px-3">
       {/* Logo */}
@@ -64,14 +79,16 @@ export function Sidebar({ active, onNav }: Props) {
         })}
       </nav>
 
-      {/* Status dot */}
+      {/* Real health indicator */}
       <div className="px-3 mt-4">
         <div className="glass rounded-xl px-3 py-2.5 flex items-center gap-2">
           <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+            {brainOnline && (
+              <span className={clsx("animate-ping absolute inline-flex h-full w-full rounded-full opacity-75", pingColor)} />
+            )}
+            <span className={clsx("relative inline-flex rounded-full h-2 w-2", dotColor)} />
           </span>
-          <span className="text-xs text-slate-400">Brain live</span>
+          <span className="text-xs text-slate-400">{label}</span>
         </div>
       </div>
     </aside>
