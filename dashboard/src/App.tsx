@@ -10,7 +10,7 @@ import { TechnicalPage } from "./pages/TechnicalPage";
 import { FundamentalPage } from "./pages/FundamentalPage";
 import { ChartsPage } from "./pages/ChartsPage";
 import { SettingsPage } from "./pages/SettingsPage";
-import { useHITL } from "./hooks/useHITL";
+import { HITLProvider, useHITLContext } from "./context/HITLContext";
 import { MODE_CONFIG } from "./lib/hitl";
 
 type Page = "dashboard" | "signals" | "positions" | "technical" | "fundamental" | "charts" | "brain" | "settings";
@@ -22,9 +22,9 @@ const PAGE_TITLE: Partial<Record<Page, string>> = {
   settings:    "Settings",
 };
 
-export default function App() {
+function AppInner() {
   const [page, setPage] = useState<Page>("dashboard");
-  const hitl = useHITL();
+  const hitl    = useHITLContext();
   const modeCfg = MODE_CONFIG[hitl.profile.mode];
 
   return (
@@ -105,7 +105,10 @@ export default function App() {
           signal={hitl.pendingSignal}
           secsLeft={hitl.vetoSecsLeft}
           onVeto={hitl.vetoSignal}
-          onConfirm={hitl.confirmSignal}
+          onConfirm={async () => {
+            await hitl.executeSignal(hitl.pendingSignal!);
+            hitl.confirmSignal();
+          }}
         />
       )}
 
@@ -144,5 +147,13 @@ export default function App() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <HITLProvider>
+      <AppInner />
+    </HITLProvider>
   );
 }

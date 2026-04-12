@@ -1,24 +1,15 @@
 #!/bin/sh
-set -e
+# No set -e — nginx must always start even if uvicorn or the bot fail
 
-# Substitute $PORT into nginx config (only ${PORT} — leaves nginx vars intact)
+# ── 0. Expand $PORT in nginx template ────────────────────────────────────────
 envsubst '${PORT}' < /tmp/nginx.conf.template > /etc/nginx/conf.d/default.conf
-rm -f /etc/nginx/sites-enabled/default
+rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 
-# ── 1. Start brain API (uvicorn) on localhost:8000 ───────────────────────────
+# ── 1. Start brain API (uvicorn) on 127.0.0.1:8000 in the background ─────────
 echo "[start] Launching uvicorn on 127.0.0.1:8000…"
+cd /app
 uvicorn brain.api:app --host 127.0.0.1 --port 8000 --workers 1 &
-UVICORN_PID=$!
-
-# Wait for uvicorn to be ready (up to 30s)
-echo "[start] Waiting for brain API…"
-for i in $(seq 1 30); do
-    if wget -q -O- http://127.0.0.1:8000/health > /dev/null 2>&1; then
-        echo "[start] Brain API ready."
-        break
-    fi
-    sleep 1
-done
+echo "[start] Uvicorn PID=$! (nginx will proxy to it; returns 502 until ready)"
 
 # ── 2. Start Telegram bot (if token is set) ───────────────────────────────────
 if [ -n "$TELEGRAM_BOT_TOKEN" ]; then

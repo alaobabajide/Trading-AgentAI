@@ -32,7 +32,7 @@ export const TIER_CONFIG: Record<SignalTier, {
 }> = {
   HOT: {
     label:       "Hot",
-    description: "Confidence ≥ 0.85, low volatility — auto-executes in Auto mode",
+    description: "6–7 analysts aligned, low volatility — auto-executes in Auto mode",
     color:       "text-emerald-400",
     bg:          "bg-emerald-500/10",
     border:      "border-emerald-500/30",
@@ -40,7 +40,7 @@ export const TIER_CONFIG: Record<SignalTier, {
   },
   WARM: {
     label:       "Warm",
-    description: "Confidence 0.70–0.85 — 10-second veto window in Assisted mode",
+    description: "4–5 analysts aligned — veto window in Assisted mode",
     color:       "text-amber-400",
     bg:          "bg-amber-500/10",
     border:      "border-amber-500/30",
@@ -48,7 +48,7 @@ export const TIER_CONFIG: Record<SignalTier, {
   },
   COLD: {
     label:       "Cold",
-    description: "Confidence < 0.70 or elevated volatility — explicit confirmation required",
+    description: "≤3 analysts aligned or high volatility — explicit confirmation required",
     color:       "text-slate-400",
     bg:          "bg-slate-500/10",
     border:      "border-slate-500/30",

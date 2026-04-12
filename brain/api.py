@@ -194,6 +194,113 @@ def get_all_cached_signals():
     )
 
 
+class ExecuteRequest(BaseModel):
+    symbol: str
+    asset_class: str = Field(..., description="'stock' or 'crypto'")
+    action: str = Field(..., description="'BUY' or 'SELL'")
+    suggested_position_pct: float = Field(0.05, ge=0.001, le=0.20)
+    stop_loss_pct: float = Field(0.02, ge=0.005, le=0.20)
+    take_profit_pct: float = Field(0.05, ge=0.01, le=0.50)
+
+
+@app.post("/execute")
+def execute_trade(req: ExecuteRequest):
+    """Place a market order on Alpaca (stocks) or Binance (crypto).
+
+    Uses the cached signal's sizing if available; falls back to request params.
+    Returns order_id, status, notional, and exchange.
+    """
+    if req.action not in ("BUY", "SELL"):
+        raise HTTPException(status_code=400, detail="action must be BUY or SELL")
+
+    cfg = get_settings()
+
+    # Merge with cached signal sizing if present
+    cached = _signal_cache.get(req.symbol.upper(), {})
+    pos_pct  = cached.get("suggested_position_pct", req.suggested_position_pct)
+    sl_pct   = cached.get("stop_loss_pct",          req.stop_loss_pct)
+    tp_pct   = cached.get("take_profit_pct",         req.take_profit_pct)
+
+    try:
+        if req.asset_class == "stock":
+            from alpaca.trading.client import TradingClient
+            from alpaca.trading.requests import MarketOrderRequest
+            from alpaca.trading.enums import OrderSide, TimeInForce
+
+            client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=True)
+            acct   = client.get_account()
+            equity = float(acct.equity)
+
+            notional = round(equity * pos_pct, 2)
+            if notional < 1:
+                raise HTTPException(status_code=400, detail="Computed notional < $1 — check position sizing")
+
+            order = client.submit_order(MarketOrderRequest(
+                symbol=req.symbol.upper(),
+                notional=notional,
+                side=OrderSide.BUY if req.action == "BUY" else OrderSide.SELL,
+                time_in_force=TimeInForce.DAY,
+            ))
+            return {
+                "order_id":  str(order.id),
+                "status":    str(order.status),
+                "symbol":    req.symbol.upper(),
+                "action":    req.action,
+                "notional":  notional,
+                "exchange":  "alpaca_paper",
+                "stop_pct":  sl_pct,
+                "target_pct": tp_pct,
+            }
+
+        else:  # crypto — Binance
+            from binance.client import Client as BinanceClient
+
+            client = BinanceClient(
+                cfg.binance_api_key, cfg.binance_secret_key,
+                testnet=cfg.binance_testnet,
+            )
+            ticker  = client.get_symbol_ticker(symbol=req.symbol.upper())
+            price   = float(ticker["price"])
+
+            # Approximate equity from USDT balance
+            balances  = client.get_account()["balances"]
+            usdt_free = next((float(b["free"]) for b in balances if b["asset"] == "USDT"), 1000.0)
+            notional  = min(usdt_free * pos_pct, usdt_free * 0.99)
+            qty       = round(notional / price, 6)
+
+            if qty <= 0:
+                raise HTTPException(status_code=400, detail="Computed qty = 0")
+
+            if req.action == "BUY":
+                order = client.order_market_buy(symbol=req.symbol.upper(), quantity=qty)
+            else:
+                order = client.order_market_sell(symbol=req.symbol.upper(), quantity=qty)
+
+            fills   = order.get("fills", [])
+            avg_px  = (
+                sum(float(f["price"]) * float(f["qty"]) for f in fills)
+                / max(sum(float(f["qty"]) for f in fills), 1e-12)
+                if fills else price
+            )
+            return {
+                "order_id":  str(order.get("orderId", "?")),
+                "status":    order.get("status", "FILLED"),
+                "symbol":    req.symbol.upper(),
+                "action":    req.action,
+                "qty":       qty,
+                "avg_price": avg_px,
+                "exchange":  "binance_testnet" if cfg.binance_testnet else "binance",
+                "stop_pct":  sl_pct,
+                "target_pct": tp_pct,
+            }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("Trade execution failed for %s: %s", req.symbol, exc, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Execution failed: {exc}")
+
+
 @app.get("/portfolio")
 def get_portfolio():
     """Return current portfolio state (positions, equity, P&L)."""

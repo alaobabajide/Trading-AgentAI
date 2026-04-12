@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { ChevronDown, ChevronUp, ShieldAlert } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2, ShieldAlert, Zap } from "lucide-react";
 import { format } from "date-fns";
 import { Signal, VoteTally } from "../lib/types";
 import { SignalBadge } from "./SignalBadge";
 import { TIER_CONFIG, FIT_CONFIG } from "../lib/hitl";
+import { useHITLContext } from "../context/HITLContext";
 import clsx from "clsx";
 
 // ── Analyst rows ──────────────────────────────────────────────────────────────
@@ -97,6 +98,62 @@ function StrategyFitBadge({ signal }: { signal: Signal }) {
         <p className="text-xs text-slate-300 font-mono">→ {adjustment}</p>
       )}
       {coaching && <p className="text-xs text-slate-400">{coaching}</p>}
+    </div>
+  );
+}
+
+// ── Execute button (manual / assisted modes only) ─────────────────────────────
+
+function ExecuteButton({ signal }: { signal: Signal }) {
+  const { profile, receiveSignal, executeSignal, executing } = useHITLContext();
+  const [result, setResult]   = useState<string | null>(null);
+  const [error,  setError]    = useState<string | null>(null);
+  const mode = profile.mode;
+
+  if (mode === "auto" || signal.action === "HOLD") return null;
+
+  const isManual   = mode === "manual";
+  const label      = isManual ? `Execute ${signal.action}` : `Queue ${signal.action}`;
+  const colorClass = signal.action === "BUY"
+    ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 border-emerald-500/30"
+    : "bg-red-500/20 text-red-300 hover:bg-red-500/30 border-red-500/30";
+
+  const handleClick = async () => {
+    setResult(null);
+    setError(null);
+    if (isManual) {
+      const res = await executeSignal(signal);
+      if (res) setResult(`Order ${res.order_id} · ${res.status} on ${res.exchange}`);
+      else     setError("Execution failed — check Brain console");
+    } else {
+      // Assisted mode: queue into veto window
+      receiveSignal(signal);
+      setResult("Queued — approve or veto in the banner");
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <button
+        onClick={handleClick}
+        disabled={executing}
+        className={clsx(
+          "w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-semibold transition-colors",
+          colorClass,
+          executing && "opacity-50 cursor-not-allowed",
+        )}
+      >
+        {executing
+          ? <Loader2 className="w-4 h-4 animate-spin" />
+          : <Zap className="w-4 h-4" />}
+        {executing ? "Sending order…" : label}
+      </button>
+      {result && (
+        <p className="text-[11px] text-emerald-400 font-mono text-center">{result}</p>
+      )}
+      {error && (
+        <p className="text-[11px] text-red-400 font-mono text-center">{error}</p>
+      )}
     </div>
   );
 }
@@ -243,6 +300,9 @@ export function SignalCard({ signal }: { signal: Signal }) {
               ? `✓ Vote gate passed — ${votesForAction}/7 analysts ${signal.action === "BUY" ? "BULLISH" : "BEARISH"}`
               : "⚠ No majority — signal downgraded to HOLD"}
           </div>
+
+          {/* Execute / Queue button — shown in Manual and Assisted modes */}
+          <ExecuteButton signal={signal} />
         </div>
       )}
     </div>
