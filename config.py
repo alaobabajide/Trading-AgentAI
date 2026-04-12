@@ -28,9 +28,9 @@ class Settings(BaseSettings):
     # On-chain
     eth_rpc_url: str = Field("", env="ETH_RPC_URL")
 
-    # Brain
+    # Brain — Railway injects $PORT; fall back to BRAIN_PORT or 8000
     signal_confidence_threshold: float = Field(0.7, env="SIGNAL_CONFIDENCE_THRESHOLD")
-    brain_port: int = Field(8000, env="BRAIN_PORT")
+    brain_port: int = Field(default_factory=lambda: int(os.environ.get("PORT") or os.environ.get("BRAIN_PORT") or 8000))
 
     # Risk
     max_position_pct: float = Field(0.05, env="MAX_POSITION_PCT")
