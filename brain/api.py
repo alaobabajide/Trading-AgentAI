@@ -87,6 +87,21 @@ def _build_services(cfg):
     return alpaca, binance, sentiment, onchain, portfolio, orchestrator
 
 
+@app.get("/")
+def root():
+    return {
+        "name": "TradingAgent Brain API",
+        "version": "0.1.0",
+        "status": "running",
+        "docs": "/docs",
+        "health": "/health",
+        "endpoints": {
+            "POST /signal": "Run 9-agent debate for a symbol",
+            "GET /signal/{symbol}/latest": "Fetch last cached signal",
+            "GET /health": "Liveness check",
+        },
+    }
+
 @app.get("/health")
 def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
