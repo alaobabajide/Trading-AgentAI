@@ -3,6 +3,10 @@
 POST /signal   → runs the full debate and returns a TradingSignal JSON.
 GET  /health   → liveness check.
 GET  /signal/{symbol}/latest → last cached signal.
+
+Heavy dependencies (anthropic, pandas, ta, etc.) are imported lazily inside
+request handlers so that a missing package or OOM during import does NOT
+prevent the /health endpoint from responding.
 """
 from __future__ import annotations
 
@@ -14,14 +18,6 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-
-from config import get_settings
-from data.market_data import AlpacaMarketData, BinanceMarketData
-from data.sentiment import SentimentFetcher
-from data.onchain import OnChainFetcher
-from data.portfolio import PortfolioFetcher
-from brain.debate import DebateOrchestrator
-from brain.signal import TradingSignal
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +59,8 @@ class SignalResponse(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log.info("Brain API starting up…")
+    import sys, os
+    log.info("Brain API starting up — Python %s  cwd=%s", sys.version.split()[0], os.getcwd())
     yield
     log.info("Brain API shutting down.")
 
@@ -77,6 +74,15 @@ app = FastAPI(
 
 
 def _build_services(cfg):
+    # Heavy imports done here (inside a request handler) so a bad import never
+    # prevents the health endpoint from starting.
+    from config import get_settings  # noqa: F401 (already passed as cfg)
+    from data.market_data import AlpacaMarketData, BinanceMarketData
+    from data.sentiment import SentimentFetcher
+    from data.onchain import OnChainFetcher
+    from data.portfolio import PortfolioFetcher
+    from brain.debate import DebateOrchestrator
+
     alpaca = AlpacaMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)
     binance = BinanceMarketData(cfg.binance_api_key, cfg.binance_secret_key, cfg.binance_testnet)
     sentiment = SentimentFetcher()
@@ -117,6 +123,7 @@ def health():
 
 @app.post("/signal", response_model=SignalResponse)
 def generate_signal(req: SignalRequest):
+    from config import get_settings
     cfg = get_settings()
     alpaca, binance, sentiment_fetcher, onchain_fetcher, portfolio_fetcher, orchestrator = (
         _build_services(cfg)
@@ -148,7 +155,7 @@ def generate_signal(req: SignalRequest):
         )
 
     # ── Run debate ──────────────────────────────────────────────────────────
-    signal: TradingSignal = orchestrator.run(market, sentiment_bundle, onchain_snap, portfolio_state)
+    signal = orchestrator.run(market, sentiment_bundle, onchain_snap, portfolio_state)
 
     # Cache
     _signal_cache[req.symbol] = signal.to_dict()
@@ -213,6 +220,7 @@ def execute_trade(req: ExecuteRequest):
     if req.action not in ("BUY", "SELL"):
         raise HTTPException(status_code=400, detail="action must be BUY or SELL")
 
+    from config import get_settings
     cfg = get_settings()
 
     # Merge with cached signal sizing if present
@@ -304,6 +312,8 @@ def execute_trade(req: ExecuteRequest):
 @app.get("/portfolio")
 def get_portfolio():
     """Return current portfolio state (positions, equity, P&L)."""
+    from config import get_settings
+    from data.portfolio import PortfolioFetcher
     cfg = get_settings()
     portfolio_fetcher = PortfolioFetcher(
         cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,
@@ -338,5 +348,6 @@ def get_portfolio():
 
 
 if __name__ == "__main__":
+    from config import get_settings
     cfg = get_settings()
     uvicorn.run("brain.api:app", host="0.0.0.0", port=cfg.brain_port, reload=False)
