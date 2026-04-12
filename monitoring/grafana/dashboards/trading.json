@@ -1,0 +1,125 @@
+{
+  "title": "Trading Agent",
+  "uid": "trading-agent-main",
+  "schemaVersion": 38,
+  "refresh": "15s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Portfolio Equity",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "thresholds": { "mode": "absolute", "steps": [{ "value": 0, "color": "green" }] }
+        }
+      },
+      "targets": [{ "expr": "trading_equity_usd", "legendFormat": "Equity" }]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Daily P&L",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "value": null, "color": "red" }, { "value": 0, "color": "green" }]
+          }
+        }
+      },
+      "targets": [{ "expr": "trading_daily_pnl_usd", "legendFormat": "Daily P&L" }]
+    },
+    {
+      "id": 3,
+      "type": "gauge",
+      "title": "Crypto Allocation %",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": 0, "color": "green" },
+              { "value": 20, "color": "yellow" },
+              { "value": 30, "color": "red" }
+            ]
+          }
+        }
+      },
+      "targets": [{ "expr": "trading_crypto_allocation_pct", "legendFormat": "Crypto %" }]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Circuit Breaker",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [{ "type": "value", "options": { "0": { "text": "OK", "color": "green" }, "1": { "text": "TRIPPED", "color": "red" } } }],
+          "thresholds": { "mode": "absolute", "steps": [{ "value": 0, "color": "green" }, { "value": 1, "color": "red" }] }
+        }
+      },
+      "targets": [{ "expr": "trading_circuit_breaker_active", "legendFormat": "Circuit Breaker" }]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Equity Over Time",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "custom": { "lineWidth": 2, "fillOpacity": 10 } } },
+      "targets": [{ "expr": "trading_equity_usd", "legendFormat": "Equity" }]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Drawdown %",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": { "lineWidth": 2, "fillOpacity": 20 },
+          "thresholds": { "mode": "absolute", "steps": [{ "value": 0, "color": "green" }, { "value": 5, "color": "yellow" }, { "value": 10, "color": "red" }] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "targets": [{ "expr": "trading_drawdown_pct", "legendFormat": "Drawdown" }]
+    },
+    {
+      "id": 7,
+      "type": "barchart",
+      "title": "Signals by Action",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 6 },
+      "targets": [{ "expr": "sum by (action) (increase(trading_signals_total[1h]))", "legendFormat": "{{action}}" }]
+    },
+    {
+      "id": 8,
+      "type": "histogram",
+      "title": "Signal Confidence Distribution",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 6 },
+      "targets": [{ "expr": "trading_signal_confidence_bucket", "legendFormat": "{{le}}" }]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Brain API Latency (p95)",
+      "gridPos": { "x": 0, "y": 18, "w": 24, "h": 6 },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, rate(trading_brain_latency_seconds_bucket[5m]))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.50, rate(trading_brain_latency_seconds_bucket[5m]))", "legendFormat": "p50" }
+      ]
+    }
+  ]
+}

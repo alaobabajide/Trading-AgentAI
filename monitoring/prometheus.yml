@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "trading-agent"
+    static_configs:
+      - targets: ["orchestrator:8001"]
+
+  - job_name: "brain-api"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["brain:8000"]

@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-surface-900 text-slate-100 antialiased;
+  }
+  ::-webkit-scrollbar {
+    @apply w-1.5;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-surface-800;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-surface-600 rounded-full;
+  }
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-surface-800/70 backdrop-blur-sm border border-white/5;
+  }
+  .glow-brand {
+    box-shadow: 0 0 24px -4px theme("colors.brand.500" / 30%);
+  }
+}
