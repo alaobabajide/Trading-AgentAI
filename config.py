@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     max_crypto_allocation_pct: float = Field(0.30, env="MAX_CRYPTO_ALLOCATION_PCT")
     circuit_breaker_drawdown: float = Field(0.10, env="CIRCUIT_BREAKER_DRAWDOWN")
 
+    # Telegram
+    telegram_bot_token: str = Field("", env="TELEGRAM_BOT_TOKEN")
+    telegram_allowed_ids: str = Field("", env="TELEGRAM_ALLOWED_IDS")  # comma-separated chat IDs
+
     # Monitoring
     prometheus_port: int = Field(9090, env="PROMETHEUS_PORT")
     grafana_port: int = Field(3000, env="GRAFANA_PORT")

@@ -19,6 +19,9 @@ numpy>=2.1.0
 ta>=0.11.0
 web3>=7.0.0
 
+# Telegram
+python-telegram-bot[job-queue]>=21.0
+
 # Monitoring
 prometheus-client>=0.21.0
 schedule>=1.2.0

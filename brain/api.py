@@ -169,6 +169,42 @@ def get_latest_signal(symbol: str):
     return cached
 
 
+@app.get("/portfolio")
+def get_portfolio():
+    """Return current portfolio state (positions, equity, P&L)."""
+    cfg = get_settings()
+    portfolio_fetcher = PortfolioFetcher(
+        cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,
+        cfg.binance_api_key, cfg.binance_secret_key, cfg.binance_testnet,
+    )
+    try:
+        state = portfolio_fetcher.snapshot()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Portfolio fetch failed: {exc}")
+
+    return {
+        "timestamp":           state.timestamp.isoformat(),
+        "equity":              state.equity,
+        "cash":                state.cash,
+        "daily_pnl":           state.daily_pnl,
+        "daily_pnl_pct":       state.daily_pnl_pct,
+        "crypto_allocation_pct": state.crypto_allocation_pct,
+        "positions": [
+            {
+                "symbol":              p.symbol,
+                "asset_class":         p.asset_class,
+                "qty":                 p.qty,
+                "avg_entry_price":     p.avg_entry_price,
+                "current_price":       p.current_price,
+                "market_value":        p.market_value,
+                "unrealized_pnl":      p.unrealized_pnl,
+                "unrealized_pnl_pct":  p.unrealized_pnl_pct,
+            }
+            for p in state.positions
+        ],
+    }
+
+
 if __name__ == "__main__":
     cfg = get_settings()
     uvicorn.run("brain.api:app", host="0.0.0.0", port=cfg.brain_port, reload=False)
