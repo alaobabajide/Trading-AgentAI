@@ -106,15 +106,31 @@ export function usePortfolio() {
 /**
  * Loads cached signals from the real API, falls back to mock.
  * Polls every 30s so new signals generated from the Brain Console appear automatically.
+ * Exposes a `refresh()` imperative trigger for the manual refresh button.
  */
 export function useSignals() {
-  const [signals, setSignals] = useState<Signal[]>(mockSignals);
+  const [signals, setSignals]   = useState<Signal[]>(mockSignals);
   const [apiState, setApiState] = useState<ApiState>("loading");
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Stable load function — shared by polling and manual refresh
+  async function load(manual = false) {
+    if (manual) setRefreshing(true);
+    try {
+      const data = await fetchCachedSignals();
+      if (data.length > 0) setSignals(data as Signal[]);
+      setApiState("live");
+    } catch {
+      setApiState((s) => s === "loading" ? "mock" : s);
+    } finally {
+      if (manual) setRefreshing(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
 
-    async function load() {
+    async function poll() {
       try {
         const data = await fetchCachedSignals();
         if (!cancelled) {
@@ -126,12 +142,14 @@ export function useSignals() {
       }
     }
 
-    load();
-    const id = setInterval(load, 30_000);
+    poll();
+    const id = setInterval(poll, 30_000);
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  return { signals, apiState };
+  const refresh = () => load(true);
+
+  return { signals, apiState, refresh, refreshing };
 }
 
 /**

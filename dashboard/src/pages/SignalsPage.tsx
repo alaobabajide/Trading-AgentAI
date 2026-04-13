@@ -5,21 +5,108 @@ import { SignalCard } from "../components/SignalCard";
 import { useSignals } from "../lib/api";
 import type { Signal, SignalAction, SignalTier } from "../lib/types";
 
-// ── Quick-generate watchlist ──────────────────────────────────────────────────
+// ── Quick-generate watchlists ─────────────────────────────────────────────────
 
-const WATCHLIST_STOCKS  = [
-  "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "JPM", "BAC", "V",
-  "NFLX", "AMD",  "INTC", "CRM",  "UBER",  "DIS",  "PG",   "KO",  "XOM", "CVX",
-  "PYPL", "COIN", "SNAP", "BABA", "ORCL",
+// US Stocks — top 100 by market cap / liquidity (S&P 500 leaders)
+const WL_US_MEGA: string[] = [
+  "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK.B","JPM","LLY",
+  "V",   "UNH", "AVGO","XOM", "MA",   "HD",  "PG",  "COST","JNJ","MRK",
 ];
-const WATCHLIST_ETFS    = [
-  "SPY", "QQQ", "IWM", "GLD", "TLT", "XLF", "XLE", "XLK", "VTI", "DIA",
-  "ARKK", "XLV", "XLU", "XLRE", "SOXX", "IBIT", "SCHD", "VNQ", "IVV", "EEM",
+const WL_US_LARGE: string[] = [
+  "CVX", "ABBV","BAC", "KO",  "PEP",  "NFLX","TMO", "ORCL","AMD","CRM",
+  "CSCO","ACN", "MCD", "LIN", "ADBE", "INTC","WMT", "DHR", "TXN","IBM",
 ];
-const WATCHLIST_CRYPTO  = [
-  "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT",  "XRPUSDT",  "ADAUSDT",
-  "DOGEUSDT","AVAXUSDT","LINKUSDT","DOTUSDT",   "MATICUSDT","LTCUSDT",
+const WL_US_GROWTH: string[] = [
+  "INTU","BKNG","ISRG","SPGI","NOW", "PANW","SNOW","PLTR","UBER","COIN",
+  "SHOP","SQ",  "PYPL","SNAP","RBLX","ABNB","DKNG","HOOD","ARM","SMCI",
 ];
+const WL_US_FIN_IND: string[] = [
+  "GS",  "MS",  "BLK", "AXP", "C",   "DE",  "CAT", "HON", "RTX","GE",
+  "ETN", "LMT", "BA",  "NEE", "T",   "AMGN","GILD","SBUX","BX", "DIS",
+];
+
+// ETFs — broad market, sector, fixed income, international, thematic
+const WL_ETFS_BROAD: string[] = [
+  "SPY","QQQ","IWM","VTI","IVV","DIA","RSP","SCHB","VEA","EEM",
+];
+const WL_ETFS_SECTOR: string[] = [
+  "XLK","XLF","XLE","XLV","XLU","XLI","XLRE","XLB","XLC","XLP",
+  "SOXX","ARKK","IBIT","BITX","CIBR","BOTZ","ROBO","HACK","AIQ","UFO",
+];
+const WL_ETFS_FIXED: string[] = [
+  "TLT","IEF","SHY","AGG","LQD","HYG","TIP","BND","GLD","SLV",
+];
+
+// Crypto — major + mid cap
+const WL_CRYPTO: string[] = [
+  "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","ADAUSDT",
+  "DOGEUSDT","AVAXUSDT","LINKUSDT","DOTUSDT","MATICUSDT","LTCUSDT",
+  "UNIUSDT","AAVEUSDT","ATOMUSDT","NEARUSDT","APTUSDT","SUIUSDT",
+];
+
+// Forex — major, minor, and exotic pairs
+const WL_FOREX_MAJORS: string[] = [
+  "EURUSD","GBPUSD","USDJPY","AUDUSD","USDCHF","USDCAD","NZDUSD",
+];
+const WL_FOREX_CROSSES: string[] = [
+  "EURGBP","EURJPY","GBPJPY","AUDJPY","EURCHF","GBPCHF","EURCAD",
+  "CADJPY","AUDNZD","NZDJPY",
+];
+const WL_FOREX_METALS: string[] = [
+  "XAUUSD","XAGUSD","XAUEUR","XPTUSD",
+];
+
+// Nigerian Exchange (NGX) — top 50 by market cap / liquidity
+// Note: requires NGX market data provider (not yet supported by Alpaca)
+const WL_NGX_BANKING: string[] = [
+  "GTCO","ZENITHBANK","ACCESSCORP","UBA","STANBIC","FBNH",
+  "FIDELITYBK","FCMB","STERLING","WEMABANK","JAIZBANK","UNIONBANK",
+];
+const WL_NGX_INDUSTRIAL: string[] = [
+  "DANGCEM","BUACEMENT","WAPCO","CCNN","JBERGER","BERGER",
+  "TRANSCORP","GEREGU","SEPLAT","OANDO","CONOIL","TOTAL",
+];
+const WL_NGX_CONSUMER: string[] = [
+  "AIRTELAFRI","MTNN","BUAFOODS","NESTLE","DANGSUGAR","FLOURMILL",
+  "NB","GUINNESS","INTBREW","CADBURY","UNILEVER","HONYFLOUR",
+];
+const WL_NGX_AG_HEALTH: string[] = [
+  "PRESCO","OKOMUOIL","LIVESTOCK","FIDSON","MAYBAKER","NEIMETH",
+  "PZ","NASCON","CUSTODIAN","CHAMS","CAPHOTEL","LINKASSURE",
+  "TRANSCOHOT","CILEASING",
+];
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+type AssetClass = "stock" | "crypto" | "forex" | "ngx";
+
+interface WatchlistSection {
+  label:      string;
+  symbols:    string[];
+  assetClass: AssetClass;
+  badge?:     string;
+  note?:      string;
+}
+
+const WATCHLIST_SECTIONS: WatchlistSection[] = [
+  { label: "US Mega Cap",           symbols: WL_US_MEGA,       assetClass: "stock"  },
+  { label: "US Large Cap",          symbols: WL_US_LARGE,      assetClass: "stock"  },
+  { label: "US Growth / Tech",      symbols: WL_US_GROWTH,     assetClass: "stock"  },
+  { label: "US Financials / Industrials", symbols: WL_US_FIN_IND, assetClass: "stock" },
+  { label: "ETFs — Broad Market",   symbols: WL_ETFS_BROAD,    assetClass: "stock"  },
+  { label: "ETFs — Sector / Thematic", symbols: WL_ETFS_SECTOR, assetClass: "stock" },
+  { label: "ETFs — Fixed Income / Commodities", symbols: WL_ETFS_FIXED, assetClass: "stock" },
+  { label: "Crypto",                symbols: WL_CRYPTO,        assetClass: "crypto" },
+  { label: "Forex — Majors",        symbols: WL_FOREX_MAJORS,  assetClass: "forex", badge: "FX"  },
+  { label: "Forex — Crosses",       symbols: WL_FOREX_CROSSES, assetClass: "forex", badge: "FX"  },
+  { label: "Forex — Metals",        symbols: WL_FOREX_METALS,  assetClass: "forex", badge: "FX"  },
+  { label: "NGX — Banking",         symbols: WL_NGX_BANKING,   assetClass: "ngx", badge: "NGX", note: "Requires NGX data provider" },
+  { label: "NGX — Industrial / Energy", symbols: WL_NGX_INDUSTRIAL, assetClass: "ngx", badge: "NGX", note: "Requires NGX data provider" },
+  { label: "NGX — Consumer / Telecoms", symbols: WL_NGX_CONSUMER,  assetClass: "ngx", badge: "NGX", note: "Requires NGX data provider" },
+  { label: "NGX — Agriculture / Health / Other", symbols: WL_NGX_AG_HEALTH, assetClass: "ngx", badge: "NGX", note: "Requires NGX data provider" },
+];
+
+// ── Quick Generate Panel ──────────────────────────────────────────────────────
 
 interface QuickRunProps {
   onGenerated: () => void;
@@ -31,7 +118,16 @@ function QuickRunPanel({ onGenerated }: QuickRunProps) {
   const [done, setDone]       = useState<string[]>([]);
   const [errors, setErrors]   = useState<Record<string, string>>({});
 
-  async function runSymbol(symbol: string, assetClass: "stock" | "crypto") {
+  async function runSymbol(symbol: string, assetClass: AssetClass) {
+    // NGX and Forex are not yet live — show a friendly pending state
+    if (assetClass === "ngx") {
+      setErrors((p) => ({ ...p, [symbol]: "NGX data provider not yet configured" }));
+      return;
+    }
+    if (assetClass === "forex") {
+      setErrors((p) => ({ ...p, [symbol]: "Forex data provider not yet configured" }));
+      return;
+    }
     setRunning(symbol);
     try {
       const resp = await fetch("/api/signal", {
@@ -52,21 +148,23 @@ function QuickRunPanel({ onGenerated }: QuickRunProps) {
     }
   }
 
-  function SymbolButton({ symbol, assetClass }: { symbol: string; assetClass: "stock" | "crypto" }) {
-    const isDone  = done.includes(symbol);
-    const isErr   = !!errors[symbol];
-    const loading = running === symbol;
+  function SymbolButton({ symbol, assetClass, badge }: { symbol: string; assetClass: AssetClass; badge?: string }) {
+    const isDone   = done.includes(symbol);
+    const isErr    = !!errors[symbol];
+    const loading  = running === symbol;
+    const isPending = assetClass === "ngx" || assetClass === "forex";
     return (
       <button
         onClick={() => runSymbol(symbol, assetClass)}
-        disabled={!!running}
-        title={isErr ? errors[symbol] : undefined}
+        disabled={!!running && running !== symbol}
+        title={isErr ? errors[symbol] : isPending ? `${badge}: coming soon` : undefined}
         className={clsx(
-          "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-mono font-medium border transition-all",
-          isDone   ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300" :
-          isErr    ? "bg-red-500/15 border-red-500/30 text-red-300" :
-          loading  ? "bg-brand-500/15 border-brand-500/30 text-brand-300 animate-pulse" :
-                     "border-white/10 text-slate-400 hover:text-slate-200 hover:border-white/20",
+          "flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-mono font-medium border transition-all",
+          isDone     ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300" :
+          isErr      ? "bg-red-500/15 border-red-500/30 text-red-300" :
+          loading    ? "bg-brand-500/15 border-brand-500/30 text-brand-300 animate-pulse" :
+          isPending  ? "border-white/5 text-slate-600 cursor-help" :
+                       "border-white/10 text-slate-400 hover:text-slate-200 hover:border-white/20",
           running && running !== symbol && "opacity-40 cursor-not-allowed",
         )}
       >
@@ -75,6 +173,8 @@ function QuickRunPanel({ onGenerated }: QuickRunProps) {
       </button>
     );
   }
+
+  const totalSymbols = WATCHLIST_SECTIONS.reduce((n, s) => n + s.symbols.length, 0);
 
   return (
     <div className="glass rounded-2xl overflow-hidden">
@@ -85,31 +185,43 @@ function QuickRunPanel({ onGenerated }: QuickRunProps) {
         <div className="flex items-center gap-2">
           <Send className="w-4 h-4 text-brand-400" />
           <span className="text-sm font-semibold">Quick Generate</span>
-          <span className="text-[11px] text-slate-500 font-mono">Run paper-mode signals for any symbol</span>
+          <span className="text-[11px] text-slate-500 font-mono">
+            {totalSymbols} symbols — US stocks, ETFs, Crypto, Forex, NGX
+          </span>
         </div>
         <span className="text-xs text-slate-500">{open ? "▲" : "▼"}</span>
       </button>
 
       {open && (
-        <div className="border-t border-white/5 px-5 py-4 space-y-4">
-          <div className="space-y-2">
-            <div className="text-[10px] text-slate-500 uppercase tracking-widest font-semibold">Stocks</div>
-            <div className="flex flex-wrap gap-2">
-              {WATCHLIST_STOCKS.map((s) => <SymbolButton key={s} symbol={s} assetClass="stock" />)}
+        <div className="border-t border-white/5 px-5 py-4 space-y-5">
+          {WATCHLIST_SECTIONS.map((section) => (
+            <div key={section.label} className="space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-slate-500 uppercase tracking-widest font-semibold">
+                  {section.label}
+                </span>
+                {section.badge && (
+                  <span className={clsx(
+                    "text-[9px] font-bold px-1.5 py-0.5 rounded border",
+                    section.assetClass === "ngx"
+                      ? "bg-green-500/10 border-green-500/20 text-green-500"
+                      : "bg-sky-500/10 border-sky-500/20 text-sky-400",
+                  )}>
+                    {section.badge}
+                  </span>
+                )}
+                {section.note && (
+                  <span className="text-[10px] text-slate-600 font-mono italic">{section.note}</span>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {section.symbols.map((s) => (
+                  <SymbolButton key={s} symbol={s} assetClass={section.assetClass} badge={section.badge} />
+                ))}
+              </div>
             </div>
-          </div>
-          <div className="space-y-2">
-            <div className="text-[10px] text-slate-500 uppercase tracking-widest font-semibold">ETFs</div>
-            <div className="flex flex-wrap gap-2">
-              {WATCHLIST_ETFS.map((s) => <SymbolButton key={s} symbol={s} assetClass="stock" />)}
-            </div>
-          </div>
-          <div className="space-y-2">
-            <div className="text-[10px] text-slate-500 uppercase tracking-widest font-semibold">Crypto</div>
-            <div className="flex flex-wrap gap-2">
-              {WATCHLIST_CRYPTO.map((s) => <SymbolButton key={s} symbol={s} assetClass="crypto" />)}
-            </div>
-          </div>
+          ))}
+
           {done.length > 0 && (
             <p className="text-[11px] text-emerald-400 font-mono">
               ✓ {done.length} signal{done.length !== 1 ? "s" : ""} generated — refreshing feed…
@@ -143,7 +255,9 @@ function FilterBar({
   sort:   SortOrder;    setSort:   (v: SortOrder)    => void;
   total: number; shown: number;
 }) {
-  function Chip<T extends string>({ label, value, current, onSelect, color }: { label: string; value: T; current: T; onSelect: (v: T) => void; color?: string }) {
+  function Chip<T extends string>({ label, value, current, onSelect, color }: {
+    label: string; value: T; current: T; onSelect: (v: T) => void; color?: string;
+  }) {
     const active = value === current;
     return (
       <button
@@ -235,8 +349,7 @@ const ACTION_ORDER: Record<string, number> = { BUY: 0, SELL: 1, HOLD: 2 };
 const TIER_ORDER:   Record<string, number> = { HOT: 0, WARM: 1, COLD: 2 };
 
 export function SignalsPage() {
-  const { signals, apiState } = useSignals();
-  const [refreshKey, setRefreshKey] = useState(0);
+  const { signals, apiState, refresh, refreshing } = useSignals();
 
   const [search, setSearch]   = useState("");
   const [asset,  setAsset]    = useState<AssetFilter>("all");
@@ -247,17 +360,17 @@ export function SignalsPage() {
   const filtered = useMemo(() => {
     let list: Signal[] = [...signals];
 
-    if (search)          list = list.filter((s) => s.symbol.includes(search));
-    if (asset  !== "all") list = list.filter((s) => s.asset_class === asset);
-    if (action !== "all") list = list.filter((s) => s.action === action);
-    if (tier   !== "all") list = list.filter((s) => (s.tier ?? "COLD") === tier);
+    if (search)            list = list.filter((s) => s.symbol.includes(search));
+    if (asset  !== "all")  list = list.filter((s) => s.asset_class === asset);
+    if (action !== "all")  list = list.filter((s) => s.action === action);
+    if (tier   !== "all")  list = list.filter((s) => (s.tier ?? "COLD") === tier);
 
     list.sort((a, b) => {
       switch (sort) {
-        case "oldest":  return new Date(a.generated_at).getTime() - new Date(b.generated_at).getTime();
-        case "action":  return (ACTION_ORDER[a.action] ?? 9) - (ACTION_ORDER[b.action] ?? 9);
-        case "tier":    return (TIER_ORDER[a.tier ?? "COLD"] ?? 9) - (TIER_ORDER[b.tier ?? "COLD"] ?? 9);
-        default:        return new Date(b.generated_at).getTime() - new Date(a.generated_at).getTime();
+        case "oldest": return new Date(a.generated_at).getTime() - new Date(b.generated_at).getTime();
+        case "action": return (ACTION_ORDER[a.action] ?? 9) - (ACTION_ORDER[b.action] ?? 9);
+        case "tier":   return (TIER_ORDER[a.tier ?? "COLD"] ?? 9) - (TIER_ORDER[b.tier ?? "COLD"] ?? 9);
+        default:       return new Date(b.generated_at).getTime() - new Date(a.generated_at).getTime();
       }
     });
 
@@ -287,11 +400,12 @@ export function SignalsPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setRefreshKey((k) => k + 1)}
-            className="p-2 rounded-lg border border-white/10 text-slate-400 hover:text-slate-200 hover:border-white/20 transition-colors"
-            title="Refresh"
+            onClick={refresh}
+            disabled={refreshing}
+            className="p-2 rounded-lg border border-white/10 text-slate-400 hover:text-slate-200 hover:border-white/20 transition-colors disabled:opacity-50"
+            title="Refresh signal feed"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
+            <RefreshCw className={clsx("w-3.5 h-3.5", refreshing && "animate-spin")} />
           </button>
           <span className={clsx(
             "text-[10px] font-mono px-2 py-1 rounded border",
@@ -305,7 +419,7 @@ export function SignalsPage() {
       </div>
 
       {/* Quick generate */}
-      <QuickRunPanel key={refreshKey} onGenerated={() => setRefreshKey((k) => k + 1)} />
+      <QuickRunPanel onGenerated={refresh} />
 
       {/* Filters */}
       <FilterBar
