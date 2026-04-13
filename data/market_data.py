@@ -57,10 +57,8 @@ class AlpacaMarketData:
 
     def __init__(self, api_key: str, secret_key: str) -> None:
         from alpaca.data import StockHistoricalDataClient
-        from alpaca.data.live import StockDataStream
 
         self._client = StockHistoricalDataClient(api_key, secret_key)
-        self._stream_client = StockDataStream(api_key, secret_key)
 
     def get_bars(self, symbol: str, days: int = 60) -> list[Bar]:
         from alpaca.data.requests import StockBarsRequest

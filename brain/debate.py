@@ -387,8 +387,22 @@ class DebateOrchestrator:
         with ThreadPoolExecutor(max_workers=2) as pool:
             risk_future     = pool.submit(self._risk.analyse, risk_ctx)
             strategy_future = pool.submit(self._strategy.analyse, strategy_ctx)
-            risk_raw      = risk_future.result()
-            strategy_view = strategy_future.result()
+            try:
+                risk_raw = risk_future.result()
+            except Exception as exc:
+                log.error("Risk manager failed: %s", exc)
+                risk_raw = json.dumps({
+                    "action": action, "confidence": 0.0,
+                    "rationale": f"Risk manager error: {exc}",
+                    "suggested_position_pct": 0.02,
+                    "stop_loss_pct": 0.02, "take_profit_pct": 0.05,
+                    "devil_advocate_score": 0, "devil_advocate_case": "",
+                })
+            try:
+                strategy_view = strategy_future.result()
+            except Exception as exc:
+                log.error("Strategy coach failed: %s", exc)
+                strategy_view = "ALIGNED"
 
         try:
             parsed = json.loads(risk_raw)

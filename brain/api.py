@@ -73,6 +73,19 @@ app = FastAPI(
 )
 
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request, exc: Exception):
+    """Return the actual error message instead of a blank 500."""
+    import traceback
+    from fastapi.responses import JSONResponse
+    log.error("Unhandled exception on %s: %s", request.url.path, exc, exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"{type(exc).__name__}: {exc}",
+                 "traceback": traceback.format_exc()[-2000:]},
+    )
+
+
 def _build_services(cfg):
     # Heavy imports done here (inside a request handler) so a bad import never
     # prevents the health endpoint from starting.
@@ -147,11 +160,15 @@ def generate_signal(req: SignalRequest):
             status_code=503,
             detail="ANTHROPIC_API_KEY is not configured. Set it in Railway environment variables.",
         )
-    alpaca, binance, sentiment_fetcher, onchain_fetcher, portfolio_fetcher, orchestrator = (
-        _build_services(cfg)
-    )
+    try:
+        alpaca, binance, sentiment_fetcher, onchain_fetcher, portfolio_fetcher, orchestrator = (
+            _build_services(cfg)
+        )
+    except Exception as exc:
+        log.error("Service initialisation failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Service init failed: {exc}")
 
-    # ── Fetch data ──────────────────────────────────────────────────────────
+    # ── Fetch market data ───────────────────────────────────────────────────
     try:
         if req.asset_class == "stock":
             market = alpaca.snapshot(req.symbol, req.lookback_days)
@@ -160,10 +177,18 @@ def generate_signal(req: SignalRequest):
             market = binance.snapshot(req.symbol, req.lookback_days)
             onchain_snap = onchain_fetcher.snapshot()
     except Exception as exc:
+        log.error("Market data fetch failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail=f"Market data fetch failed: {exc}")
 
-    sentiment_bundle = sentiment_fetcher.bundle(req.symbol)
+    # ── Fetch sentiment (non-fatal) ─────────────────────────────────────────
+    try:
+        sentiment_bundle = sentiment_fetcher.bundle(req.symbol)
+    except Exception as exc:
+        log.warning("Sentiment fetch failed, using empty bundle: %s", exc)
+        from data.sentiment import SentimentBundle
+        sentiment_bundle = SentimentBundle(symbol=req.symbol, items=[])
 
+    # ── Fetch portfolio (non-fatal) ─────────────────────────────────────────
     try:
         portfolio_state = portfolio_fetcher.snapshot()
     except Exception as exc:
@@ -176,8 +201,12 @@ def generate_signal(req: SignalRequest):
             cash=100_000.0,
         )
 
-    # ── Run debate ──────────────────────────────────────────────────────────
-    signal = orchestrator.run(market, sentiment_bundle, onchain_snap, portfolio_state)
+    # ── Run 9-agent debate ──────────────────────────────────────────────────
+    try:
+        signal = orchestrator.run(market, sentiment_bundle, onchain_snap, portfolio_state)
+    except Exception as exc:
+        log.error("Debate failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Agent debate failed: {exc}")
 
     # Cache
     _signal_cache[req.symbol] = signal.to_dict()
