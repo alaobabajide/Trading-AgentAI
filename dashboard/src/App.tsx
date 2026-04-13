@@ -15,6 +15,7 @@ import { SetupBanner } from "./components/SetupBanner";
 import { MODE_CONFIG } from "./lib/hitl";
 
 type Page = "dashboard" | "signals" | "positions" | "technical" | "fundamental" | "charts" | "brain" | "settings";
+type TradingEnv = "paper" | "live";
 
 const PAGE_TITLE: Partial<Record<Page, string>> = {
   fundamental: "Fundamental Analysis",
@@ -24,9 +25,11 @@ const PAGE_TITLE: Partial<Record<Page, string>> = {
 };
 
 function AppInner() {
-  const [page, setPage] = useState<Page>("dashboard");
+  const [page, setPage]           = useState<Page>("dashboard");
+  const [tradingEnv, setTradingEnv] = useState<TradingEnv>("paper");
   const hitl    = useHITLContext();
   const modeCfg = MODE_CONFIG[hitl.profile.mode];
+  const isPaper = tradingEnv === "paper";
 
   return (
     <div className="flex h-screen overflow-hidden bg-surface-900">
@@ -68,7 +71,7 @@ function AppInner() {
               ))}
             </div>
 
-            {/* Status badges */}
+            {/* Status badges + trading env toggle */}
             <div className="flex items-center gap-2 text-xs text-slate-500 font-mono">
               <span className={clsx(
                 "px-2.5 py-1 rounded-lg border text-[11px] font-semibold",
@@ -78,12 +81,38 @@ function AppInner() {
               )}>
                 {modeCfg.label}
               </span>
-              <span className="px-2.5 py-1 rounded-lg bg-surface-700 border border-white/5">
-                Paper trading
-              </span>
-              <span className="px-2.5 py-1 rounded-lg bg-surface-700 border border-white/5">
-                Testnet
-              </span>
+
+              {/* Paper ↔ Live toggle */}
+              <div className="flex items-center rounded-lg overflow-hidden border border-white/10 text-[11px] font-semibold">
+                <button
+                  onClick={() => setTradingEnv("paper")}
+                  className={clsx(
+                    "px-2.5 py-1 transition-colors",
+                    isPaper
+                      ? "bg-sky-500/20 text-sky-300 border-r border-sky-500/30"
+                      : "bg-surface-700 text-slate-500 hover:text-slate-300 border-r border-white/10",
+                  )}
+                >
+                  Paper
+                </button>
+                <button
+                  onClick={() => setTradingEnv("live")}
+                  className={clsx(
+                    "px-2.5 py-1 transition-colors",
+                    !isPaper
+                      ? "bg-red-500/20 text-red-300"
+                      : "bg-surface-700 text-slate-500 hover:text-slate-300",
+                  )}
+                >
+                  Live
+                </button>
+              </div>
+
+              {!isPaper && (
+                <span className="px-2 py-0.5 rounded bg-red-500/15 border border-red-500/30 text-red-400 text-[10px] font-bold animate-pulse">
+                  LIVE
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -98,7 +127,7 @@ function AppInner() {
           {page === "technical"   && <TechnicalPage />}
           {page === "fundamental" && <FundamentalPage />}
           {page === "charts"      && <ChartsPage />}
-          {page === "brain"       && <BrainPage />}
+          {page === "brain"       && <BrainPage paperMode={isPaper} />}
           {page === "settings"    && <SettingsPage />}
         </div>
       </main>

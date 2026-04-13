@@ -31,6 +31,7 @@ class SignalRequest(BaseModel):
     symbol: str = Field(..., description="Ticker, e.g. AAPL or BTCUSDT")
     asset_class: str = Field(..., description="'stock' or 'crypto'")
     lookback_days: int = Field(60, ge=20, le=365)
+    paper_mode: bool = Field(True, description="True = rule-based analysis (no API credits); False = full LLM debate")
 
 
 class SignalResponse(BaseModel):
@@ -201,9 +202,12 @@ def generate_signal(req: SignalRequest):
             cash=100_000.0,
         )
 
-    # ── Run 9-agent debate ──────────────────────────────────────────────────
+    # ── Run debate (paper mode = rule-based; live mode = full LLM) ────────
     try:
-        signal = orchestrator.run(market, sentiment_bundle, onchain_snap, portfolio_state)
+        signal = orchestrator.run(
+            market, sentiment_bundle, onchain_snap, portfolio_state,
+            paper_mode=req.paper_mode,
+        )
     except Exception as exc:
         log.error("Debate failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Agent debate failed: {exc}")

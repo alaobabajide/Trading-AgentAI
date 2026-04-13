@@ -23,7 +23,11 @@ async function safeJson(resp: Response): Promise<unknown> {
   try { return JSON.parse(text); } catch { throw new Error(text.slice(0, 200)); }
 }
 
-export function BrainPage() {
+interface BrainPageProps {
+  paperMode?: boolean;
+}
+
+export function BrainPage({ paperMode = true }: BrainPageProps) {
   const [symbol, setSymbol] = useState("AAPL");
   const [assetClass, setAssetClass] = useState<"stock" | "crypto">("stock");
   const [loading, setLoading] = useState(false);
@@ -40,7 +44,7 @@ export function BrainPage() {
       const resp = await fetch("/api/signal", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol: symbol.toUpperCase(), asset_class: assetClass }),
+        body: JSON.stringify({ symbol: symbol.toUpperCase(), asset_class: assetClass, paper_mode: paperMode }),
       });
       if (!resp.ok) {
         const data = await safeJson(resp) as { detail?: string };
@@ -74,6 +78,17 @@ export function BrainPage() {
         <p className="text-sm text-slate-400 mt-1">
           Trigger the multi-agent debate for any symbol and inspect agent views live.
         </p>
+        <div className={clsx(
+          "inline-flex items-center gap-1.5 mt-2 px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold border",
+          paperMode
+            ? "bg-sky-500/10 border-sky-500/20 text-sky-400"
+            : "bg-red-500/10 border-red-500/20 text-red-400",
+        )}>
+          <span className={clsx("w-1.5 h-1.5 rounded-full", paperMode ? "bg-sky-400" : "bg-red-400 animate-pulse")} />
+          {paperMode
+            ? "Paper mode — rule-based analysis, no API credits needed"
+            : "Live mode — full 9-agent LLM debate (requires Anthropic credits)"}
+        </div>
       </div>
 
       <div className="glass rounded-2xl p-5 space-y-4">
@@ -113,10 +128,21 @@ export function BrainPage() {
         {loading && (
           <div className="text-xs text-slate-400 font-mono space-y-1 animate-pulse">
             <div>→ Fetching market data…</div>
-            <div>→ Running fundamental analyst…</div>
-            <div>→ Running technical analyst…</div>
-            <div>→ Running sentiment analyst…</div>
-            <div>→ Risk manager synthesising…</div>
+            {paperMode ? (
+              <>
+                <div>→ Running rule-based technical analysis…</div>
+                <div>→ Running rule-based quant (Bollinger Bands)…</div>
+                <div>→ Running rule-based fundamental (momentum)…</div>
+                <div>→ Computing regime + risk assessment…</div>
+              </>
+            ) : (
+              <>
+                <div>→ Running fundamental analyst…</div>
+                <div>→ Running technical analyst…</div>
+                <div>→ Running sentiment analyst…</div>
+                <div>→ Risk manager synthesising…</div>
+              </>
+            )}
           </div>
         )}
 

@@ -173,6 +173,168 @@ def _parse_strategy_fit(
     return "ALIGNED"
 
 
+# ── Paper-mode rule-based analysts (no LLM, no API credits needed) ────────────
+
+def _paper_technical(indicators: dict) -> str:
+    """RSI + MACD crossover rule — replaces LLM Technical Analyst in paper mode."""
+    rsi      = float(indicators.get("rsi_14", 50.0))
+    macd     = float(indicators.get("macd", 0.0))
+    macd_sig = float(indicators.get("macd_signal", 0.0))
+
+    bullish = (rsi < 35) or (macd > macd_sig and rsi < 62)
+    bearish = (rsi > 65) or (macd < macd_sig and rsi > 38)
+
+    if bullish and not bearish:
+        direction = "BULLISH"
+    elif bearish and not bullish:
+        direction = "BEARISH"
+    else:
+        direction = "NEUTRAL"
+
+    cross = "↑ bullish" if macd > macd_sig else "↓ bearish" if macd < macd_sig else "flat"
+    return (
+        f"DIRECTION: {direction}\n"
+        f"REASONING: Paper mode — RSI={rsi:.1f}, MACD {cross} ({macd:.4f} vs signal {macd_sig:.4f})."
+    )
+
+
+def _paper_quant(indicators: dict) -> str:
+    """Bollinger Bands position — replaces LLM Quant Analyst in paper mode."""
+    price    = float(indicators.get("price", 0.0))
+    bb_upper = float(indicators.get("bb_upper", price * 1.05))
+    bb_lower = float(indicators.get("bb_lower", price * 0.95))
+    bb_width = float(indicators.get("bb_width", 0.02))
+    atr      = float(indicators.get("atr_14", 0.0))
+
+    if bb_width < 0.005:
+        return (
+            "DIRECTION: NEUTRAL\n"
+            f"REASONING: Paper mode — Bollinger squeeze (width={bb_width:.4f}), no directional edge."
+        )
+    if price <= bb_lower:
+        direction, note = "BULLISH", f"price ${price:.2f} at/below lower band ${bb_lower:.2f}"
+    elif price >= bb_upper:
+        direction, note = "BEARISH", f"price ${price:.2f} at/above upper band ${bb_upper:.2f}"
+    else:
+        direction, note = "NEUTRAL", f"price ${price:.2f} mid-bands (${bb_lower:.2f}–${bb_upper:.2f})"
+
+    return (
+        f"DIRECTION: {direction}\n"
+        f"REASONING: Paper mode — Bollinger Bands: {note}, ATR={atr:.2f}."
+    )
+
+
+def _paper_fundamental(bars: list[dict]) -> str:
+    """20-day price momentum — replaces LLM Fundamental Analyst in paper mode."""
+    if len(bars) < 20:
+        return "DIRECTION: NEUTRAL\nREASONING: Paper mode — insufficient history for momentum."
+    close_now = float(bars[-1]["close"])
+    close_20d = float(bars[-21]["close"] if len(bars) >= 21 else bars[0]["close"])
+    momentum  = (close_now - close_20d) / max(close_20d, 1e-9) * 100
+
+    if momentum > 5.0:
+        direction = "BULLISH"
+    elif momentum < -5.0:
+        direction = "BEARISH"
+    else:
+        direction = "NEUTRAL"
+
+    return (
+        f"DIRECTION: {direction}\n"
+        f"REASONING: Paper mode — 20-day momentum {momentum:+.1f}% "
+        f"(${close_20d:.2f} → ${close_now:.2f})."
+    )
+
+
+def _paper_options_flow(indicators: dict) -> str:
+    """Vol-adjusted directional bias — replaces LLM Options Flow Analyst in paper mode."""
+    price    = float(indicators.get("price", 1.0))
+    atr      = float(indicators.get("atr_14", 0.0))
+    macd     = float(indicators.get("macd", 0.0))
+    macd_sig = float(indicators.get("macd_signal", 0.0))
+    atr_pct  = atr / max(price, 1e-9)
+
+    if atr_pct > 0.025:
+        return (
+            "DIRECTION: NEUTRAL\n"
+            f"REASONING: Paper mode — elevated ATR {atr_pct*100:.1f}% (>2.5%), "
+            "implied volatility analogue high, no directional edge."
+        )
+    if macd > macd_sig:
+        direction, note = "BULLISH", "low-vol uptrend — premium compressed, bullish flow"
+    elif macd < macd_sig:
+        direction, note = "BEARISH", "low-vol downtrend — bearish momentum"
+    else:
+        direction, note = "NEUTRAL", "no directional flow signal"
+
+    return (
+        f"DIRECTION: {direction}\n"
+        f"REASONING: Paper mode — vol-adjusted flow ({note}). ATR={atr_pct*100:.2f}%."
+    )
+
+
+def _paper_risk_manager(
+    action: str,
+    vote_tally: dict,
+    portfolio: PortfolioState,
+    max_pos: float,
+    max_crypto: float,
+    asset_class: str,
+) -> str:
+    """Rule-based risk assessment using portfolio values — no LLM needed."""
+    equity  = max(portfolio.equity, 1.0)
+    cash    = portfolio.cash
+    cash_ratio = cash / equity
+
+    pos_pct = min(max_pos, cash_ratio * 0.90) if action == "BUY" else max_pos
+    pos_pct = round(max(0.01, pos_pct), 4)
+
+    if asset_class == "crypto":
+        headroom = max(0.0, max_crypto - portfolio.crypto_allocation_pct)
+        if headroom < 0.005 and action == "BUY":
+            action  = "HOLD"
+            pos_pct = 0.0
+            rationale = (
+                f"Paper mode: crypto cap reached "
+                f"({portfolio.crypto_allocation_pct*100:.1f}% / {max_crypto*100:.0f}% limit). "
+                "No further crypto allocation permitted."
+            )
+        else:
+            pos_pct   = round(min(pos_pct, headroom), 4)
+            votes     = vote_tally.get("bullish" if action == "BUY" else "bearish", 0)
+            rationale = (
+                f"Paper mode rule-based risk. Equity=${equity:,.0f}, cash=${cash:,.0f} "
+                f"({cash_ratio*100:.1f}%). Crypto headroom {headroom*100:.1f}%. "
+                f"Consensus {votes}/7. Position={pos_pct*100:.1f}% NAV."
+            )
+    elif action == "BUY" and cash < equity * 0.03:
+        action    = "HOLD"
+        pos_pct   = 0.0
+        rationale = (
+            f"Paper mode: cash too low (${cash:,.0f} / {cash_ratio*100:.1f}% of equity). "
+            "Need ≥3% cash cushion to open a new position."
+        )
+    else:
+        votes     = vote_tally.get("bullish" if action == "BUY" else "bearish", 0)
+        rationale = (
+            f"Paper mode rule-based risk. Equity=${equity:,.0f}, cash=${cash:,.0f} "
+            f"({cash_ratio*100:.1f}%). Vote consensus {votes}/7. "
+            f"Position sized at {pos_pct*100:.1f}% of equity."
+        )
+
+    votes = vote_tally.get("bullish" if action == "BUY" else "bearish", 0)
+    return json.dumps({
+        "action":                 action,
+        "confidence":             round(votes / 7.0, 2),
+        "rationale":              rationale,
+        "suggested_position_pct": pos_pct,
+        "stop_loss_pct":          0.02,
+        "take_profit_pct":        0.05,
+        "devil_advocate_score":   0,
+        "devil_advocate_case":    "",
+    })
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _bars_to_dicts(snapshot: MarketSnapshot) -> list[dict]:
@@ -258,11 +420,13 @@ class DebateOrchestrator:
         onchain: OnChainSnapshot | None,
         portfolio: PortfolioState,
         user_profile: dict | None = None,
+        paper_mode: bool = False,
     ) -> TradingSignal:
         symbol      = market.symbol
         asset_class = market.asset_class
         profile     = user_profile or DEFAULT_PROFILE
-        log.info("9-agent debate starting: %s (%s)", symbol, asset_class)
+        mode_label  = "paper-rule-based" if paper_mode else "live-LLM"
+        log.info("9-agent debate starting: %s (%s) mode=%s", symbol, asset_class, mode_label)
 
         bars_dicts = _bars_to_dicts(market)
         indicators = _compute_indicators(market)
@@ -271,75 +435,92 @@ class DebateOrchestrator:
         atr_pct = indicators.get("atr_14", 0.0) / price
         _regime_tracker.record_atr(atr_pct)
 
-        # ── Round 1: all 7 analysts in parallel ──────────────────────────────
-        # Regime is deterministic (no LLM call) so it completes instantly.
-        # Macro is cache-backed; on a cache hit it also returns instantly.
-        cache_key = f"{symbol}:strategic"
-        cached_strategic = _cache.get(cache_key)
-
-        regime_ctx = {"symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators}
-        macro_ctx  = {
-            "symbol": symbol, "asset_class": asset_class,
-            "bars_last_60": bars_dicts, "indicators": indicators,
-            "portfolio_equity": portfolio.equity,
-            "daily_pnl_pct": portfolio.daily_pnl_pct,
-        }
-        tactical_tasks = {
-            "fundamental": (self._fundamental.analyse, {
-                "symbol": symbol, "asset_class": asset_class,
-                "bars_last_60": bars_dicts,
-                "onchain": onchain.__dict__ if onchain else {},
-                "portfolio_equity": portfolio.equity,
-            }),
-            "technical": (self._technical.analyse, {
-                "symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators,
-            }),
-            "sentiment": (self._sentiment_agent.analyse, {
-                "symbol": symbol,
-                "news_items": [
-                    {"source": n.source, "headline": n.headline, "published": n.published.isoformat()}
-                    for n in sentiment.items[:30]
-                ],
-            }),
-            "quant": (self._quant.analyse, {
-                "symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators,
-            }),
-            "options_flow": (self._options_flow.analyse, {
-                "symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators,
-            }),
-        }
-
         analyst_views: dict[str, str] = {}
 
-        with ThreadPoolExecutor(max_workers=7) as pool:
-            futures: dict[Any, str] = {}
+        if paper_mode:
+            # ── Paper mode: all rule-based, zero LLM calls ────────────────────
+            # Regime is already deterministic — run as normal.
+            regime_ctx = {"symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators}
+            analyst_views["regime"] = self._regime.analyse(regime_ctx)
 
-            # Regime always runs (deterministic, microseconds)
-            futures[pool.submit(self._regime.analyse, regime_ctx)] = "regime"
+            analyst_views["technical"]    = _paper_technical(indicators)
+            analyst_views["quant"]        = _paper_quant(indicators)
+            analyst_views["fundamental"]  = _paper_fundamental(bars_dicts)
+            analyst_views["options_flow"] = _paper_options_flow(indicators)
+            analyst_views["macro"]     = (
+                "DIRECTION: NEUTRAL\n"
+                "REASONING: Paper mode — macro analysis uses live economic data feed "
+                "(not available without live API). Defaulting to neutral."
+            )
+            analyst_views["sentiment"] = (
+                "DIRECTION: NEUTRAL\n"
+                "REASONING: Paper mode — sentiment requires live news/social feed "
+                "(not available without live API). Defaulting to neutral."
+            )
+            log.info("Paper mode analysts complete: %s", {k: v[:60] for k, v in analyst_views.items()})
 
-            # Macro: use cache if available, otherwise run in parallel
-            if cached_strategic:
-                macro_view, regime_view_cached = cached_strategic
-                analyst_views["macro"] = macro_view
-                log.debug("Macro served from cache for %s", symbol)
-            else:
-                futures[pool.submit(self._macro.analyse, macro_ctx)] = "macro"
+        else:
+            # ── Live mode: full 9-agent LLM debate ────────────────────────────
+            cache_key        = f"{symbol}:strategic"
+            cached_strategic = _cache.get(cache_key)
 
-            # All 5 tactical agents in parallel
-            for role, (fn, ctx) in tactical_tasks.items():
-                futures[pool.submit(fn, ctx)] = role
+            regime_ctx = {"symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators}
+            macro_ctx  = {
+                "symbol": symbol, "asset_class": asset_class,
+                "bars_last_60": bars_dicts, "indicators": indicators,
+                "portfolio_equity": portfolio.equity,
+                "daily_pnl_pct": portfolio.daily_pnl_pct,
+            }
+            tactical_tasks = {
+                "fundamental": (self._fundamental.analyse, {
+                    "symbol": symbol, "asset_class": asset_class,
+                    "bars_last_60": bars_dicts,
+                    "onchain": onchain.__dict__ if onchain else {},
+                    "portfolio_equity": portfolio.equity,
+                }),
+                "technical": (self._technical.analyse, {
+                    "symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators,
+                }),
+                "sentiment": (self._sentiment_agent.analyse, {
+                    "symbol": symbol,
+                    "news_items": [
+                        {"source": n.source, "headline": n.headline, "published": n.published.isoformat()}
+                        for n in sentiment.items[:30]
+                    ],
+                }),
+                "quant": (self._quant.analyse, {
+                    "symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators,
+                }),
+                "options_flow": (self._options_flow.analyse, {
+                    "symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators,
+                }),
+            }
 
-            for fut in as_completed(futures):
-                role = futures[fut]
-                try:
-                    analyst_views[role] = fut.result()
-                except Exception as exc:
-                    log.error("Agent %s failed: %s", role, exc)
-                    analyst_views[role] = f"DIRECTION: NEUTRAL\nREASONING: Agent error — {exc}"
+            with ThreadPoolExecutor(max_workers=7) as pool:
+                futures: dict[Any, str] = {}
 
-        # Persist macro+regime to strategic cache if freshly computed
-        if "macro" in analyst_views:
-            _cache.set(cache_key, (analyst_views["macro"], analyst_views.get("regime", "")))
+                futures[pool.submit(self._regime.analyse, regime_ctx)] = "regime"
+
+                if cached_strategic:
+                    macro_view, _ = cached_strategic
+                    analyst_views["macro"] = macro_view
+                    log.debug("Macro served from cache for %s", symbol)
+                else:
+                    futures[pool.submit(self._macro.analyse, macro_ctx)] = "macro"
+
+                for role, (fn, ctx) in tactical_tasks.items():
+                    futures[pool.submit(fn, ctx)] = role
+
+                for fut in as_completed(futures):
+                    role = futures[fut]
+                    try:
+                        analyst_views[role] = fut.result()
+                    except Exception as exc:
+                        log.error("Agent %s failed: %s", role, exc)
+                        analyst_views[role] = f"DIRECTION: NEUTRAL\nREASONING: Agent error — {exc}"
+
+            if "macro" in analyst_views:
+                _cache.set(cache_key, (analyst_views["macro"], analyst_views.get("regime", "")))
 
         for role, view in analyst_views.items():
             log.info("%s: %s", role.title(), view[:80])
@@ -352,57 +533,68 @@ class DebateOrchestrator:
         votes_for_action = vote_tally["bullish"] if action == "BUY" else vote_tally["bearish"] if action == "SELL" else 0
 
         log.info(
-            "Vote tally: %s → action=%s regime=%s",
-            vote_tally, action, regime_label,
+            "Vote tally: %s → action=%s regime=%s mode=%s",
+            vote_tally, action, regime_label, mode_label,
         )
 
-        # ── Round 2: Risk Manager + Strategy Coach in parallel ────────────────
-        risk_ctx = {
-            "symbol": symbol, "asset_class": asset_class,
-            "action_from_votes": action,
-            "vote_tally": vote_tally,
-            "analyst_opinions": analyst_views,
-            "portfolio": {
-                "equity":                portfolio.equity,
-                "daily_pnl_pct":         portfolio.daily_pnl_pct,
-                "crypto_allocation_pct": portfolio.crypto_allocation_pct,
-            },
-            "risk_limits": {
-                "max_position_pct":         self._max_pos,
-                "max_crypto_pct":           self._max_crypto,
-                "circuit_breaker_drawdown": self._cb_drawdown,
-            },
-        }
-        strategy_ctx = {
-            "market_analysis": {
-                "symbol": symbol, "action": action,
-                "vote_tally": vote_tally, "analyst_opinions": analyst_views,
-            },
-            "trader_profile": profile,
-            "portfolio": {
-                "equity": portfolio.equity, "daily_pnl_pct": portfolio.daily_pnl_pct,
-            },
-        }
+        # ── Round 2: Risk Manager + Strategy Coach ────────────────────────────
+        if paper_mode:
+            # Rule-based risk manager — uses portfolio values, no LLM
+            risk_raw      = _paper_risk_manager(
+                action, vote_tally, portfolio,
+                self._max_pos, self._max_crypto, asset_class,
+            )
+            strategy_view = (
+                "ALIGNED\nREASONING: Paper mode — strategy assessment uses rule-based "
+                "position sizing. Trade aligns with technical indicators."
+            )
+        else:
+            risk_ctx = {
+                "symbol": symbol, "asset_class": asset_class,
+                "action_from_votes": action,
+                "vote_tally": vote_tally,
+                "analyst_opinions": analyst_views,
+                "portfolio": {
+                    "equity":                portfolio.equity,
+                    "daily_pnl_pct":         portfolio.daily_pnl_pct,
+                    "crypto_allocation_pct": portfolio.crypto_allocation_pct,
+                },
+                "risk_limits": {
+                    "max_position_pct":         self._max_pos,
+                    "max_crypto_pct":           self._max_crypto,
+                    "circuit_breaker_drawdown": self._cb_drawdown,
+                },
+            }
+            strategy_ctx = {
+                "market_analysis": {
+                    "symbol": symbol, "action": action,
+                    "vote_tally": vote_tally, "analyst_opinions": analyst_views,
+                },
+                "trader_profile": profile,
+                "portfolio": {
+                    "equity": portfolio.equity, "daily_pnl_pct": portfolio.daily_pnl_pct,
+                },
+            }
 
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            risk_future     = pool.submit(self._risk.analyse, risk_ctx)
-            strategy_future = pool.submit(self._strategy.analyse, strategy_ctx)
-            try:
-                risk_raw = risk_future.result()
-            except Exception as exc:
-                log.error("Risk manager failed: %s", exc)
-                risk_raw = json.dumps({
-                    "action": action, "confidence": 0.0,
-                    "rationale": f"Risk manager error: {exc}",
-                    "suggested_position_pct": 0.02,
-                    "stop_loss_pct": 0.02, "take_profit_pct": 0.05,
-                    "devil_advocate_score": 0, "devil_advocate_case": "",
-                })
-            try:
-                strategy_view = strategy_future.result()
-            except Exception as exc:
-                log.error("Strategy coach failed: %s", exc)
-                strategy_view = "ALIGNED"
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                risk_future     = pool.submit(self._risk.analyse, risk_ctx)
+                strategy_future = pool.submit(self._strategy.analyse, strategy_ctx)
+                try:
+                    risk_raw = risk_future.result()
+                except Exception as exc:
+                    log.error("Risk manager failed: %s", exc)
+                    risk_raw = json.dumps({
+                        "action": action, "confidence": 0.0,
+                        "rationale": f"Risk manager error: {exc}",
+                        "suggested_position_pct": 0.02,
+                        "stop_loss_pct": 0.02, "take_profit_pct": 0.05,
+                        "devil_advocate_score": 0, "devil_advocate_case": "",
+                    })
+                try:
+                    strategy_view = strategy_future.result()
+                except Exception as exc:
+                    log.error("Strategy coach failed: %s", exc)
+                    strategy_view = "ALIGNED"
 
         try:
             parsed = json.loads(risk_raw)
