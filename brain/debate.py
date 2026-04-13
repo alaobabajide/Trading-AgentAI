@@ -176,100 +176,315 @@ def _parse_strategy_fit(
 # ── Paper-mode rule-based analysts (no LLM, no API credits needed) ────────────
 
 def _paper_technical(indicators: dict) -> str:
-    """RSI + MACD crossover rule — replaces LLM Technical Analyst in paper mode."""
+    """
+    LENS: Short-term trend-following.
+    Reads: RSI-14, MACD crossover, price vs SMA20.
+    (No overlap with Quant/Fundamental/Options/Macro/Sentiment lenses.)
+    """
     rsi      = float(indicators.get("rsi_14", 50.0))
     macd     = float(indicators.get("macd", 0.0))
     macd_sig = float(indicators.get("macd_signal", 0.0))
+    price    = float(indicators.get("price", 1.0))
+    sma_20   = float(indicators.get("sma_20", price))
 
-    bullish = (rsi < 35) or (macd > macd_sig and rsi < 62)
-    bearish = (rsi > 65) or (macd < macd_sig and rsi > 38)
+    b, s, notes = 0, 0, []
 
-    if bullish and not bearish:
-        direction = "BULLISH"
-    elif bearish and not bullish:
-        direction = "BEARISH"
+    # RSI — momentum oscillator
+    if rsi < 35:
+        b += 1; notes.append(f"RSI={rsi:.1f} oversold")
+    elif rsi > 65:
+        s += 1; notes.append(f"RSI={rsi:.1f} overbought")
     else:
-        direction = "NEUTRAL"
+        notes.append(f"RSI={rsi:.1f} neutral")
 
-    cross = "↑ bullish" if macd > macd_sig else "↓ bearish" if macd < macd_sig else "flat"
+    # MACD histogram crossover
+    diff = macd - macd_sig
+    if diff > 0:
+        b += 1; notes.append(f"MACD above signal (+{diff:.4f})")
+    elif diff < 0:
+        s += 1; notes.append(f"MACD below signal ({diff:.4f})")
+    else:
+        notes.append("MACD flat")
+
+    # Price vs SMA20 — short-term trend structure
+    dev = (price - sma_20) / max(sma_20, 1e-9) * 100
+    if price > sma_20 * 1.005:
+        b += 1; notes.append(f"Price {dev:+.1f}% above SMA20")
+    elif price < sma_20 * 0.995:
+        s += 1; notes.append(f"Price {dev:+.1f}% below SMA20")
+    else:
+        notes.append(f"Price ≈ SMA20 ({dev:+.1f}%)")
+
+    direction = "BULLISH" if b >= 2 else "BEARISH" if s >= 2 else "NEUTRAL"
     return (
         f"DIRECTION: {direction}\n"
-        f"REASONING: Paper mode — RSI={rsi:.1f}, MACD {cross} ({macd:.4f} vs signal {macd_sig:.4f})."
+        f"REASONING: Paper mode [Technical/trend] — {'; '.join(notes)}. "
+        f"Bullish signals: {b}/3, bearish: {s}/3."
     )
 
 
 def _paper_quant(indicators: dict) -> str:
-    """Bollinger Bands position — replaces LLM Quant Analyst in paper mode."""
-    price    = float(indicators.get("price", 0.0))
+    """
+    LENS: Statistical mean-reversion.
+    Reads: Bollinger %B, Stochastic K/D, ROC-10.
+    (Distinct from Technical RSI/MACD, Fundamental long-horizon, Options vol/volume.)
+    """
+    price    = float(indicators.get("price", 1.0))
     bb_upper = float(indicators.get("bb_upper", price * 1.05))
     bb_lower = float(indicators.get("bb_lower", price * 0.95))
     bb_width = float(indicators.get("bb_width", 0.02))
-    atr      = float(indicators.get("atr_14", 0.0))
+    stoch_k  = float(indicators.get("stoch_k", 50.0))
+    stoch_d  = float(indicators.get("stoch_d", 50.0))
+    roc_10   = float(indicators.get("roc_10", 0.0))
 
     if bb_width < 0.005:
         return (
             "DIRECTION: NEUTRAL\n"
-            f"REASONING: Paper mode — Bollinger squeeze (width={bb_width:.4f}), no directional edge."
+            f"REASONING: Paper mode [Quant/mean-rev] — Bollinger squeeze "
+            f"(width={bb_width:.4f}), mean-reversion signal unreliable in low-vol regime."
         )
-    if price <= bb_lower:
-        direction, note = "BULLISH", f"price ${price:.2f} at/below lower band ${bb_lower:.2f}"
-    elif price >= bb_upper:
-        direction, note = "BEARISH", f"price ${price:.2f} at/above upper band ${bb_upper:.2f}"
-    else:
-        direction, note = "NEUTRAL", f"price ${price:.2f} mid-bands (${bb_lower:.2f}–${bb_upper:.2f})"
 
+    b, s, notes = 0, 0, []
+
+    # Bollinger %B
+    bb_range = max(bb_upper - bb_lower, 1e-9)
+    pct_b    = (price - bb_lower) / bb_range
+    if price <= bb_lower:
+        b += 1; notes.append(f"Price at/below lower band (%B={pct_b:.2f})")
+    elif price >= bb_upper:
+        s += 1; notes.append(f"Price at/above upper band (%B={pct_b:.2f})")
+    else:
+        notes.append(f"Price mid-bands (%B={pct_b:.2f})")
+
+    # Stochastic K/D crossover
+    if stoch_k < 25 and stoch_k > stoch_d:
+        b += 1; notes.append(f"Stoch K={stoch_k:.1f} oversold + K>D bullish cross")
+    elif stoch_k > 75 and stoch_k < stoch_d:
+        s += 1; notes.append(f"Stoch K={stoch_k:.1f} overbought + K<D bearish cross")
+    elif stoch_k < 30:
+        b += 1; notes.append(f"Stoch K={stoch_k:.1f} oversold")
+    elif stoch_k > 70:
+        s += 1; notes.append(f"Stoch K={stoch_k:.1f} overbought")
+    else:
+        notes.append(f"Stoch K={stoch_k:.1f} neutral")
+
+    # ROC10 as mean-reversion catalyst (sharp moves revert)
+    if roc_10 < -8.0:
+        b += 1; notes.append(f"ROC10={roc_10:+.1f}% sharp drop → reversion candidate")
+    elif roc_10 > 8.0:
+        s += 1; notes.append(f"ROC10={roc_10:+.1f}% sharp rally → reversion risk")
+    else:
+        notes.append(f"ROC10={roc_10:+.1f}% within normal range")
+
+    direction = "BULLISH" if b >= 2 else "BEARISH" if s >= 2 else "NEUTRAL"
     return (
         f"DIRECTION: {direction}\n"
-        f"REASONING: Paper mode — Bollinger Bands: {note}, ATR={atr:.2f}."
+        f"REASONING: Paper mode [Quant/mean-rev] — {'; '.join(notes)}. "
+        f"Bullish: {b}/3, bearish: {s}/3."
     )
 
 
-def _paper_fundamental(bars: list[dict]) -> str:
-    """20-day price momentum — replaces LLM Fundamental Analyst in paper mode."""
-    if len(bars) < 20:
-        return "DIRECTION: NEUTRAL\nREASONING: Paper mode — insufficient history for momentum."
-    close_now = float(bars[-1]["close"])
-    close_20d = float(bars[-21]["close"] if len(bars) >= 21 else bars[0]["close"])
-    momentum  = (close_now - close_20d) / max(close_20d, 1e-9) * 100
+def _paper_fundamental(indicators: dict) -> str:
+    """
+    LENS: Long-term value / structural momentum.
+    Reads: ROC-20, ROC-60, price vs SMA50, price vs SMA200.
+    (No RSI/MACD/Bollinger/volume — purely longer-horizon price structure.)
+    """
+    price   = float(indicators.get("price", 1.0))
+    roc_20  = float(indicators.get("roc_20", 0.0))
+    roc_60  = float(indicators.get("roc_60", 0.0))
+    sma_50  = float(indicators.get("sma_50",  price))
+    sma_200 = float(indicators.get("sma_200", price))
 
-    if momentum > 5.0:
-        direction = "BULLISH"
-    elif momentum < -5.0:
-        direction = "BEARISH"
+    b, s, notes = 0, 0, []
+
+    # ROC20 — intermediate momentum (earnings-cycle horizon)
+    if roc_20 > 8.0:
+        b += 1; notes.append(f"ROC20={roc_20:+.1f}% strong intermediate uptrend")
+    elif roc_20 < -8.0:
+        s += 1; notes.append(f"ROC20={roc_20:+.1f}% strong intermediate downtrend")
     else:
-        direction = "NEUTRAL"
+        notes.append(f"ROC20={roc_20:+.1f}% moderate")
 
+    # ROC60 — quarterly momentum
+    if roc_60 > 15.0:
+        b += 1; notes.append(f"ROC60={roc_60:+.1f}% secular uptrend")
+    elif roc_60 < -15.0:
+        s += 1; notes.append(f"ROC60={roc_60:+.1f}% secular downtrend")
+    else:
+        notes.append(f"ROC60={roc_60:+.1f}%")
+
+    # Price vs SMA50 / SMA200 — structural trend health
+    dev_50  = (price - sma_50)  / max(sma_50,  1e-9) * 100
+    dev_200 = (price - sma_200) / max(sma_200, 1e-9) * 100
+    if price > sma_50 * 1.01 and price > sma_200 * 1.01:
+        b += 1; notes.append(f"Above SMA50 ({dev_50:+.1f}%) and SMA200 ({dev_200:+.1f}%) — bull structure")
+    elif price < sma_50 * 0.99 and price < sma_200 * 0.99:
+        s += 1; notes.append(f"Below SMA50 ({dev_50:+.1f}%) and SMA200 ({dev_200:+.1f}%) — bear structure")
+    else:
+        notes.append(f"Mixed: SMA50 {dev_50:+.1f}%, SMA200 {dev_200:+.1f}%")
+
+    direction = "BULLISH" if b >= 2 else "BEARISH" if s >= 2 else "NEUTRAL"
     return (
         f"DIRECTION: {direction}\n"
-        f"REASONING: Paper mode — 20-day momentum {momentum:+.1f}% "
-        f"(${close_20d:.2f} → ${close_now:.2f})."
+        f"REASONING: Paper mode [Fundamental/long-term] — {'; '.join(notes)}. "
+        f"Bullish: {b}/3, bearish: {s}/3."
     )
 
 
 def _paper_options_flow(indicators: dict) -> str:
-    """Vol-adjusted directional bias — replaces LLM Options Flow Analyst in paper mode."""
-    price    = float(indicators.get("price", 1.0))
-    atr      = float(indicators.get("atr_14", 0.0))
-    macd     = float(indicators.get("macd", 0.0))
-    macd_sig = float(indicators.get("macd_signal", 0.0))
-    atr_pct  = atr / max(price, 1e-9)
+    """
+    LENS: Volatility extremes and flow pressure.
+    Reads: ATR% + ATR trend (vol expansion), volume ratio, 52W proximity.
+    (No RSI/MACD/Bollinger/ROC — purely vol-regime and structural extremes.)
+    """
+    price          = float(indicators.get("price", 1.0))
+    atr            = float(indicators.get("atr_14", 0.0))
+    atr_trend      = float(indicators.get("atr_trend", 0.0))
+    volume_ratio   = float(indicators.get("volume_ratio", 1.0))
+    high_proximity = float(indicators.get("high_proximity", 0.5))
+    low_proximity  = float(indicators.get("low_proximity", 0.5))
+    atr_pct        = atr / max(price, 1e-9)
 
-    if atr_pct > 0.025:
-        return (
-            "DIRECTION: NEUTRAL\n"
-            f"REASONING: Paper mode — elevated ATR {atr_pct*100:.1f}% (>2.5%), "
-            "implied volatility analogue high, no directional edge."
-        )
-    if macd > macd_sig:
-        direction, note = "BULLISH", "low-vol uptrend — premium compressed, bullish flow"
-    elif macd < macd_sig:
-        direction, note = "BEARISH", "low-vol downtrend — bearish momentum"
+    b, s, notes = 0, 0, []
+
+    # ATR expansion — options flow / implied vol analogue
+    if atr_pct > 0.03 and atr_trend > 0:
+        s += 1; notes.append(f"ATR={atr_pct*100:.1f}% expanding (>3%) — distribution / fear premium")
+    elif atr_pct < 0.01:
+        b += 1; notes.append(f"ATR={atr_pct*100:.2f}% compressed — low premium, bullish drift likely")
     else:
-        direction, note = "NEUTRAL", "no directional flow signal"
+        notes.append(f"ATR={atr_pct*100:.2f}% {'expanding' if atr_trend > 0 else 'contracting'}")
+
+    # Volume surge with ATR context
+    if volume_ratio > 1.5:
+        if atr_trend > 0:
+            s += 1; notes.append(f"Volume {volume_ratio:.1f}x surge + expanding vol → distribution")
+        else:
+            b += 1; notes.append(f"Volume {volume_ratio:.1f}x surge + stable vol → accumulation")
+    elif volume_ratio < 0.5:
+        notes.append(f"Volume dry-up {volume_ratio:.2f}x — low conviction")
+    else:
+        notes.append(f"Volume ratio {volume_ratio:.2f}x normal")
+
+    # 52-Week proximity — breakout / breakdown catalyst
+    if high_proximity < 0.02:
+        b += 1; notes.append(f"Near 52W high ({high_proximity*100:.1f}% below) → breakout zone")
+    elif low_proximity < 0.05:
+        s += 1; notes.append(f"Near 52W low ({low_proximity*100:.1f}% above) → breakdown risk")
+    else:
+        pct_range = (1.0 - high_proximity) * 100
+        notes.append(f"52W position {pct_range:.0f}% of annual range")
+
+    direction = "BULLISH" if b >= 2 else "BEARISH" if s >= 2 else "NEUTRAL"
+    if b == 1 and s == 0:
+        direction = "BULLISH"
+    elif s == 1 and b == 0:
+        direction = "BEARISH"
 
     return (
         f"DIRECTION: {direction}\n"
-        f"REASONING: Paper mode — vol-adjusted flow ({note}). ATR={atr_pct*100:.2f}%."
+        f"REASONING: Paper mode [Options Flow/vol] — {'; '.join(notes)}. "
+        f"Bullish: {b}/3, bearish: {s}/3."
+    )
+
+
+def _paper_macro(indicators: dict) -> str:
+    """
+    LENS: Secular / macro-structural trend.
+    Reads: price vs SMA200, ROC-60, 52W high proximity.
+    (Big-picture regime — no short-term oscillators.)
+    """
+    price          = float(indicators.get("price", 1.0))
+    sma_200        = float(indicators.get("sma_200", price))
+    roc_60         = float(indicators.get("roc_60", 0.0))
+    high_proximity = float(indicators.get("high_proximity", 0.5))
+
+    b, s, notes = 0, 0, []
+
+    # Price vs SMA200 — bull/bear market structure
+    dev_200 = (price - sma_200) / max(sma_200, 1e-9) * 100
+    if price > sma_200 * 1.03:
+        b += 1; notes.append(f"Price {dev_200:+.1f}% above SMA200 — bull market structure")
+    elif price < sma_200 * 0.97:
+        s += 1; notes.append(f"Price {dev_200:+.1f}% below SMA200 — bear market structure")
+    else:
+        notes.append(f"Price at SMA200 crossover zone ({dev_200:+.1f}%)")
+
+    # ROC60 — macro quarterly momentum
+    if roc_60 > 12.0:
+        b += 1; notes.append(f"ROC60={roc_60:+.1f}% positive macro momentum")
+    elif roc_60 < -12.0:
+        s += 1; notes.append(f"ROC60={roc_60:+.1f}% negative macro momentum")
+    else:
+        notes.append(f"ROC60={roc_60:+.1f}% subdued macro momentum")
+
+    # 52W high proximity — secular trend health
+    if high_proximity < 0.05:
+        b += 1; notes.append(f"Near 52W high ({high_proximity*100:.1f}% from peak) — strong secular trend")
+    elif high_proximity > 0.25:
+        s += 1; notes.append(f"Far from 52W high ({high_proximity*100:.0f}% drawdown) — weak macro backdrop")
+    else:
+        notes.append(f"Moderate {high_proximity*100:.1f}% below 52W high")
+
+    direction = "BULLISH" if b >= 2 else "BEARISH" if s >= 2 else "NEUTRAL"
+    return (
+        f"DIRECTION: {direction}\n"
+        f"REASONING: Paper mode [Macro/secular] — {'; '.join(notes)}. "
+        f"Bullish: {b}/3, bearish: {s}/3."
+    )
+
+
+def _paper_sentiment(indicators: dict) -> str:
+    """
+    LENS: Crowd psychology / short-term sentiment.
+    Reads: ROC-5 (recency), volume ratio (participation), RSI as crowd-fear proxy.
+    (Recency-biased lens — no long-term indicators.)
+    """
+    rsi          = float(indicators.get("rsi_14", 50.0))
+    roc_5        = float(indicators.get("roc_5", 0.0))
+    volume_ratio = float(indicators.get("volume_ratio", 1.0))
+
+    b, s, notes = 0, 0, []
+
+    # ROC5 — recent crowd momentum
+    if roc_5 > 3.0:
+        b += 1; notes.append(f"ROC5={roc_5:+.1f}% buying momentum")
+    elif roc_5 < -3.0:
+        s += 1; notes.append(f"ROC5={roc_5:+.1f}% selling panic")
+    else:
+        notes.append(f"ROC5={roc_5:+.1f}% low short-term momentum")
+
+    # Volume with price direction — crowd participation
+    if volume_ratio > 2.0:
+        if roc_5 > 0:
+            b += 1; notes.append(f"Volume surge {volume_ratio:.1f}x on up-move → crowd FOMO")
+        else:
+            s += 1; notes.append(f"Volume surge {volume_ratio:.1f}x on down-move → crowd panic")
+    elif volume_ratio > 1.3:
+        notes.append(f"Above-average volume {volume_ratio:.2f}x — elevated interest")
+    elif volume_ratio < 0.5:
+        notes.append(f"Volume dry-up {volume_ratio:.2f}x — crowd disinterest")
+    else:
+        notes.append(f"Normal volume {volume_ratio:.2f}x")
+
+    # RSI as crowd fear/greed proxy (extreme readings)
+    if rsi < 30:
+        b += 1; notes.append(f"RSI={rsi:.1f} extreme pessimism / capitulation")
+    elif rsi > 70:
+        s += 1; notes.append(f"RSI={rsi:.1f} extreme greed / exhaustion")
+    elif rsi > 58:
+        notes.append(f"RSI={rsi:.1f} positive crowd sentiment")
+    elif rsi < 42:
+        notes.append(f"RSI={rsi:.1f} negative crowd sentiment")
+    else:
+        notes.append(f"RSI={rsi:.1f} neutral crowd sentiment")
+
+    direction = "BULLISH" if b >= 2 else "BEARISH" if s >= 2 else "NEUTRAL"
+    return (
+        f"DIRECTION: {direction}\n"
+        f"REASONING: Paper mode [Sentiment/crowd] — {'; '.join(notes)}. "
+        f"Bullish: {b}/3, bearish: {s}/3."
     )
 
 
@@ -350,26 +565,91 @@ def _bars_to_dicts(snapshot: MarketSnapshot) -> list[dict]:
 
 
 def _compute_indicators(snapshot: MarketSnapshot) -> dict[str, Any]:
+    """
+    Compute 22+ technical indicators from live market bars.
+    Each paper-mode agent reads a distinct non-overlapping sub-set so votes are
+    genuinely independent (asymmetric information lenses).
+    """
     if len(snapshot.bars) < 20:
         return {}
-    closes = pd.Series([b.close for b in snapshot.bars])
-    highs  = pd.Series([b.high  for b in snapshot.bars])
-    lows   = pd.Series([b.low   for b in snapshot.bars])
 
-    rsi         = ta.momentum.RSIIndicator(closes).rsi().iloc[-1]
-    macd_ind    = ta.trend.MACD(closes)
-    atr         = ta.volatility.AverageTrueRange(highs, lows, closes).average_true_range().iloc[-1]
-    bb          = ta.volatility.BollingerBands(closes)
+    closes  = pd.Series([b.close  for b in snapshot.bars], dtype=float)
+    highs   = pd.Series([b.high   for b in snapshot.bars], dtype=float)
+    lows    = pd.Series([b.low    for b in snapshot.bars], dtype=float)
+    volumes = pd.Series([float(b.volume) for b in snapshot.bars], dtype=float)
+    price   = float(closes.iloc[-1])
+
+    # ── Momentum ──────────────────────────────────────────────────────────────
+    rsi      = ta.momentum.RSIIndicator(closes).rsi()
+    macd_ind = ta.trend.MACD(closes)
+    stoch    = ta.momentum.StochasticOscillator(highs, lows, closes)
+
+    # ── Volatility ────────────────────────────────────────────────────────────
+    atr_series = ta.volatility.AverageTrueRange(highs, lows, closes).average_true_range()
+    bb         = ta.volatility.BollingerBands(closes)
+    atr_now    = float(atr_series.iloc[-1])
+    atr_5ago   = float(atr_series.iloc[-6]) if len(atr_series) >= 6 else atr_now
+
+    bb_width_series = bb.bollinger_wband()
+    bb_width_now    = float(bb_width_series.iloc[-1])
+    bb_width_5ago   = float(bb_width_series.iloc[-6]) if len(bb_width_series) >= 6 else bb_width_now
+
+    # ── Trend SMAs ────────────────────────────────────────────────────────────
+    sma_20  = float(closes.rolling(20).mean().iloc[-1])
+    sma_50  = float(closes.rolling(50).mean().iloc[-1])  if len(closes) >= 50  else price
+    sma_200 = float(closes.rolling(200).mean().iloc[-1]) if len(closes) >= 200 else price
+
+    # ── Rate of change ────────────────────────────────────────────────────────
+    def _roc(n: int) -> float:
+        if len(closes) <= n:
+            return 0.0
+        past = float(closes.iloc[-(n + 1)])
+        return (price - past) / max(past, 1e-9) * 100
+
+    # ── Volume ratio (today vs 20-day average) ────────────────────────────────
+    vol_avg_20    = float(volumes.rolling(20).mean().iloc[-1])
+    volume_ratio  = float(volumes.iloc[-1]) / max(vol_avg_20, 1.0)
+
+    # ── 52-week (≤252 bars) range proximity ───────────────────────────────────
+    bars_252   = snapshot.bars[-252:]
+    high_52w   = max(b.high for b in bars_252)
+    low_52w    = min(b.low  for b in bars_252)
+    # high_proximity: fraction *below* 52w high (0 = at all-time high)
+    # low_proximity:  fraction *above* 52w low  (0 = at all-time low)
+    high_proximity = (high_52w - price) / max(high_52w, 1e-9)
+    low_proximity  = (price - low_52w)  / max(price,    1e-9)
 
     return {
-        "rsi_14":      round(float(rsi), 2),
-        "macd":        round(float(macd_ind.macd().iloc[-1]), 4),
-        "macd_signal": round(float(macd_ind.macd_signal().iloc[-1]), 4),
-        "atr_14":      round(float(atr), 4),
-        "bb_upper":    round(float(bb.bollinger_hband().iloc[-1]), 4),
-        "bb_lower":    round(float(bb.bollinger_lband().iloc[-1]), 4),
-        "bb_width":    round(float(bb.bollinger_wband().iloc[-1]), 4),
-        "price":       snapshot.bars[-1].close,
+        "price":          price,
+        # Momentum
+        "rsi_14":         round(float(rsi.iloc[-1]), 2),
+        "macd":           round(float(macd_ind.macd().iloc[-1]), 4),
+        "macd_signal":    round(float(macd_ind.macd_signal().iloc[-1]), 4),
+        "stoch_k":        round(float(stoch.stoch().iloc[-1]), 2),
+        "stoch_d":        round(float(stoch.stoch_signal().iloc[-1]), 2),
+        # Rate of change
+        "roc_5":          round(_roc(5),  2),
+        "roc_10":         round(_roc(10), 2),
+        "roc_20":         round(_roc(20), 2),
+        "roc_60":         round(_roc(60), 2),
+        # Trend
+        "sma_20":         round(sma_20,  4),
+        "sma_50":         round(sma_50,  4),
+        "sma_200":        round(sma_200, 4),
+        # Volatility
+        "atr_14":         round(atr_now, 4),
+        "atr_trend":      round(atr_now - atr_5ago, 4),
+        "bb_upper":       round(float(bb.bollinger_hband().iloc[-1]), 4),
+        "bb_lower":       round(float(bb.bollinger_lband().iloc[-1]), 4),
+        "bb_width":       round(bb_width_now, 4),
+        "bb_width_trend": round(bb_width_now - bb_width_5ago, 4),
+        # Volume
+        "volume_ratio":   round(volume_ratio, 3),
+        # 52-week range
+        "high_52w":       round(high_52w, 4),
+        "low_52w":        round(low_52w,  4),
+        "high_proximity": round(high_proximity, 4),
+        "low_proximity":  round(low_proximity,  4),
     }
 
 
@@ -438,26 +718,22 @@ class DebateOrchestrator:
         analyst_views: dict[str, str] = {}
 
         if paper_mode:
-            # ── Paper mode: all rule-based, zero LLM calls ────────────────────
-            # Regime is already deterministic — run as normal.
+            # ── Paper mode: all 7 analysts rule-based, zero LLM calls ─────────
+            # Each analyst reads a distinct subset of the 22-field indicator
+            # dict — votes are genuinely independent (asymmetric lenses).
             regime_ctx = {"symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators}
-            analyst_views["regime"] = self._regime.analyse(regime_ctx)
-
-            analyst_views["technical"]    = _paper_technical(indicators)
-            analyst_views["quant"]        = _paper_quant(indicators)
-            analyst_views["fundamental"]  = _paper_fundamental(bars_dicts)
-            analyst_views["options_flow"] = _paper_options_flow(indicators)
-            analyst_views["macro"]     = (
-                "DIRECTION: NEUTRAL\n"
-                "REASONING: Paper mode — macro analysis uses live economic data feed "
-                "(not available without live API). Defaulting to neutral."
+            analyst_views["regime"]      = self._regime.analyse(regime_ctx)
+            analyst_views["technical"]   = _paper_technical(indicators)   # RSI + MACD + SMA20
+            analyst_views["quant"]       = _paper_quant(indicators)        # BB%B + Stoch + ROC10
+            analyst_views["fundamental"] = _paper_fundamental(indicators)  # ROC20/60 + SMA50/200
+            analyst_views["options_flow"]= _paper_options_flow(indicators) # ATR + vol_ratio + 52W
+            analyst_views["macro"]       = _paper_macro(indicators)        # SMA200 + ROC60 + 52W high
+            analyst_views["sentiment"]   = _paper_sentiment(indicators)    # ROC5 + vol_ratio + RSI crowd
+            log.info(
+                "Paper mode analysts complete (%d indicators): %s",
+                len(indicators),
+                {k: v.split("\n")[0] for k, v in analyst_views.items()},
             )
-            analyst_views["sentiment"] = (
-                "DIRECTION: NEUTRAL\n"
-                "REASONING: Paper mode — sentiment requires live news/social feed "
-                "(not available without live API). Defaulting to neutral."
-            )
-            log.info("Paper mode analysts complete: %s", {k: v[:60] for k, v in analyst_views.items()})
 
         else:
             # ── Live mode: full 9-agent LLM debate ────────────────────────────
