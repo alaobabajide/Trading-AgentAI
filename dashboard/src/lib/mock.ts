@@ -8,6 +8,7 @@ export const mockPortfolio: PortfolioSnapshot = {
   timestamp: new Date().toISOString(),
   equity: 174_620.8,
   cash: 29_850.0,
+  buying_power: 59_700.0,
   daily_pnl: 2_314.5,
   daily_pnl_pct: 1.34,
   crypto_allocation_pct: 0.154,

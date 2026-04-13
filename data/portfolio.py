@@ -31,6 +31,7 @@ class PortfolioState:
     timestamp: datetime
     equity: float                          # total NAV
     cash: float
+    buying_power: float = 0.0             # Alpaca buying power (may be 2× equity on margin)
     positions: list[Position] = field(default_factory=list)
     daily_pnl: float = 0.0
     daily_pnl_pct: float = 0.0
@@ -63,8 +64,8 @@ class PortfolioFetcher:
 
     # ── Alpaca ────────────────────────────────────────────────────────────────
 
-    def _alpaca_positions(self) -> tuple[list[Position], float, float, float]:
-        """Returns (positions, equity, cash, daily_pnl)."""
+    def _alpaca_positions(self) -> tuple[list[Position], float, float, float, float]:
+        """Returns (positions, equity, cash, buying_power, daily_pnl)."""
         from alpaca.trading.client import TradingClient
 
         # Derive paper mode from the configured base URL so both paper and
@@ -74,6 +75,7 @@ class PortfolioFetcher:
         acct = client.get_account()
         equity = float(acct.equity)
         cash = float(acct.cash)
+        buying_power = float(acct.buying_power) if acct.buying_power else cash
         daily_pnl = float(acct.equity) - float(acct.last_equity)
 
         raw_positions = client.get_all_positions()
@@ -94,7 +96,7 @@ class PortfolioFetcher:
                 unrealized_pnl=upnl,
                 unrealized_pnl_pct=upnl / max(abs(qty * avg_price), 1) * 100,
             ))
-        return positions, equity, cash, daily_pnl
+        return positions, equity, cash, buying_power, daily_pnl
 
     # ── Binance ───────────────────────────────────────────────────────────────
 
@@ -135,12 +137,12 @@ class PortfolioFetcher:
     # ── Unified snapshot ──────────────────────────────────────────────────────
 
     def snapshot(self) -> PortfolioState:
-        stock_positions, equity, cash, daily_pnl = [], 0.0, 0.0, 0.0
+        stock_positions, equity, cash, buying_power, daily_pnl = [], 0.0, 0.0, 0.0, 0.0
         crypto_positions: list[Position] = []
 
         if self._alpaca_key:
             try:
-                stock_positions, equity, cash, daily_pnl = self._alpaca_positions()
+                stock_positions, equity, cash, buying_power, daily_pnl = self._alpaca_positions()
             except Exception as exc:
                 log.error("Alpaca portfolio fetch failed: %s", exc)
 
@@ -158,6 +160,7 @@ class PortfolioFetcher:
             timestamp=datetime.now(timezone.utc),
             equity=equity,
             cash=cash,
+            buying_power=buying_power,
             positions=all_positions,
             daily_pnl=daily_pnl,
             daily_pnl_pct=daily_pnl / max(equity - daily_pnl, 1) * 100,

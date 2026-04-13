@@ -51,7 +51,7 @@ export function Dashboard() {
         <StatCard
           label="Cash"
           value={`$${p.cash.toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
-          sub={`${(cashPct * 100).toFixed(1)}% of equity`}
+          sub={`Buying power: $${(p.buying_power ?? p.cash).toLocaleString("en-US", { maximumFractionDigits: 0 })}`}
           trend="neutral"
           icon={<Wallet className="w-4 h-4" />}
         />

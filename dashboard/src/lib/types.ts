@@ -60,6 +60,7 @@ export interface PortfolioSnapshot {
   timestamp: string;
   equity: number;
   cash: number;
+  buying_power: number;
   positions: Position[];
   daily_pnl: number;
   daily_pnl_pct: number;

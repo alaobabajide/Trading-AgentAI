@@ -286,7 +286,8 @@ def execute_trade(req: ExecuteRequest):
             from alpaca.trading.requests import MarketOrderRequest
             from alpaca.trading.enums import OrderSide, TimeInForce
 
-            client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=True)
+            is_paper = "paper" in cfg.alpaca_base_url.lower()
+            client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
             acct   = client.get_account()
             equity = float(acct.equity)
 
@@ -306,7 +307,7 @@ def execute_trade(req: ExecuteRequest):
                 "symbol":    req.symbol.upper(),
                 "action":    req.action,
                 "notional":  notional,
-                "exchange":  "alpaca_paper",
+                "exchange":  "alpaca_paper" if is_paper else "alpaca_live",
                 "stop_pct":  sl_pct,
                 "target_pct": tp_pct,
             }
@@ -402,6 +403,7 @@ def get_portfolio():
         "timestamp":             state.timestamp.isoformat(),
         "equity":                state.equity,
         "cash":                  state.cash,
+        "buying_power":          state.buying_power,
         "daily_pnl":             state.daily_pnl,
         "daily_pnl_pct":         state.daily_pnl_pct,
         "crypto_allocation_pct": state.crypto_allocation_pct,
