@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Brain, FlaskConical, Loader2, Send } from "lucide-react";
+import { Brain, FlaskConical, Loader2, Send, CheckCircle2 } from "lucide-react";
 import clsx from "clsx";
 import { SignalCard } from "../components/SignalCard";
 import type { Signal } from "../lib/types";
 import { mockSignals } from "../lib/mock";
+import { useHITLContext } from "../context/HITLContext";
 
 /** Build a plausible mock signal for any symbol when the backend is offline. */
 function mockSignalFor(sym: string, cls: "stock" | "crypto"): Signal {
@@ -34,12 +35,15 @@ export function BrainPage({ paperMode = true }: BrainPageProps) {
   const [result, setResult] = useState<Signal | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [usedMock, setUsedMock] = useState(false);
+  const [execStatus, setExecStatus] = useState<string | null>(null);
+  const hitl = useHITLContext();
 
   async function handleRun() {
     setLoading(true);
     setError(null);
     setResult(null);
     setUsedMock(false);
+    setExecStatus(null);
     try {
       const resp = await fetch("/api/signal", {
         method: "POST",
@@ -49,8 +53,6 @@ export function BrainPage({ paperMode = true }: BrainPageProps) {
       if (!resp.ok) {
         const data = await safeJson(resp) as { detail?: string };
         const msg = data?.detail ?? `HTTP ${resp.status}`;
-        // Show the real error message but still render a mock card so the
-        // UI doesn't go blank — user can see what went wrong above the card.
         setError(msg);
         setUsedMock(true);
         setResult(mockSignalFor(symbol, assetClass));
@@ -58,8 +60,26 @@ export function BrainPage({ paperMode = true }: BrainPageProps) {
       }
       const data = await safeJson(resp) as Signal;
       setResult(data);
+
+      // ── Wire into HITL: act on the signal based on current mode ──────────
+      if (data.action !== "HOLD") {
+        const disposition = hitl.receiveSignal(data);
+        if (disposition === "auto_execute") {
+          setExecStatus("auto_executing");
+          const execResult = await hitl.executeSignal(data);
+          if (execResult) {
+            setExecStatus(
+              `Auto-executed: Order ${execResult.order_id} · ${execResult.status} on ${execResult.exchange}`
+            );
+          } else {
+            setExecStatus(`Auto-execute failed: ${hitl.executeError ?? "unknown error"}`);
+          }
+        } else if (disposition === "veto_window") {
+          setExecStatus("Queued for approval — review the confirmation banner.");
+        }
+        // "queue_manual" → execute button on the card handles it
+      }
     } catch (err) {
-      // Network error or JSON parse failure — show message + mock card
       setError((err as Error).message ?? "Network error — backend not reachable");
       setUsedMock(true);
       setResult(mockSignalFor(symbol, assetClass));
@@ -150,6 +170,26 @@ export function BrainPage({ paperMode = true }: BrainPageProps) {
           <div className="rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm px-4 py-3 font-mono space-y-1">
             <div className="font-semibold">Backend error</div>
             <div>{error}</div>
+          </div>
+        )}
+
+        {execStatus && execStatus !== "auto_executing" && (
+          <div className={clsx(
+            "rounded-xl px-4 py-3 text-sm font-mono flex items-center gap-2",
+            execStatus.startsWith("Auto-executed")
+              ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400"
+              : execStatus.startsWith("Queued")
+              ? "bg-amber-500/10 border border-amber-500/20 text-amber-400"
+              : "bg-red-500/10 border border-red-500/20 text-red-400",
+          )}>
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            {execStatus}
+          </div>
+        )}
+        {execStatus === "auto_executing" && (
+          <div className="rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-400 text-sm px-4 py-3 font-mono flex items-center gap-2">
+            <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+            Sending order to Alpaca…
           </div>
         )}
       </div>

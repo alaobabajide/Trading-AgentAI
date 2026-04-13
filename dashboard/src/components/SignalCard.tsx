@@ -102,51 +102,53 @@ function StrategyFitBadge({ signal }: { signal: Signal }) {
   );
 }
 
-// ── Execute button (manual / assisted modes only) ─────────────────────────────
+// ── Execute button — all modes, any non-HOLD signal ──────────────────────────
 
-function ExecuteButton({ signal }: { signal: Signal }) {
+function ExecuteButton({ signal, compact = false }: { signal: Signal; compact?: boolean }) {
   const { profile, receiveSignal, executeSignal, executing } = useHITLContext();
-  const [result, setResult]   = useState<string | null>(null);
-  const [error,  setError]    = useState<string | null>(null);
+  const [result, setResult] = useState<string | null>(null);
+  const [error,  setError]  = useState<string | null>(null);
   const mode = profile.mode;
 
-  if (mode === "auto" || signal.action === "HOLD") return null;
+  if (signal.action === "HOLD") return null;
 
-  const isManual   = mode === "manual";
-  const label      = isManual ? `Execute ${signal.action}` : `Queue ${signal.action}`;
+  const isAssisted = mode === "assisted";
+  const label      = isAssisted ? `Queue ${signal.action}` : `Execute ${signal.action}`;
   const colorClass = signal.action === "BUY"
     ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 border-emerald-500/30"
     : "bg-red-500/20 text-red-300 hover:bg-red-500/30 border-red-500/30";
 
-  const handleClick = async () => {
+  const handleClick = async (e: React.MouseEvent) => {
+    e.stopPropagation(); // don't toggle card expand
     setResult(null);
     setError(null);
-    if (isManual) {
-      const res = await executeSignal(signal);
-      if (res) setResult(`Order ${res.order_id} · ${res.status} on ${res.exchange}`);
-      else     setError("Execution failed — check Brain console");
-    } else {
-      // Assisted mode: queue into veto window
+    if (isAssisted) {
       receiveSignal(signal);
-      setResult("Queued — approve or veto in the banner");
+      setResult("Queued for approval — check the banner above");
+      return;
     }
+    // Manual or Auto (manual override): fire directly to Alpaca
+    const res = await executeSignal(signal);
+    if (res) setResult(`Order ${res.order_id} · ${res.status} · ${res.exchange}`);
+    else     setError("Execution failed — check credentials in Settings");
   };
 
   return (
-    <div className="space-y-2">
+    <div className={clsx("space-y-1.5", !compact && "mt-1")}>
       <button
         onClick={handleClick}
         disabled={executing}
         className={clsx(
-          "w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-semibold transition-colors",
+          "flex items-center justify-center gap-2 rounded-xl border font-semibold transition-colors",
+          compact ? "px-3 py-1.5 text-xs" : "w-full py-2.5 text-sm",
           colorClass,
           executing && "opacity-50 cursor-not-allowed",
         )}
       >
         {executing
-          ? <Loader2 className="w-4 h-4 animate-spin" />
-          : <Zap className="w-4 h-4" />}
-        {executing ? "Sending order…" : label}
+          ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          : <Zap className="w-3.5 h-3.5" />}
+        {executing ? "Sending…" : label}
       </button>
       {result && (
         <p className="text-[11px] text-emerald-400 font-mono text-center">{result}</p>
@@ -217,6 +219,10 @@ export function SignalCard({ signal }: { signal: Signal }) {
 
           <div className="flex items-center gap-3 shrink-0">
             <SignalBadge action={signal.action} />
+            {/* Compact execute button — always visible, no expand needed */}
+            {signal.action !== "HOLD" && (
+              <ExecuteButton signal={signal} compact />
+            )}
             {expanded
               ? <ChevronUp   className="w-4 h-4 text-slate-500" />
               : <ChevronDown className="w-4 h-4 text-slate-500" />}

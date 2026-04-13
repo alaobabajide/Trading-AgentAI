@@ -116,14 +116,17 @@ export function useHITL(): HITLState & HITLActions {
     const { mode, warmVetoSeconds } = profile;
     const tier: SignalTier = signal.tier ?? "COLD";
 
-    if (mode === "auto" && tier === "HOT") {
+    if (mode === "auto") {
+      // Auto mode: execute all non-HOLD signals immediately regardless of tier
       return "auto_execute";
     }
-    if (mode === "assisted" && (tier === "HOT" || tier === "WARM")) {
-      startVeto(signal, tier === "HOT" ? 5 : warmVetoSeconds);
+    if (mode === "assisted") {
+      // Assisted: all non-HOLD signals go through the veto window
+      const vetoSecs = tier === "HOT" ? 5 : warmVetoSeconds;
+      startVeto(signal, vetoSecs);
       return "veto_window";
     }
-    // manual mode, or cold signal — always queue
+    // Manual mode: surface the signal for the user to decide
     setPending(signal);
     return "queue_manual";
   }, [profile, startVeto]);
