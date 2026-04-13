@@ -121,6 +121,23 @@ def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
 
 
+@app.get("/config-status")
+def config_status():
+    """Returns which API keys are configured (true/false only — never exposes values)."""
+    from config import get_settings
+    cfg = get_settings()
+    return {
+        "anthropic":       bool(cfg.anthropic_api_key),
+        "alpaca":          bool(cfg.alpaca_api_key and cfg.alpaca_secret_key),
+        "binance":         bool(cfg.binance_api_key and cfg.binance_secret_key),
+        "telegram":        bool(cfg.telegram_bot_token),
+        "alpaca_base_url": cfg.alpaca_base_url,
+        "binance_testnet": cfg.binance_testnet,
+        "ready_for_signals":  bool(cfg.anthropic_api_key),
+        "ready_for_trading":  bool(cfg.anthropic_api_key and cfg.alpaca_api_key),
+    }
+
+
 @app.post("/signal", response_model=SignalResponse)
 def generate_signal(req: SignalRequest):
     from config import get_settings

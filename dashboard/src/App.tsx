@@ -11,6 +11,7 @@ import { FundamentalPage } from "./pages/FundamentalPage";
 import { ChartsPage } from "./pages/ChartsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { HITLProvider, useHITLContext } from "./context/HITLContext";
+import { SetupBanner } from "./components/SetupBanner";
 import { MODE_CONFIG } from "./lib/hitl";
 
 type Page = "dashboard" | "signals" | "positions" | "technical" | "fundamental" | "charts" | "brain" | "settings";
@@ -86,6 +87,9 @@ function AppInner() {
             </div>
           </div>
         </div>
+
+        {/* Setup banner — only visible when Brain API is online but keys are missing */}
+        <SetupBanner />
 
         <div className={page === "charts" ? "flex-1 min-h-0 flex flex-col" : "p-8"}>
           {page === "dashboard"   && <Dashboard />}

@@ -161,7 +161,7 @@ export function SettingsPage() {
           ))}
         </div>
         <div className="text-[11px] text-slate-500 font-mono bg-surface-700 rounded-xl px-3 py-2">
-          Signal tier logic: HOT ≥ 0.85 confidence + low vol · WARM 0.70–0.85 · COLD &lt; 0.70 or high vol
+          Signal tier logic: HOT = 6–7 analysts aligned + trending regime · WARM = 4–5 aligned · COLD = ≤3 aligned or high volatility
         </div>
       </Section>
 
@@ -238,7 +238,7 @@ export function SettingsPage() {
             ["Circuit breaker",      "10% daily drawdown halt"],
             ["Crypto cap",           "30% of portfolio NAV"],
             ["Max position (hard)",  "5% NAV per signal"],
-            ["Confidence gate",      "≥ 0.70 to execute"],
+            ["Vote gate",             "≥ 4/7 analysts to execute"],
             ["Regime weight purge",  "Auto when ATR shifts >20%"],
           ].map(([k, v]) => (
             <div key={k} className="flex justify-between py-1.5 border-b border-white/[0.04] last:border-0">

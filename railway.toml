@@ -3,7 +3,9 @@ builder = "dockerfile"
 dockerfilePath = "Dockerfile"
 
 [deploy]
+# Check nginx root (always up) — brain API health is shown inside the dashboard
 healthcheckPath = "/"
-healthcheckTimeout = 60
+healthcheckTimeout = 120
+startCommand = "/start.sh"
 restartPolicyType = "on_failure"
-restartPolicyMaxRetries = 3
+restartPolicyMaxRetries = 5

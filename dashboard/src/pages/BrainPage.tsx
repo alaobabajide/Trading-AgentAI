@@ -43,13 +43,19 @@ export function BrainPage() {
         body: JSON.stringify({ symbol: symbol.toUpperCase(), asset_class: assetClass }),
       });
       if (!resp.ok) {
-        const err = await safeJson(resp) as { detail?: string };
-        throw new Error(err?.detail ?? `HTTP ${resp.status}`);
+        const data = await safeJson(resp) as { detail?: string };
+        const msg = data?.detail ?? `HTTP ${resp.status}`;
+        // Show the real error message but still render a mock card so the
+        // UI doesn't go blank — user can see what went wrong above the card.
+        setError(msg);
+        setUsedMock(true);
+        setResult(mockSignalFor(symbol, assetClass));
+        return;
       }
       const data = await safeJson(resp) as Signal;
       setResult(data);
     } catch {
-      // Backend not running — fall back to mock data
+      // Network error — backend not reachable at all
       setUsedMock(true);
       setResult(mockSignalFor(symbol, assetClass));
     } finally {
@@ -114,8 +120,9 @@ export function BrainPage() {
         )}
 
         {error && (
-          <div className="rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm px-4 py-3 font-mono">
-            {error}
+          <div className="rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm px-4 py-3 font-mono space-y-1">
+            <div className="font-semibold">Backend error</div>
+            <div>{error}</div>
           </div>
         )}
       </div>
