@@ -28,12 +28,21 @@ class BaseAnalyst:
     def analyse(self, context: dict[str, Any]) -> str:
         """Send context → Claude → return plain-text opinion."""
         user_msg = json.dumps(context, indent=2, default=str)
-        response = self._client.messages.create(
-            model=self.model,
-            max_tokens=512,
-            system=self.system_prompt,
-            messages=[{"role": "user", "content": user_msg}],
-        )
+        try:
+            response = self._client.messages.create(
+                model=self.model,
+                max_tokens=512,
+                system=self.system_prompt,
+                messages=[{"role": "user", "content": user_msg}],
+            )
+        except Exception as exc:
+            msg = str(exc)
+            if "credit balance is too low" in msg or "insufficient_quota" in msg:
+                raise RuntimeError(
+                    "BILLING: Anthropic API credit balance is too low. "
+                    "Add credits at console.anthropic.com/billing"
+                ) from exc
+            raise
         text = response.content[0].text.strip()
         log.debug("[%s] opinion: %s", self.role, text[:120])
         return text
