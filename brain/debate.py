@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Literal
 
 import anthropic
@@ -270,57 +271,75 @@ class DebateOrchestrator:
         atr_pct = indicators.get("atr_14", 0.0) / price
         _regime_tracker.record_atr(atr_pct)
 
-        # ── Strategic layer (cache-backed: macro + regime) ────────────────────
+        # ── Round 1: all 7 analysts in parallel ──────────────────────────────
+        # Regime is deterministic (no LLM call) so it completes instantly.
+        # Macro is cache-backed; on a cache hit it also returns instantly.
         cache_key = f"{symbol}:strategic"
-        cached = _cache.get(cache_key)
-        if cached:
-            macro_view, regime_view = cached
-            log.debug("Strategic layer served from cache for %s", symbol)
-        else:
-            macro_view  = self._macro.analyse({
-                "symbol": symbol, "asset_class": asset_class,
-                "bars_last_60": bars_dicts, "indicators": indicators,
-                "portfolio_equity": portfolio.equity,
-                "daily_pnl_pct": portfolio.daily_pnl_pct,
-            })
-            regime_view = self._regime.analyse({   # deterministic — fast
-                "symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators,
-            })
-            _cache.set(cache_key, (macro_view, regime_view))
+        cached_strategic = _cache.get(cache_key)
 
-        # ── Tactical layer (always fresh) ─────────────────────────────────────
-        fundamental_view  = self._fundamental.analyse({
+        regime_ctx = {"symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators}
+        macro_ctx  = {
             "symbol": symbol, "asset_class": asset_class,
-            "bars_last_60": bars_dicts,
-            "onchain": onchain.__dict__ if onchain else {},
+            "bars_last_60": bars_dicts, "indicators": indicators,
             "portfolio_equity": portfolio.equity,
-        })
-        technical_view    = self._technical.analyse({
-            "symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators,
-        })
-        sentiment_view    = self._sentiment_agent.analyse({
-            "symbol": symbol,
-            "news_items": [
-                {"source": n.source, "headline": n.headline, "published": n.published.isoformat()}
-                for n in sentiment.items[:30]
-            ],
-        })
-        quant_view        = self._quant.analyse({
-            "symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators,
-        })
-        options_flow_view = self._options_flow.analyse({
-            "symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators,
-        })
-
-        analyst_views = {
-            "fundamental":  fundamental_view,
-            "technical":    technical_view,
-            "sentiment":    sentiment_view,
-            "macro":        macro_view,
-            "quant":        quant_view,
-            "options_flow": options_flow_view,
-            "regime":       regime_view,
+            "daily_pnl_pct": portfolio.daily_pnl_pct,
         }
+        tactical_tasks = {
+            "fundamental": (self._fundamental.analyse, {
+                "symbol": symbol, "asset_class": asset_class,
+                "bars_last_60": bars_dicts,
+                "onchain": onchain.__dict__ if onchain else {},
+                "portfolio_equity": portfolio.equity,
+            }),
+            "technical": (self._technical.analyse, {
+                "symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators,
+            }),
+            "sentiment": (self._sentiment_agent.analyse, {
+                "symbol": symbol,
+                "news_items": [
+                    {"source": n.source, "headline": n.headline, "published": n.published.isoformat()}
+                    for n in sentiment.items[:30]
+                ],
+            }),
+            "quant": (self._quant.analyse, {
+                "symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators,
+            }),
+            "options_flow": (self._options_flow.analyse, {
+                "symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators,
+            }),
+        }
+
+        analyst_views: dict[str, str] = {}
+
+        with ThreadPoolExecutor(max_workers=7) as pool:
+            futures: dict[Any, str] = {}
+
+            # Regime always runs (deterministic, microseconds)
+            futures[pool.submit(self._regime.analyse, regime_ctx)] = "regime"
+
+            # Macro: use cache if available, otherwise run in parallel
+            if cached_strategic:
+                macro_view, regime_view_cached = cached_strategic
+                analyst_views["macro"] = macro_view
+                log.debug("Macro served from cache for %s", symbol)
+            else:
+                futures[pool.submit(self._macro.analyse, macro_ctx)] = "macro"
+
+            # All 5 tactical agents in parallel
+            for role, (fn, ctx) in tactical_tasks.items():
+                futures[pool.submit(fn, ctx)] = role
+
+            for fut in as_completed(futures):
+                role = futures[fut]
+                try:
+                    analyst_views[role] = fut.result()
+                except Exception as exc:
+                    log.error("Agent %s failed: %s", role, exc)
+                    analyst_views[role] = f"DIRECTION: NEUTRAL\nREASONING: Agent error — {exc}"
+
+        # Persist macro+regime to strategic cache if freshly computed
+        if "macro" in analyst_views:
+            _cache.set(cache_key, (analyst_views["macro"], analyst_views.get("regime", "")))
 
         for role, view in analyst_views.items():
             log.info("%s: %s", role.title(), view[:80])
@@ -328,6 +347,7 @@ class DebateOrchestrator:
         # ── Vote counting — determines action (replaces LLM confidence gate) ──
         vote_tally       = _count_votes(analyst_views)
         action           = _action_from_votes(vote_tally, threshold=4)
+        regime_view      = analyst_views.get("regime", "")
         regime_label     = _parse_regime_label(regime_view)
         votes_for_action = vote_tally["bullish"] if action == "BUY" else vote_tally["bearish"] if action == "SELL" else 0
 
@@ -336,7 +356,7 @@ class DebateOrchestrator:
             vote_tally, action, regime_label,
         )
 
-        # ── Risk Manager — sizing, rationale, DA case (NOT used for action) ───
+        # ── Round 2: Risk Manager + Strategy Coach in parallel ────────────────
         risk_ctx = {
             "symbol": symbol, "asset_class": asset_class,
             "action_from_votes": action,
@@ -353,7 +373,22 @@ class DebateOrchestrator:
                 "circuit_breaker_drawdown": self._cb_drawdown,
             },
         }
-        risk_raw = self._risk.analyse(risk_ctx)
+        strategy_ctx = {
+            "market_analysis": {
+                "symbol": symbol, "action": action,
+                "vote_tally": vote_tally, "analyst_opinions": analyst_views,
+            },
+            "trader_profile": profile,
+            "portfolio": {
+                "equity": portfolio.equity, "daily_pnl_pct": portfolio.daily_pnl_pct,
+            },
+        }
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            risk_future     = pool.submit(self._risk.analyse, risk_ctx)
+            strategy_future = pool.submit(self._strategy.analyse, strategy_ctx)
+            risk_raw      = risk_future.result()
+            strategy_view = strategy_future.result()
 
         try:
             parsed = json.loads(risk_raw)
@@ -364,18 +399,6 @@ class DebateOrchestrator:
                 "devil_advocate_score": 0, "devil_advocate_case": "",
             }
 
-        # ── Strategy Coach ────────────────────────────────────────────────────
-        strategy_view = self._strategy.analyse({
-            "market_analysis": {
-                "symbol": symbol, "action": action,
-                "vote_tally": vote_tally,
-                "rationale": parsed.get("rationale", ""),
-            },
-            "trader_profile": profile,
-            "portfolio": {
-                "equity": portfolio.equity, "daily_pnl_pct": portfolio.daily_pnl_pct,
-            },
-        })
         strategy_fit = _parse_strategy_fit(strategy_view)
 
         # ── Tier — deterministic from votes + regime ──────────────────────────

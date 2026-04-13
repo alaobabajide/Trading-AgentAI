@@ -54,8 +54,9 @@ export function BrainPage() {
       }
       const data = await safeJson(resp) as Signal;
       setResult(data);
-    } catch {
-      // Network error — backend not reachable at all
+    } catch (err) {
+      // Network error or JSON parse failure — show message + mock card
+      setError((err as Error).message ?? "Network error — backend not reachable");
       setUsedMock(true);
       setResult(mockSignalFor(symbol, assetClass));
     } finally {

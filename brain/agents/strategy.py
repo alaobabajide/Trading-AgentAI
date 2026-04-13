@@ -32,5 +32,6 @@ COACHING: <2-3 honest sentences — cite the specific tension between market sig
 
 
 class StrategyCoach(BaseAnalyst):
-    role = "strategy"
+    role          = "strategy"
     system_prompt = _SYSTEM
+    model         = "claude-sonnet-4-6"   # synthesis — needs stronger reasoning

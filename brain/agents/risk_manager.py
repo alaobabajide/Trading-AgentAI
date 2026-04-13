@@ -48,5 +48,6 @@ Rules:
 
 
 class RiskManager(BaseAnalyst):
-    role = "risk_manager"
+    role          = "risk_manager"
     system_prompt = _SYSTEM
+    model         = "claude-sonnet-4-6"   # synthesis — needs stronger reasoning
