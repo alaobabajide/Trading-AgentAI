@@ -128,7 +128,7 @@ export function BrainPage() {
         )}
       </div>
 
-      {usedMock && (
+      {usedMock && !error && (
         <div className="flex items-center gap-2 text-xs text-amber-400/80 font-mono bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5">
           <FlaskConical className="w-3.5 h-3.5 shrink-0" />
           Brain API offline — showing simulated signal. Start the backend to run live analysis.
