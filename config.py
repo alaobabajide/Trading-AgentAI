@@ -12,8 +12,8 @@ load_dotenv()
 
 
 class Settings(BaseSettings):
-    # Anthropic
-    anthropic_api_key: str = Field(..., env="ANTHROPIC_API_KEY")
+    # Anthropic — optional at startup; validated when /signal is actually called
+    anthropic_api_key: str = Field("", env="ANTHROPIC_API_KEY")
 
     # Alpaca
     alpaca_api_key: str = Field("", env="ALPACA_API_KEY")

@@ -67,7 +67,10 @@ class PortfolioFetcher:
         """Returns (positions, equity, cash, daily_pnl)."""
         from alpaca.trading.client import TradingClient
 
-        client = TradingClient(self._alpaca_key, self._alpaca_secret, paper=True)
+        # Derive paper mode from the configured base URL so both paper and
+        # live credentials work without code changes.
+        is_paper = "paper" in self._alpaca_url.lower()
+        client = TradingClient(self._alpaca_key, self._alpaca_secret, paper=is_paper)
         acct = client.get_account()
         equity = float(acct.equity)
         cash = float(acct.cash)

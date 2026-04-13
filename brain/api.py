@@ -125,6 +125,11 @@ def health():
 def generate_signal(req: SignalRequest):
     from config import get_settings
     cfg = get_settings()
+    if not cfg.anthropic_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="ANTHROPIC_API_KEY is not configured. Set it in Railway environment variables.",
+        )
     alpaca, binance, sentiment_fetcher, onchain_fetcher, portfolio_fetcher, orchestrator = (
         _build_services(cfg)
     )
@@ -311,36 +316,59 @@ def execute_trade(req: ExecuteRequest):
 
 @app.get("/portfolio")
 def get_portfolio():
-    """Return current portfolio state (positions, equity, P&L)."""
+    """Return current portfolio state (positions, equity, P&L).
+
+    Returns a zeroed default if no exchange credentials are configured so the
+    dashboard always renders rather than showing a 500 error.
+    """
     from config import get_settings
-    from data.portfolio import PortfolioFetcher
+    from data.portfolio import PortfolioFetcher, PortfolioState
+    from datetime import timezone
+
     cfg = get_settings()
-    portfolio_fetcher = PortfolioFetcher(
-        cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,
-        cfg.binance_api_key, cfg.binance_secret_key, cfg.binance_testnet,
-    )
-    try:
-        state = portfolio_fetcher.snapshot()
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Portfolio fetch failed: {exc}")
+
+    # If no Alpaca credentials are set at all, return a safe empty state
+    # rather than attempting a call that will fail.
+    if not cfg.alpaca_api_key:
+        log.warning("/portfolio called with no ALPACA_API_KEY configured — returning empty state")
+        state = PortfolioState(
+            timestamp=datetime.now(timezone.utc),
+            equity=0.0,
+            cash=0.0,
+        )
+    else:
+        portfolio_fetcher = PortfolioFetcher(
+            cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,
+            cfg.binance_api_key, cfg.binance_secret_key, cfg.binance_testnet,
+        )
+        try:
+            state = portfolio_fetcher.snapshot()
+        except Exception as exc:
+            log.error("Portfolio fetch failed: %s", exc, exc_info=True)
+            # Return empty state so the dashboard degrades gracefully
+            state = PortfolioState(
+                timestamp=datetime.now(timezone.utc),
+                equity=0.0,
+                cash=0.0,
+            )
 
     return {
-        "timestamp":           state.timestamp.isoformat(),
-        "equity":              state.equity,
-        "cash":                state.cash,
-        "daily_pnl":           state.daily_pnl,
-        "daily_pnl_pct":       state.daily_pnl_pct,
+        "timestamp":             state.timestamp.isoformat(),
+        "equity":                state.equity,
+        "cash":                  state.cash,
+        "daily_pnl":             state.daily_pnl,
+        "daily_pnl_pct":         state.daily_pnl_pct,
         "crypto_allocation_pct": state.crypto_allocation_pct,
         "positions": [
             {
-                "symbol":              p.symbol,
-                "asset_class":         p.asset_class,
-                "qty":                 p.qty,
-                "avg_entry_price":     p.avg_entry_price,
-                "current_price":       p.current_price,
-                "market_value":        p.market_value,
-                "unrealized_pnl":      p.unrealized_pnl,
-                "unrealized_pnl_pct":  p.unrealized_pnl_pct,
+                "symbol":             p.symbol,
+                "asset_class":        p.asset_class,
+                "qty":                p.qty,
+                "avg_entry_price":    p.avg_entry_price,
+                "current_price":      p.current_price,
+                "market_value":       p.market_value,
+                "unrealized_pnl":     p.unrealized_pnl,
+                "unrealized_pnl_pct": p.unrealized_pnl_pct,
             }
             for p in state.positions
         ],
