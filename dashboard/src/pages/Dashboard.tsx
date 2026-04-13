@@ -26,8 +26,7 @@ export function Dashboard() {
   const { signals, apiState: sigState } = useSignals();
   const isLive = apiState === "live";
 
-  const pnlUp   = p.daily_pnl >= 0;
-  const cashPct = p.cash / p.equity;
+  const pnlUp = p.daily_pnl >= 0;
 
   return (
     <div className="space-y-6">
