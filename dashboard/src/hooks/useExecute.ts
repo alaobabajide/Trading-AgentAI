@@ -7,6 +7,7 @@ export interface ExecuteParams {
   suggested_position_pct: number;
   stop_loss_pct: number;
   take_profit_pct: number;
+  qty?: number;  // if > 0, use fixed share count instead of notional sizing
 }
 
 export interface ExecuteResult {

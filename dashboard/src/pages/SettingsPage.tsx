@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { Brain, Shield, Timer, TrendingUp } from "lucide-react";
+import { Brain, Package, Shield, Timer, TrendingUp } from "lucide-react";
 import {
   HITLMode, UserProfile, DEFAULT_PROFILE,
   MODE_CONFIG, loadProfile, saveProfile,
@@ -209,6 +209,115 @@ export function SettingsPage() {
             options={[3, 5, 10, 15]}
             onChange={(v) => update({ maxPositionPct: v })}
           />
+        </div>
+      </Section>
+
+      {/* Order Quantity */}
+      <Section icon={<Package className="w-4 h-4" />} title="Order Quantity">
+        <div className="text-[11px] text-slate-500 font-mono bg-surface-700 rounded-xl px-3 py-2">
+          Sets the default share/unit count sent to Alpaca. Used in Assisted and Auto modes.
+          Manual mode respects this too unless you override on the signal card.
+        </div>
+
+        {/* Sizing mode toggle */}
+        <div className="space-y-2">
+          <span className="text-xs text-slate-400">Sizing method</span>
+          <div className="grid grid-cols-2 gap-2">
+            {([
+              { v: false, label: "Position-based",  sub: "Equity × position % (recommended)" },
+              { v: true,  label: "Fixed quantity",   sub: "Exact share / unit count" },
+            ] as const).map(({ v, label, sub }) => (
+              <button
+                key={String(v)}
+                onClick={() => update({ useFixedQty: v })}
+                className={clsx(
+                  "text-left px-4 py-3 rounded-xl border transition-all",
+                  profile.useFixedQty === v
+                    ? "border-brand-500/40 bg-brand-500/10"
+                    : "border-white/5 hover:border-white/10 hover:bg-white/[0.02]",
+                )}
+              >
+                <div className={clsx("text-sm font-medium", profile.useFixedQty === v ? "text-brand-300" : "text-slate-300")}>
+                  {label}
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">{sub}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Fixed qty input */}
+        {profile.useFixedQty && (
+          <div className="space-y-2">
+            <div className="flex justify-between text-xs">
+              <span className="text-slate-400">Default quantity (shares / units)</span>
+              <span className="font-mono font-semibold text-slate-200">{profile.defaultQty} shares</span>
+            </div>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={profile.defaultQty}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                if (!isNaN(v) && v > 0) update({ defaultQty: v });
+              }}
+              className="w-full bg-surface-700 border border-white/10 rounded-xl px-4 py-2.5 text-sm font-mono text-slate-200 outline-none focus:ring-1 focus:ring-brand-500"
+              placeholder="e.g. 10"
+            />
+            <p className="text-[11px] text-slate-500 font-mono">
+              This many shares will be submitted to Alpaca for every BUY / SELL order.
+              For crypto, enter fractional units (e.g. 0.01 BTC).
+            </p>
+          </div>
+        )}
+
+        {/* Stop loss / take profit defaults */}
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <div className="flex justify-between text-xs">
+              <span className="text-slate-400">Default stop loss</span>
+              <span className="font-mono font-semibold text-red-400">{profile.defaultStopLossPct}%</span>
+            </div>
+            <div className="flex gap-2">
+              {[1, 2, 3, 5].map((o) => (
+                <button
+                  key={o}
+                  onClick={() => update({ defaultStopLossPct: o })}
+                  className={clsx(
+                    "flex-1 py-1.5 rounded-lg text-xs font-mono font-medium transition-all border",
+                    profile.defaultStopLossPct === o
+                      ? "bg-red-500/20 border-red-500/40 text-red-300"
+                      : "border-white/5 text-slate-500 hover:text-slate-300",
+                  )}
+                >
+                  {o}%
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="flex justify-between text-xs">
+              <span className="text-slate-400">Default take profit</span>
+              <span className="font-mono font-semibold text-emerald-400">{profile.defaultTakeProfitPct}%</span>
+            </div>
+            <div className="flex gap-2">
+              {[3, 5, 10, 15].map((o) => (
+                <button
+                  key={o}
+                  onClick={() => update({ defaultTakeProfitPct: o })}
+                  className={clsx(
+                    "flex-1 py-1.5 rounded-lg text-xs font-mono font-medium transition-all border",
+                    profile.defaultTakeProfitPct === o
+                      ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-300"
+                      : "border-white/5 text-slate-500 hover:text-slate-300",
+                  )}
+                >
+                  {o}%
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </Section>
 

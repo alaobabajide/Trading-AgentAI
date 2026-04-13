@@ -263,6 +263,7 @@ class ExecuteRequest(BaseModel):
     suggested_position_pct: float = Field(0.05, ge=0.001, le=0.20)
     stop_loss_pct: float = Field(0.02, ge=0.005, le=0.20)
     take_profit_pct: float = Field(0.05, ge=0.01, le=0.50)
+    qty: float = Field(0.0, ge=0.0, description="Fixed share/unit count. 0 = use notional (equity × position_pct)")
 
 
 @app.post("/execute")
@@ -291,30 +292,51 @@ def execute_trade(req: ExecuteRequest):
             from alpaca.trading.enums import OrderSide, TimeInForce
 
             is_paper = "paper" in cfg.alpaca_base_url.lower()
-            client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
-            acct   = client.get_account()
-            equity = float(acct.equity)
+            client   = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
+            side     = OrderSide.BUY if req.action == "BUY" else OrderSide.SELL
+            exchange = "alpaca_paper" if is_paper else "alpaca_live"
 
-            notional = round(equity * pos_pct, 2)
-            if notional < 1:
-                raise HTTPException(status_code=400, detail="Computed notional < $1 — check position sizing")
-
-            order = client.submit_order(MarketOrderRequest(
-                symbol=req.symbol.upper(),
-                notional=notional,
-                side=OrderSide.BUY if req.action == "BUY" else OrderSide.SELL,
-                time_in_force=TimeInForce.DAY,
-            ))
-            return {
-                "order_id":  str(order.id),
-                "status":    str(order.status),
-                "symbol":    req.symbol.upper(),
-                "action":    req.action,
-                "notional":  notional,
-                "exchange":  "alpaca_paper" if is_paper else "alpaca_live",
-                "stop_pct":  sl_pct,
-                "target_pct": tp_pct,
-            }
+            if req.qty > 0:
+                # Fixed share-count order
+                order = client.submit_order(MarketOrderRequest(
+                    symbol=req.symbol.upper(),
+                    qty=req.qty,
+                    side=side,
+                    time_in_force=TimeInForce.DAY,
+                ))
+                return {
+                    "order_id":   str(order.id),
+                    "status":     str(order.status),
+                    "symbol":     req.symbol.upper(),
+                    "action":     req.action,
+                    "qty":        req.qty,
+                    "exchange":   exchange,
+                    "stop_pct":   sl_pct,
+                    "target_pct": tp_pct,
+                }
+            else:
+                # Notional (equity × position %) order
+                acct     = client.get_account()
+                equity   = float(acct.equity)
+                notional = round(equity * pos_pct, 2)
+                if notional < 1:
+                    raise HTTPException(status_code=400, detail="Computed notional < $1 — check position sizing")
+                order = client.submit_order(MarketOrderRequest(
+                    symbol=req.symbol.upper(),
+                    notional=notional,
+                    side=side,
+                    time_in_force=TimeInForce.DAY,
+                ))
+                return {
+                    "order_id":   str(order.id),
+                    "status":     str(order.status),
+                    "symbol":     req.symbol.upper(),
+                    "action":     req.action,
+                    "notional":   notional,
+                    "exchange":   exchange,
+                    "stop_pct":   sl_pct,
+                    "target_pct": tp_pct,
+                }
 
         else:  # crypto — Binance
             from binance.client import Client as BinanceClient

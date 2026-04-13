@@ -11,6 +11,11 @@ export interface UserProfile {
   maxPositionPct:    number;  // 3 | 5 | 10 | 15
   warmVetoSeconds:   number;  // 10 | 30 | 60
   coolOffSeconds:    number;  // 15 | 30 | 60
+  // Order quantity settings
+  useFixedQty:       boolean; // true = fixed share count; false = position-% based
+  defaultQty:        number;  // shares (or units for crypto) — used when useFixedQty=true
+  defaultStopLossPct:   number; // e.g. 2 = 2%
+  defaultTakeProfitPct: number; // e.g. 5 = 5%
 }
 
 export const DEFAULT_PROFILE: UserProfile = {
@@ -20,6 +25,10 @@ export const DEFAULT_PROFILE: UserProfile = {
   maxPositionPct:  5,
   warmVetoSeconds: 10,
   coolOffSeconds:  15,
+  useFixedQty:        false,
+  defaultQty:         10,
+  defaultStopLossPct:   2,
+  defaultTakeProfitPct: 5,
 };
 
 export const TIER_CONFIG: Record<SignalTier, {

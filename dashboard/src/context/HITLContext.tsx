@@ -17,16 +17,21 @@ export function HITLProvider({ children }: { children: ReactNode }) {
   const { execute, executing, error: executeError, clearError: clearExecError } = useExecute();
 
   const executeSignal = useCallback(
-    (signal: Signal) =>
-      execute({
-        symbol:                signal.symbol,
-        asset_class:           signal.asset_class,
-        action:                signal.action,
+    (signal: Signal) => {
+      const p = hitl.profile;
+      return execute({
+        symbol:                 signal.symbol,
+        asset_class:            signal.asset_class,
+        action:                 signal.action,
         suggested_position_pct: signal.suggested_position_pct,
-        stop_loss_pct:         signal.stop_loss_pct,
-        take_profit_pct:       signal.take_profit_pct,
-      }),
-    [execute],
+        // Profile stop/take-profit overrides (stored as %, sent as fraction)
+        stop_loss_pct:   p.defaultStopLossPct   > 0 ? p.defaultStopLossPct   / 100 : signal.stop_loss_pct,
+        take_profit_pct: p.defaultTakeProfitPct > 0 ? p.defaultTakeProfitPct / 100 : signal.take_profit_pct,
+        // Fixed qty: >0 = exact share count; 0 = let backend use notional sizing
+        qty: p.useFixedQty && p.defaultQty > 0 ? p.defaultQty : 0,
+      });
+    },
+    [execute, hitl.profile],
   );
 
   return (
