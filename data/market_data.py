@@ -65,6 +65,7 @@ class AlpacaMarketData:
     def get_bars(self, symbol: str, days: int = 60) -> list[Bar]:
         from alpaca.data.requests import StockBarsRequest
         from alpaca.data.timeframe import TimeFrame
+        from alpaca.data.enums import DataFeed
 
         end = datetime.now(timezone.utc)
         start = end - timedelta(days=days)
@@ -74,6 +75,7 @@ class AlpacaMarketData:
             timeframe=TimeFrame.Day,
             start=start,
             end=end,
+            feed=DataFeed.IEX,   # free tier — avoids SIP subscription error
         )
         resp = self._client.get_stock_bars(req)
         df: pd.DataFrame = resp.df
@@ -101,8 +103,9 @@ class AlpacaMarketData:
 
     def get_latest_quote(self, symbol: str) -> Quote | None:
         from alpaca.data.requests import StockLatestQuoteRequest
+        from alpaca.data.enums import DataFeed
 
-        req = StockLatestQuoteRequest(symbol_or_symbols=symbol)
+        req = StockLatestQuoteRequest(symbol_or_symbols=symbol, feed=DataFeed.IEX)
         resp = self._client.get_stock_latest_quote(req)
         q = resp.get(symbol)
         if q is None:
