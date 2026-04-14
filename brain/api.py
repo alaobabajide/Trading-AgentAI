@@ -46,7 +46,7 @@ class SignalResponse(BaseModel):
     take_profit_pct: float
     agent_views: dict[str, str]
     passed_confidence_gate: bool
-    # Vote-based fields
+    # Vote-based fields — combined 15-agent pool
     vote_tally: dict = {}
     votes_for_action: int = 0
     regime_label: str = "UNKNOWN"
@@ -54,6 +54,11 @@ class SignalResponse(BaseModel):
     devil_advocate_score: int = 0
     devil_advocate_case: str = ""
     strategy_fit: str = "ALIGNED"
+    # Dual-panel breakdown
+    panel_a_votes: dict = {}
+    panel_b_votes: dict = {}
+    panels_conflict: bool = False
+    conflict_note: str = ""
 
 
 # ── App factory ────────────────────────────────────────────────────────────────
@@ -235,6 +240,10 @@ def generate_signal(req: SignalRequest):
         devil_advocate_score=d.get("devil_advocate_score", 0),
         devil_advocate_case=d.get("devil_advocate_case", ""),
         strategy_fit=d.get("strategy_fit", "ALIGNED"),
+        panel_a_votes=d.get("panel_a_votes", {}),
+        panel_b_votes=d.get("panel_b_votes", {}),
+        panels_conflict=d.get("panels_conflict", False),
+        conflict_note=d.get("conflict_note", ""),
     )
 
 

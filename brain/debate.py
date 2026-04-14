@@ -26,6 +26,10 @@ from brain.agents.options_flow import OptionsFlowAnalyst
 from brain.agents.regime import RegimeDetector
 from brain.agents.strategy import StrategyCoach
 from brain.agents.risk_manager import RiskManager
+from brain.agents.investors import (
+    BuffettInvestor, MungerInvestor, LynchInvestor, AckmanInvestor,
+    CohenInvestor, DalioInvestor, WoodInvestor, BogleInvestor,
+)
 
 log = logging.getLogger(__name__)
 
@@ -100,15 +104,19 @@ def _parse_regime_label(regime_view: str) -> str:
     return m.group(1).upper() if m else "UNKNOWN"
 
 
-def _count_votes(analyst_views: dict[str, str]) -> dict[str, int]:
-    """
-    Count BULLISH / BEARISH / NEUTRAL across the 7 specialist analysts.
-    Excludes the strategy coach and risk manager (they don't cast direction votes).
-    """
-    VOTERS = {"fundamental", "technical", "sentiment", "macro", "quant", "options_flow", "regime"}
+_PANEL_A_VOTERS = frozenset(
+    {"fundamental", "technical", "sentiment", "macro", "quant", "options_flow", "regime"}
+)
+_PANEL_B_VOTERS = frozenset(
+    {"buffett", "munger", "lynch", "ackman", "cohen", "dalio", "wood", "bogle"}
+)
+
+
+def _count_votes(views: dict[str, str], voter_set: frozenset[str]) -> dict[str, int]:
+    """Count BULLISH / BEARISH / NEUTRAL votes for a given panel's voter set."""
     tally = {"bullish": 0, "bearish": 0, "neutral": 0}
-    for key, view in analyst_views.items():
-        if key not in VOTERS:
+    for key, view in views.items():
+        if key not in voter_set:
             continue
         direction = _parse_direction(view)
         if direction == "BULLISH":
@@ -120,14 +128,61 @@ def _count_votes(analyst_views: dict[str, str]) -> dict[str, int]:
     return tally
 
 
+def _dominant_direction(tally: dict[str, int]) -> str:
+    """Return the dominant direction or NEUTRAL if no clear winner."""
+    if tally["bullish"] > tally["bearish"] and tally["bullish"] > tally["neutral"]:
+        return "BULLISH"
+    if tally["bearish"] > tally["bullish"] and tally["bearish"] > tally["neutral"]:
+        return "BEARISH"
+    return "NEUTRAL"
+
+
+def _aggregate_dual_panel(
+    panel_a: dict[str, str],
+    panel_b: dict[str, str],
+) -> tuple[dict, dict, dict, bool, str]:
+    """
+    Aggregate votes from both panels.
+
+    Returns:
+        a_votes, b_votes, combined_votes, panels_conflict, conflict_note
+    """
+    a_votes = _count_votes(panel_a, _PANEL_A_VOTERS)
+    b_votes = _count_votes(panel_b, _PANEL_B_VOTERS)
+
+    combined = {
+        "bullish": a_votes["bullish"] + b_votes["bullish"],
+        "bearish": a_votes["bearish"] + b_votes["bearish"],
+        "neutral": a_votes["neutral"] + b_votes["neutral"],
+    }
+
+    a_dom = _dominant_direction(a_votes)
+    b_dom = _dominant_direction(b_votes)
+
+    # Conflict = both panels have a directional view but they disagree
+    panels_conflict = (
+        a_dom != b_dom
+        and a_dom != "NEUTRAL"
+        and b_dom != "NEUTRAL"
+    )
+    conflict_note = (
+        f"Panel conflict: analysts={a_dom}, investors={b_dom} — standing aside"
+        if panels_conflict else ""
+    )
+    return a_votes, b_votes, combined, panels_conflict, conflict_note
+
+
 def _action_from_votes(
     tally: dict[str, int],
-    threshold: int = 4,
+    panels_conflict: bool = False,
+    threshold: int = 8,
 ) -> Literal["BUY", "SELL", "HOLD"]:
     """
-    Majority-vote arbiter.  Requires threshold/7 agents to agree.
-    Default threshold = 4 (simple majority).
+    Dual-panel majority-vote arbiter.  15 total agents; default threshold = 8.
+    Panel conflict immediately forces HOLD regardless of combined count.
     """
+    if panels_conflict:
+        return "HOLD"
     if tally["bullish"] >= threshold:
         return "BUY"
     if tally["bearish"] >= threshold:
@@ -140,24 +195,25 @@ def _compute_tier(
     action: str,
     regime_label: str,
     indicators: dict[str, Any],
+    panels_conflict: bool = False,
 ) -> Literal["HOT", "WARM", "COLD"]:
     """
-    Deterministic tier from vote count + regime — no LLM confidence involved.
+    Deterministic tier from combined 15-agent vote count + regime.
 
-    HOT  = 6 or 7 analysts aligned AND regime is TRENDING (not HIGH_VOL / RANGING)
-    WARM = 4 or 5 analysts aligned AND regime allows trading
-    COLD = 3 or fewer aligned  OR  HIGH_VOLATILITY  OR  RANGING regime
+    HOT  = 11+ of 15 aligned AND no conflict AND regime is TRENDING
+    WARM = 8–10 of 15 aligned AND no conflict AND regime allows trading
+    COLD = < 8 aligned  OR  panel conflict  OR  HIGH_VOLATILITY  OR  RANGING  OR  HOLD
     """
     aligned  = tally["bullish"] if action == "BUY" else tally["bearish"] if action == "SELL" else 0
     high_vol = (
         "HIGH_VOLATILITY" in regime_label
         or (indicators.get("atr_14", 0) / max(indicators.get("price", 1), 1)) > 0.03
     )
-    blocked  = high_vol or "RANGING" in regime_label or action == "HOLD"
+    blocked = high_vol or "RANGING" in regime_label or action == "HOLD" or panels_conflict
 
-    if blocked or aligned <= 3:
+    if blocked or aligned < 8:
         return "COLD"
-    if aligned >= 6:
+    if aligned >= 11:
         return "HOT"
     return "WARM"
 
@@ -488,6 +544,369 @@ def _paper_sentiment(indicators: dict) -> str:
     )
 
 
+# ── Paper-mode investor persona agents (Panel B) ─────────────────────────────
+
+def _paper_investor_buffett(indicators: dict) -> str:
+    """
+    LENS: Secular trend + quarterly momentum (Buffett — long-term quality).
+    Reads: ROC-60, SMA200 distance, ROC-20.
+    No short-term oscillators — purely long-horizon price structure.
+    """
+    price   = float(indicators.get("price", 1.0))
+    roc_60  = float(indicators.get("roc_60", 0.0))
+    roc_20  = float(indicators.get("roc_20", 0.0))
+    sma_200 = float(indicators.get("sma_200", price))
+
+    b, s, notes = 0, 0, []
+
+    dev_200 = (price - sma_200) / max(sma_200, 1e-9) * 100
+    if price > sma_200 * 1.05:
+        b += 1; notes.append(f"Price {dev_200:+.1f}% above SMA200 — healthy secular uptrend")
+    elif price < sma_200 * 0.95:
+        s += 1; notes.append(f"Price {dev_200:+.1f}% below SMA200 — secular downtrend")
+    else:
+        notes.append(f"Price near SMA200 ({dev_200:+.1f}%) — neutral long-term structure")
+
+    if roc_60 > 20.0:
+        b += 1; notes.append(f"ROC60={roc_60:+.1f}% — strong business momentum proxy")
+    elif roc_60 < -15.0:
+        s += 1; notes.append(f"ROC60={roc_60:+.1f}% — deteriorating fundamentals proxy")
+    else:
+        notes.append(f"ROC60={roc_60:+.1f}% — insufficient for Buffett's conviction threshold")
+
+    if roc_20 > 12.0 and b > 0:
+        b += 1; notes.append(f"ROC20={roc_20:+.1f}% confirms intermediate strength")
+    elif roc_20 < -12.0 and s > 0:
+        s += 1; notes.append(f"ROC20={roc_20:+.1f}% confirms intermediate weakness")
+    else:
+        notes.append(f"ROC20={roc_20:+.1f}% — moderate, Buffett needs stronger conviction")
+
+    direction = "BULLISH" if b >= 2 else "BEARISH" if s >= 2 else "NEUTRAL"
+    return (
+        f"DIRECTION: {direction}\n"
+        f"REASONING: Paper mode [Buffett/quality] — {'; '.join(notes)}. "
+        f"Bullish: {b}/3, bearish: {s}/3."
+    )
+
+
+def _paper_investor_munger(indicators: dict) -> str:
+    """
+    LENS: Ultra-selective long-term (Munger — inaction is preferable to bad trade).
+    Reads: ROC-60, SMA200 distance, high_proximity.
+    Stricter thresholds than Buffett — defaults to NEUTRAL.
+    """
+    price          = float(indicators.get("price", 1.0))
+    roc_60         = float(indicators.get("roc_60", 0.0))
+    sma_200        = float(indicators.get("sma_200", price))
+    high_proximity = float(indicators.get("high_proximity", 0.5))
+
+    dev_200 = (price - sma_200) / max(sma_200, 1e-9) * 100
+    notes = []
+
+    # Munger requires ALL three conditions for BULLISH — very selective
+    above_200   = price > sma_200 * 1.08
+    strong_roc  = roc_60 > 25.0
+    near_highs  = high_proximity < 0.10
+
+    if above_200 and strong_roc:
+        notes.append(f"Price {dev_200:+.1f}% above SMA200 + ROC60={roc_60:+.1f}% — Munger conviction met")
+        direction = "BULLISH"
+    elif price < sma_200 * 0.92 and roc_60 < -20.0:
+        notes.append(f"Price {dev_200:+.1f}% below SMA200 + ROC60={roc_60:+.1f}% — avoid / exit")
+        direction = "BEARISH"
+    else:
+        notes.append(
+            f"SMA200 {dev_200:+.1f}%, ROC60={roc_60:+.1f}%, "
+            f"52W proximity {high_proximity*100:.1f}% — Munger: insufficient certainty, default NEUTRAL"
+        )
+        direction = "NEUTRAL"
+
+    return (
+        f"DIRECTION: {direction}\n"
+        f"REASONING: Paper mode [Munger/ultra-selective] — {'; '.join(notes)}."
+    )
+
+
+def _paper_investor_lynch(indicators: dict) -> str:
+    """
+    LENS: GARP multi-timeframe momentum (Lynch — buy growth at reasonable price).
+    Reads: ROC-20, ROC-60, ROC-5, SMA20 distance, volume_ratio.
+    """
+    price        = float(indicators.get("price", 1.0))
+    roc_20       = float(indicators.get("roc_20", 0.0))
+    roc_60       = float(indicators.get("roc_60", 0.0))
+    roc_5        = float(indicators.get("roc_5",  0.0))
+    sma_20       = float(indicators.get("sma_20", price))
+    volume_ratio = float(indicators.get("volume_ratio", 1.0))
+
+    b, s, notes = 0, 0, []
+
+    dev_20 = (price - sma_20) / max(sma_20, 1e-9) * 100
+    if roc_20 > 10.0:
+        b += 1; notes.append(f"ROC20={roc_20:+.1f}% — earnings-cycle momentum strong")
+    elif roc_20 < -10.0:
+        s += 1; notes.append(f"ROC20={roc_20:+.1f}% — earnings-cycle deteriorating")
+    else:
+        notes.append(f"ROC20={roc_20:+.1f}% — moderate growth")
+
+    if roc_60 > 15.0 and roc_5 > 2.0:
+        b += 1; notes.append(f"ROC60={roc_60:+.1f}% + recent acceleration ROC5={roc_5:+.1f}% — story intact")
+    elif roc_60 < -10.0 and roc_5 < -2.0:
+        s += 1; notes.append(f"ROC60={roc_60:+.1f}% + recent deceleration ROC5={roc_5:+.1f}% — story broken")
+    else:
+        notes.append(f"ROC60={roc_60:+.1f}%, ROC5={roc_5:+.1f}% — mixed signals")
+
+    if price > sma_20 * 1.01 and volume_ratio > 1.2:
+        b += 1; notes.append(f"Above SMA20 ({dev_20:+.1f}%) on {volume_ratio:.1f}x volume — crowd confirming")
+    elif price < sma_20 * 0.99 and volume_ratio > 1.4:
+        s += 1; notes.append(f"Below SMA20 ({dev_20:+.1f}%) on {volume_ratio:.1f}x volume — distribution")
+    else:
+        notes.append(f"SMA20 {dev_20:+.1f}%, volume {volume_ratio:.2f}x — inconclusive")
+
+    direction = "BULLISH" if b >= 2 else "BEARISH" if s >= 2 else "NEUTRAL"
+    return (
+        f"DIRECTION: {direction}\n"
+        f"REASONING: Paper mode [Lynch/GARP] — {'; '.join(notes)}. "
+        f"Bullish: {b}/3, bearish: {s}/3."
+    )
+
+
+def _paper_investor_ackman(indicators: dict) -> str:
+    """
+    LENS: Concentrated catalyst-driven (Ackman — high conviction + unusual activity).
+    Reads: ROC-20, ROC-60, high_proximity, SMA200 distance, volume_ratio.
+    """
+    price          = float(indicators.get("price", 1.0))
+    roc_20         = float(indicators.get("roc_20", 0.0))
+    roc_60         = float(indicators.get("roc_60", 0.0))
+    high_proximity = float(indicators.get("high_proximity", 0.5))
+    sma_200        = float(indicators.get("sma_200", price))
+    volume_ratio   = float(indicators.get("volume_ratio", 1.0))
+
+    b, s, notes = 0, 0, []
+
+    dev_200 = (price - sma_200) / max(sma_200, 1e-9) * 100
+    if roc_20 > 12.0 and roc_60 > 18.0:
+        b += 1; notes.append(f"ROC20={roc_20:+.1f}%, ROC60={roc_60:+.1f}% — multi-timeframe thesis confirmed")
+    elif roc_20 < -12.0 and roc_60 < -15.0:
+        s += 1; notes.append(f"ROC20={roc_20:+.1f}%, ROC60={roc_60:+.1f}% — thesis broken across timeframes")
+    else:
+        notes.append(f"ROC20={roc_20:+.1f}%, ROC60={roc_60:+.1f}% — mixed, need more conviction")
+
+    if price > sma_200 * 1.03 and high_proximity < 0.15:
+        b += 1; notes.append(f"Above SMA200 ({dev_200:+.1f}%), near 52W high — structural strength")
+    elif price < sma_200 * 0.97:
+        s += 1; notes.append(f"Below SMA200 ({dev_200:+.1f}%) — structural damage")
+    else:
+        notes.append(f"SMA200 {dev_200:+.1f}% — neutral structural")
+
+    if volume_ratio > 1.8:
+        if b > 0:
+            b += 1; notes.append(f"Volume {volume_ratio:.1f}x — catalyst / institutional accumulation")
+        else:
+            s += 1; notes.append(f"Volume {volume_ratio:.1f}x with weak trend — distribution signal")
+    else:
+        notes.append(f"Volume {volume_ratio:.2f}x — normal, no catalyst signal")
+
+    direction = "BULLISH" if b >= 2 else "BEARISH" if s >= 2 else "NEUTRAL"
+    return (
+        f"DIRECTION: {direction}\n"
+        f"REASONING: Paper mode [Ackman/concentrated] — {'; '.join(notes)}. "
+        f"Bullish: {b}/3, bearish: {s}/3."
+    )
+
+
+def _paper_investor_cohen(indicators: dict) -> str:
+    """
+    LENS: Momentum + flow (Cohen — pure technical momentum trading).
+    Reads: RSI, MACD, ROC-5, ROC-10, volume_ratio, stoch_k, atr_pct, bb_pct_b.
+    Widest indicator slice of all personas — Cohen reads everything.
+    """
+    price        = float(indicators.get("price", 1.0))
+    rsi          = float(indicators.get("rsi_14", 50.0))
+    macd         = float(indicators.get("macd", 0.0))
+    macd_sig     = float(indicators.get("macd_signal", 0.0))
+    roc_5        = float(indicators.get("roc_5",  0.0))
+    roc_10       = float(indicators.get("roc_10", 0.0))
+    volume_ratio = float(indicators.get("volume_ratio", 1.0))
+    stoch_k      = float(indicators.get("stoch_k", 50.0))
+    atr          = float(indicators.get("atr_14", 0.0))
+    bb_upper     = float(indicators.get("bb_upper", price * 1.05))
+    bb_lower     = float(indicators.get("bb_lower", price * 0.95))
+
+    b, s, notes = 0, 0, []
+
+    macd_bull = (macd - macd_sig) > 0
+    if rsi > 55 and macd_bull:
+        b += 1; notes.append(f"RSI={rsi:.1f}+MACD bull — momentum building")
+    elif rsi < 45 and not macd_bull:
+        s += 1; notes.append(f"RSI={rsi:.1f}+MACD bear — momentum fading")
+    else:
+        notes.append(f"RSI={rsi:.1f}, MACD {'bull' if macd_bull else 'bear'} — mixed")
+
+    if roc_5 > 2.0 and roc_10 > 4.0:
+        b += 1; notes.append(f"ROC5={roc_5:+.1f}%, ROC10={roc_10:+.1f}% — short-term acceleration")
+    elif roc_5 < -2.0 and roc_10 < -4.0:
+        s += 1; notes.append(f"ROC5={roc_5:+.1f}%, ROC10={roc_10:+.1f}% — short-term deceleration")
+    else:
+        notes.append(f"ROC5={roc_5:+.1f}%, ROC10={roc_10:+.1f}% — weak momentum")
+
+    bb_range = max(bb_upper - bb_lower, 1e-9)
+    pct_b = (price - bb_lower) / bb_range
+    atr_pct = atr / max(price, 1e-9)
+    if stoch_k > 55 and volume_ratio > 1.1 and pct_b > 0.5:
+        b += 1; notes.append(f"Stoch={stoch_k:.0f}, vol {volume_ratio:.1f}x, BB%B={pct_b:.2f} — flow positive")
+    elif stoch_k < 45 and volume_ratio > 1.2 and pct_b < 0.5:
+        s += 1; notes.append(f"Stoch={stoch_k:.0f}, vol {volume_ratio:.1f}x, BB%B={pct_b:.2f} — flow negative")
+    else:
+        notes.append(f"Stoch={stoch_k:.0f}, ATR%={atr_pct*100:.1f}% — inconclusive flow")
+
+    direction = "BULLISH" if b >= 2 else "BEARISH" if s >= 2 else "NEUTRAL"
+    return (
+        f"DIRECTION: {direction}\n"
+        f"REASONING: Paper mode [Cohen/momentum] — {'; '.join(notes)}. "
+        f"Bullish: {b}/3, bearish: {s}/3."
+    )
+
+
+def _paper_investor_dalio(indicators: dict) -> str:
+    """
+    LENS: All-weather macro regime (Dalio — balanced risk parity).
+    Reads: ROC-60, SMA200 distance, atr_14, ROC-20.
+    High-vol regimes reduce conviction; prefers balanced environments.
+    """
+    price   = float(indicators.get("price", 1.0))
+    roc_60  = float(indicators.get("roc_60", 0.0))
+    sma_200 = float(indicators.get("sma_200", price))
+    atr     = float(indicators.get("atr_14", 0.0))
+    roc_20  = float(indicators.get("roc_20", 0.0))
+
+    atr_pct = atr / max(price, 1e-9)
+    dev_200 = (price - sma_200) / max(sma_200, 1e-9) * 100
+
+    b, s, notes = 0, 0, []
+
+    if atr_pct > 0.025:
+        notes.append(f"ATR%={atr_pct*100:.1f}% elevated — Dalio reduces risk exposure, NEUTRAL bias")
+        return (
+            f"DIRECTION: NEUTRAL\n"
+            f"REASONING: Paper mode [Dalio/all-weather] — {'; '.join(notes)}."
+        )
+
+    if price > sma_200 * 1.03 and roc_60 > 15.0:
+        b += 1; notes.append(f"Above SMA200 ({dev_200:+.1f}%) + ROC60={roc_60:+.1f}% — healthy macro regime")
+    elif price < sma_200 * 0.97 and roc_60 < -10.0:
+        s += 1; notes.append(f"Below SMA200 ({dev_200:+.1f}%) + ROC60={roc_60:+.1f}% — deteriorating macro")
+    else:
+        notes.append(f"SMA200 {dev_200:+.1f}%, ROC60={roc_60:+.1f}% — mixed macro signals")
+
+    if roc_20 > 8.0 and b > 0:
+        b += 1; notes.append(f"ROC20={roc_20:+.1f}% confirms intermediate strength")
+    elif roc_20 < -8.0 and s > 0:
+        s += 1; notes.append(f"ROC20={roc_20:+.1f}% confirms intermediate weakness")
+    else:
+        notes.append(f"ROC20={roc_20:+.1f}% — Dalio: balanced signal, lean NEUTRAL")
+
+    direction = "BULLISH" if b >= 2 else "BEARISH" if s >= 2 else "NEUTRAL"
+    return (
+        f"DIRECTION: {direction}\n"
+        f"REASONING: Paper mode [Dalio/all-weather] — {'; '.join(notes)}. "
+        f"Bullish: {b}/2, bearish: {s}/2."
+    )
+
+
+def _paper_investor_wood(indicators: dict) -> str:
+    """
+    LENS: Disruptive innovation / high-conviction growth (Wood).
+    Reads: ROC-20, ROC-60, high_proximity, SMA200 distance, volume_ratio, atr_14.
+    Buys dips in confirmed uptrends; high-vol ≠ bad if trend is intact.
+    """
+    price          = float(indicators.get("price", 1.0))
+    roc_20         = float(indicators.get("roc_20", 0.0))
+    roc_60         = float(indicators.get("roc_60", 0.0))
+    high_proximity = float(indicators.get("high_proximity", 0.5))
+    sma_200        = float(indicators.get("sma_200", price))
+    volume_ratio   = float(indicators.get("volume_ratio", 1.0))
+    atr            = float(indicators.get("atr_14", 0.0))
+
+    atr_pct = atr / max(price, 1e-9)
+    dev_200 = (price - sma_200) / max(sma_200, 1e-9) * 100
+
+    b, s, notes = 0, 0, []
+
+    # Wood's primary: secular trend is everything
+    if price > sma_200 * 1.02 and roc_60 > 18.0:
+        b += 1; notes.append(f"Above SMA200 ({dev_200:+.1f}%) + ROC60={roc_60:+.1f}% — innovation secular trend intact")
+    elif price < sma_200 * 0.95 and roc_60 < -20.0:
+        s += 1; notes.append(f"Below SMA200 ({dev_200:+.1f}%) + ROC60={roc_60:+.1f}% — secular trend broken")
+    else:
+        notes.append(f"SMA200 {dev_200:+.1f}%, ROC60={roc_60:+.1f}% — transition zone")
+
+    # Wood buys dips — ATR pullback in uptrend = opportunity
+    if roc_20 > 8.0:
+        b += 1; notes.append(f"ROC20={roc_20:+.1f}% — intermediate growth acceleration")
+    elif roc_20 > 0 and atr_pct > 0.02 and b > 0:
+        b += 1; notes.append(f"ROC20={roc_20:+.1f}% moderate + ATR%={atr_pct*100:.1f}% pullback in uptrend — buy the dip")
+    elif roc_20 < -10.0:
+        s += 1; notes.append(f"ROC20={roc_20:+.1f}% — growth story decelerating")
+    else:
+        notes.append(f"ROC20={roc_20:+.1f}% — insufficient for Wood's conviction")
+
+    if high_proximity < 0.20 and volume_ratio > 1.1 and b > 0:
+        b += 1; notes.append(f"Near 52W high + {volume_ratio:.1f}x volume — institutional accumulation")
+    elif high_proximity > 0.40:
+        s += 1; notes.append(f"Far from 52W high ({high_proximity*100:.0f}% drawdown) — secular story challenged")
+    else:
+        notes.append(f"52W position {(1-high_proximity)*100:.0f}% of range, vol {volume_ratio:.2f}x")
+
+    direction = "BULLISH" if b >= 2 else "BEARISH" if s >= 2 else "NEUTRAL"
+    return (
+        f"DIRECTION: {direction}\n"
+        f"REASONING: Paper mode [Wood/innovation] — {'; '.join(notes)}. "
+        f"Bullish: {b}/3, bearish: {s}/3."
+    )
+
+
+def _paper_investor_bogle(indicators: dict) -> str:
+    """
+    LENS: Passive indexer (Bogle — rarely has strong single-stock views).
+    Reads: high_proximity, atr_14, volume_ratio.
+    Defaults to NEUTRAL; only extreme readings produce directional output.
+    """
+    price          = float(indicators.get("price", 1.0))
+    high_proximity = float(indicators.get("high_proximity", 0.5))
+    low_proximity  = float(indicators.get("low_proximity", 0.5))
+    atr            = float(indicators.get("atr_14", 0.0))
+    volume_ratio   = float(indicators.get("volume_ratio", 1.0))
+
+    atr_pct = atr / max(price, 1e-9)
+
+    # Bogle requires extreme readings; otherwise NEUTRAL
+    if atr_pct > 0.035 and volume_ratio > 2.0:
+        return (
+            "DIRECTION: BEARISH\n"
+            f"REASONING: Paper mode [Bogle/passive] — "
+            f"ATR%={atr_pct*100:.1f}% + volume {volume_ratio:.1f}x extreme — "
+            "Bogle: this level of volatility/speculation is a warning; own index instead."
+        )
+
+    if low_proximity < 0.03 and atr_pct < 0.015:
+        return (
+            "DIRECTION: BULLISH\n"
+            f"REASONING: Paper mode [Bogle/passive] — "
+            f"Near 52W low, low volatility ATR%={atr_pct*100:.2f}% — "
+            "Bogle: at structural support with low vol; index exposure acceptable."
+        )
+
+    range_pct = (1.0 - high_proximity) * 100
+    return (
+        "DIRECTION: NEUTRAL\n"
+        f"REASONING: Paper mode [Bogle/passive] — "
+        f"52W position {range_pct:.0f}%, ATR%={atr_pct*100:.1f}%, vol {volume_ratio:.2f}x — "
+        "Bogle: no extreme signals; own the index, not the individual stock."
+    )
+
+
 def _paper_risk_manager(
     action: str,
     vote_tally: dict,
@@ -520,7 +939,7 @@ def _paper_risk_manager(
             rationale = (
                 f"Paper mode rule-based risk. Equity=${equity:,.0f}, cash=${cash:,.0f} "
                 f"({cash_ratio*100:.1f}%). Crypto headroom {headroom*100:.1f}%. "
-                f"Consensus {votes}/7. Position={pos_pct*100:.1f}% NAV."
+                f"Consensus {votes}/15. Position={pos_pct*100:.1f}% NAV."
             )
     elif action == "BUY" and cash < equity * 0.03:
         action    = "HOLD"
@@ -533,14 +952,14 @@ def _paper_risk_manager(
         votes     = vote_tally.get("bullish" if action == "BUY" else "bearish", 0)
         rationale = (
             f"Paper mode rule-based risk. Equity=${equity:,.0f}, cash=${cash:,.0f} "
-            f"({cash_ratio*100:.1f}%). Vote consensus {votes}/7. "
+            f"({cash_ratio*100:.1f}%). Vote consensus {votes}/15."
             f"Position sized at {pos_pct*100:.1f}% of equity."
         )
 
     votes = vote_tally.get("bullish" if action == "BUY" else "bearish", 0)
     return json.dumps({
         "action":                 action,
-        "confidence":             round(votes / 7.0, 2),
+        "confidence":             round(votes / 15.0, 2),
         "rationale":              rationale,
         "suggested_position_pct": pos_pct,
         "stop_loss_pct":          0.02,
@@ -666,7 +1085,17 @@ DEFAULT_PROFILE = {
 # ── Main orchestrator ─────────────────────────────────────────────────────────
 
 class DebateOrchestrator:
-    """Runs all nine agents and returns a TradingSignal gated by majority vote."""
+    """Runs 15 agents across two panels and returns a TradingSignal gated by majority vote.
+
+    Panel A — original 7 specialist analysts:
+        technical, fundamental, sentiment, macro, quant, options_flow, regime
+
+    Panel B — 8 investor persona agents:
+        buffett, munger, lynch, ackman, cohen, dalio, wood, bogle
+
+    All 15 fire in parallel via ThreadPoolExecutor.
+    Panel conflict (panels disagree on direction) forces HOLD.
+    """
 
     def __init__(
         self,
@@ -678,6 +1107,7 @@ class DebateOrchestrator:
     ) -> None:
         client = anthropic.Anthropic(api_key=anthropic_api_key)
 
+        # Panel A — analyst agents
         self._fundamental     = FundamentalAnalyst(client)
         self._technical       = TechnicalAnalyst(client)
         self._sentiment_agent = SentimentAnalyst(client)
@@ -685,8 +1115,20 @@ class DebateOrchestrator:
         self._quant           = QuantAnalyst(client)
         self._options_flow    = OptionsFlowAnalyst(client)
         self._regime          = RegimeDetector(client)   # deterministic — client ignored
-        self._strategy        = StrategyCoach(client)
-        self._risk            = RiskManager(client)
+
+        # Panel B — investor persona agents
+        self._buffett = BuffettInvestor(client)
+        self._munger  = MungerInvestor(client)
+        self._lynch   = LynchInvestor(client)
+        self._ackman  = AckmanInvestor(client)
+        self._cohen   = CohenInvestor(client)
+        self._dalio   = DalioInvestor(client)
+        self._wood    = WoodInvestor(client)
+        self._bogle   = BogleInvestor(client)
+
+        # Synthesis agents (not part of vote pool)
+        self._strategy = StrategyCoach(client)
+        self._risk     = RiskManager(client)
 
         self._threshold   = confidence_threshold
         self._max_pos     = max_position_pct
@@ -706,7 +1148,7 @@ class DebateOrchestrator:
         asset_class = market.asset_class
         profile     = user_profile or DEFAULT_PROFILE
         mode_label  = "paper-rule-based" if paper_mode else "live-LLM"
-        log.info("9-agent debate starting: %s (%s) mode=%s", symbol, asset_class, mode_label)
+        log.info("15-agent dual-panel debate starting: %s (%s) mode=%s", symbol, asset_class, mode_label)
 
         bars_dicts = _bars_to_dicts(market)
         indicators = _compute_indicators(market)
@@ -715,28 +1157,42 @@ class DebateOrchestrator:
         atr_pct = indicators.get("atr_14", 0.0) / price
         _regime_tracker.record_atr(atr_pct)
 
-        analyst_views: dict[str, str] = {}
+        # Both panels share the same underlying indicator dict;
+        # each agent reads only its declared keys (enforced by agent prompt / paper logic).
+        analyst_views: dict[str, str] = {}   # Panel A
+        investor_views: dict[str, str] = {}  # Panel B
 
         if paper_mode:
-            # ── Paper mode: all 7 analysts rule-based, zero LLM calls ─────────
-            # Each analyst reads a distinct subset of the 22-field indicator
-            # dict — votes are genuinely independent (asymmetric lenses).
+            # ── Paper mode: all 15 agents rule-based, zero LLM calls ──────────
+            # Panel A — each reads a distinct indicator subset (asymmetric lenses)
             regime_ctx = {"symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators}
-            analyst_views["regime"]      = self._regime.analyse(regime_ctx)
-            analyst_views["technical"]   = _paper_technical(indicators)   # RSI + MACD + SMA20
-            analyst_views["quant"]       = _paper_quant(indicators)        # BB%B + Stoch + ROC10
-            analyst_views["fundamental"] = _paper_fundamental(indicators)  # ROC20/60 + SMA50/200
-            analyst_views["options_flow"]= _paper_options_flow(indicators) # ATR + vol_ratio + 52W
-            analyst_views["macro"]       = _paper_macro(indicators)        # SMA200 + ROC60 + 52W high
-            analyst_views["sentiment"]   = _paper_sentiment(indicators)    # ROC5 + vol_ratio + RSI crowd
+            analyst_views["regime"]       = self._regime.analyse(regime_ctx)
+            analyst_views["technical"]    = _paper_technical(indicators)      # RSI + MACD + SMA20
+            analyst_views["quant"]        = _paper_quant(indicators)           # BB%B + Stoch + ROC10
+            analyst_views["fundamental"]  = _paper_fundamental(indicators)     # ROC20/60 + SMA50/200
+            analyst_views["options_flow"] = _paper_options_flow(indicators)    # ATR + vol_ratio + 52W
+            analyst_views["macro"]        = _paper_macro(indicators)           # SMA200 + ROC60 + 52W high
+            analyst_views["sentiment"]    = _paper_sentiment(indicators)       # ROC5 + vol_ratio + RSI crowd
+
+            # Panel B — investor personas, distinct lenses
+            investor_views["buffett"] = _paper_investor_buffett(indicators)   # ROC60 + SMA200 + ROC20
+            investor_views["munger"]  = _paper_investor_munger(indicators)    # ROC60 + SMA200 + 52W
+            investor_views["lynch"]   = _paper_investor_lynch(indicators)     # ROC20/60/5 + SMA20 + vol
+            investor_views["ackman"]  = _paper_investor_ackman(indicators)    # ROC20/60 + SMA200 + vol
+            investor_views["cohen"]   = _paper_investor_cohen(indicators)     # RSI/MACD/ROC5/10/stoch/atr
+            investor_views["dalio"]   = _paper_investor_dalio(indicators)     # ROC60 + SMA200 + ATR + ROC20
+            investor_views["wood"]    = _paper_investor_wood(indicators)      # ROC20/60 + 52W + SMA200 + vol
+            investor_views["bogle"]   = _paper_investor_bogle(indicators)     # 52W + ATR + vol (passive)
+
             log.info(
-                "Paper mode analysts complete (%d indicators): %s",
-                len(indicators),
-                {k: v.split("\n")[0] for k, v in analyst_views.items()},
+                "Paper mode: %d Panel-A + %d Panel-B agents complete (%d indicators)",
+                len(analyst_views), len(investor_views), len(indicators),
             )
+            log.debug("Panel A: %s", {k: v.split("\n")[0] for k, v in analyst_views.items()})
+            log.debug("Panel B: %s", {k: v.split("\n")[0] for k, v in investor_views.items()})
 
         else:
-            # ── Live mode: full 9-agent LLM debate ────────────────────────────
+            # ── Live mode: full 15-agent LLM debate, all parallel ─────────────
             cache_key        = f"{symbol}:strategic"
             cached_strategic = _cache.get(cache_key)
 
@@ -747,7 +1203,9 @@ class DebateOrchestrator:
                 "portfolio_equity": portfolio.equity,
                 "daily_pnl_pct": portfolio.daily_pnl_pct,
             }
-            tactical_tasks = {
+
+            # Panel A tactical contexts
+            panel_a_tasks: dict[str, tuple[Any, dict]] = {
                 "fundamental": (self._fundamental.analyse, {
                     "symbol": symbol, "asset_class": asset_class,
                     "bars_last_60": bars_dicts,
@@ -772,52 +1230,93 @@ class DebateOrchestrator:
                 }),
             }
 
-            with ThreadPoolExecutor(max_workers=7) as pool:
-                futures: dict[Any, str] = {}
+            # Panel B — each persona receives only its data slice
+            # (system prompt enforces philosophy; context provides the numbers)
+            _ind_str = lambda keys: {k: indicators.get(k) for k in keys if k in indicators}
+            panel_b_tasks: dict[str, tuple[Any, dict]] = {
+                "buffett": (self._buffett.analyse, _ind_str(
+                    ["symbol", "price", "roc_60", "sma_200", "roc_20"])),
+                "munger": (self._munger.analyse, _ind_str(
+                    ["symbol", "price", "roc_60", "sma_200", "high_proximity"])),
+                "lynch": (self._lynch.analyse, _ind_str(
+                    ["symbol", "price", "roc_20", "roc_60", "roc_5", "sma_20", "volume_ratio"])),
+                "ackman": (self._ackman.analyse, _ind_str(
+                    ["symbol", "price", "roc_20", "roc_60", "high_proximity", "sma_200", "volume_ratio"])),
+                "cohen": (self._cohen.analyse, _ind_str(
+                    ["symbol", "price", "rsi_14", "macd", "macd_signal", "roc_5", "roc_10",
+                     "volume_ratio", "stoch_k", "atr_14", "bb_upper", "bb_lower"])),
+                "dalio": (self._dalio.analyse, _ind_str(
+                    ["symbol", "price", "roc_60", "sma_200", "atr_14", "roc_20"])),
+                "wood": (self._wood.analyse, _ind_str(
+                    ["symbol", "price", "roc_20", "roc_60", "high_proximity",
+                     "sma_200", "volume_ratio", "atr_14"])),
+                "bogle": (self._bogle.analyse, _ind_str(
+                    ["symbol", "price", "high_proximity", "low_proximity", "atr_14", "volume_ratio"])),
+            }
+            # Add symbol to panel B contexts (needed by agents)
+            for ctx_dict in (d for _, d in panel_b_tasks.values()):
+                ctx_dict.setdefault("symbol", symbol)
 
-                futures[pool.submit(self._regime.analyse, regime_ctx)] = "regime"
+            # Fire all 15 agents simultaneously (ThreadPoolExecutor — same as existing pattern)
+            with ThreadPoolExecutor(max_workers=15) as pool:
+                futures: dict[Any, tuple[str, str]] = {}  # future → (panel, role)
+
+                futures[pool.submit(self._regime.analyse, regime_ctx)] = ("a", "regime")
 
                 if cached_strategic:
-                    macro_view, _ = cached_strategic
-                    analyst_views["macro"] = macro_view
+                    analyst_views["macro"] = cached_strategic[0]
                     log.debug("Macro served from cache for %s", symbol)
                 else:
-                    futures[pool.submit(self._macro.analyse, macro_ctx)] = "macro"
+                    futures[pool.submit(self._macro.analyse, macro_ctx)] = ("a", "macro")
 
-                for role, (fn, ctx) in tactical_tasks.items():
-                    futures[pool.submit(fn, ctx)] = role
+                for role, (fn, ctx) in panel_a_tasks.items():
+                    futures[pool.submit(fn, ctx)] = ("a", role)
+
+                for role, (fn, ctx) in panel_b_tasks.items():
+                    futures[pool.submit(fn, ctx)] = ("b", role)
 
                 for fut in as_completed(futures):
-                    role = futures[fut]
+                    panel, role = futures[fut]
                     try:
-                        analyst_views[role] = fut.result()
+                        result = fut.result()
                     except Exception as exc:
-                        log.error("Agent %s failed: %s", role, exc)
-                        analyst_views[role] = f"DIRECTION: NEUTRAL\nREASONING: Agent error — {exc}"
+                        log.error("Agent %s/%s failed: %s", panel, role, exc)
+                        result = f"DIRECTION: NEUTRAL\nREASONING: Agent error — {exc}"
+                    if panel == "a":
+                        analyst_views[role] = result
+                    else:
+                        investor_views[role] = result
 
             if "macro" in analyst_views:
                 _cache.set(cache_key, (analyst_views["macro"], analyst_views.get("regime", "")))
 
-        for role, view in analyst_views.items():
+        for role, view in {**analyst_views, **investor_views}.items():
             log.info("%s: %s", role.title(), view[:80])
 
-        # ── Vote counting — determines action (replaces LLM confidence gate) ──
-        vote_tally       = _count_votes(analyst_views)
-        action           = _action_from_votes(vote_tally, threshold=4)
+        # ── Dual-panel vote aggregation ───────────────────────────────────────
+        panel_a_tally, panel_b_tally, combined_tally, panels_conflict, conflict_note = (
+            _aggregate_dual_panel(analyst_views, investor_views)
+        )
+        action           = _action_from_votes(combined_tally, panels_conflict=panels_conflict, threshold=8)
         regime_view      = analyst_views.get("regime", "")
         regime_label     = _parse_regime_label(regime_view)
-        votes_for_action = vote_tally["bullish"] if action == "BUY" else vote_tally["bearish"] if action == "SELL" else 0
+        votes_for_action = (
+            combined_tally["bullish"] if action == "BUY"
+            else combined_tally["bearish"] if action == "SELL"
+            else 0
+        )
 
         log.info(
-            "Vote tally: %s → action=%s regime=%s mode=%s",
-            vote_tally, action, regime_label, mode_label,
+            "Dual-panel votes: A=%s B=%s combined=%s conflict=%s → action=%s regime=%s mode=%s",
+            panel_a_tally, panel_b_tally, combined_tally,
+            panels_conflict, action, regime_label, mode_label,
         )
 
         # ── Round 2: Risk Manager + Strategy Coach ────────────────────────────
         if paper_mode:
             # Rule-based risk manager — uses portfolio values, no LLM
             risk_raw      = _paper_risk_manager(
-                action, vote_tally, portfolio,
+                action, combined_tally, portfolio,
                 self._max_pos, self._max_crypto, asset_class,
             )
             strategy_view = (
@@ -828,8 +1327,11 @@ class DebateOrchestrator:
             risk_ctx = {
                 "symbol": symbol, "asset_class": asset_class,
                 "action_from_votes": action,
-                "vote_tally": vote_tally,
-                "analyst_opinions": analyst_views,
+                "vote_tally":        combined_tally,
+                "panel_a_votes":     panel_a_tally,
+                "panel_b_votes":     panel_b_tally,
+                "panels_conflict":   panels_conflict,
+                "analyst_opinions":  {**analyst_views, **investor_views},
                 "portfolio": {
                     "equity":                portfolio.equity,
                     "daily_pnl_pct":         portfolio.daily_pnl_pct,
@@ -843,8 +1345,13 @@ class DebateOrchestrator:
             }
             strategy_ctx = {
                 "market_analysis": {
-                    "symbol": symbol, "action": action,
-                    "vote_tally": vote_tally, "analyst_opinions": analyst_views,
+                    "symbol":          symbol,
+                    "action":          action,
+                    "vote_tally":      combined_tally,
+                    "panel_a_votes":   panel_a_tally,
+                    "panel_b_votes":   panel_b_tally,
+                    "panels_conflict": panels_conflict,
+                    "analyst_opinions": {**analyst_views, **investor_views},
                 },
                 "trader_profile": profile,
                 "portfolio": {
@@ -883,25 +1390,34 @@ class DebateOrchestrator:
 
         strategy_fit = _parse_strategy_fit(strategy_view)
 
-        # ── Tier — deterministic from votes + regime ──────────────────────────
-        tier = _compute_tier(vote_tally, action, regime_label, indicators)
+        # ── Tier — deterministic from combined 15-agent votes + regime ────────
+        tier = _compute_tier(
+            combined_tally, action, regime_label, indicators,
+            panels_conflict=panels_conflict,
+        )
 
         signal = TradingSignal(
             symbol=symbol,
             asset_class=asset_class,
             action=action,
             confidence=float(parsed.get("confidence", 0.0)),  # kept for display only
-            rationale=parsed.get("rationale", f"Vote: {vote_tally}"),
+            rationale=parsed.get("rationale", f"Vote: {combined_tally}"),
             tier=tier,
-            vote_tally=vote_tally,
+            vote_tally=combined_tally,
             votes_for_action=votes_for_action,
             regime_label=regime_label,
+            # Dual-panel breakdown
+            panel_a_votes=panel_a_tally,
+            panel_b_votes=panel_b_tally,
+            panels_conflict=panels_conflict,
+            conflict_note=conflict_note,
             suggested_position_pct=float(parsed.get("suggested_position_pct", 0.0)),
             stop_loss_pct=float(parsed.get("stop_loss_pct", 0.02)),
             take_profit_pct=float(parsed.get("take_profit_pct", 0.05)),
             devil_advocate_score=int(parsed.get("devil_advocate_score", 0)),
             devil_advocate_case=parsed.get("devil_advocate_case", ""),
             strategy_fit=strategy_fit,
+            # Panel A views
             fundamental_view=analyst_views.get("fundamental", ""),
             technical_view=analyst_views.get("technical", ""),
             sentiment_view=analyst_views.get("sentiment", ""),
@@ -911,10 +1427,20 @@ class DebateOrchestrator:
             regime_view=analyst_views.get("regime", ""),
             strategy_view=strategy_view,
             risk_view=risk_raw,
+            # Panel B views
+            buffett_view=investor_views.get("buffett", ""),
+            munger_view=investor_views.get("munger", ""),
+            lynch_view=investor_views.get("lynch", ""),
+            ackman_view=investor_views.get("ackman", ""),
+            cohen_view=investor_views.get("cohen", ""),
+            dalio_view=investor_views.get("dalio", ""),
+            wood_view=investor_views.get("wood", ""),
+            bogle_view=investor_views.get("bogle", ""),
         )
 
         log.info(
-            "Signal: %s %s tier=%s votes=%d/7 regime=%s fit=%s",
-            action, symbol, tier, votes_for_action, regime_label, strategy_fit,
+            "Signal: %s %s tier=%s votes=%d/15 (A=%s B=%s) conflict=%s regime=%s fit=%s",
+            action, symbol, tier, votes_for_action,
+            panel_a_tally, panel_b_tally, panels_conflict, regime_label, strategy_fit,
         )
         return signal
