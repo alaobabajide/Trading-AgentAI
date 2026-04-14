@@ -20,10 +20,16 @@ export interface Signal {
   stop_loss_pct: number;
   take_profit_pct: number;
 
-  // Vote-based fields (new)
+  // Vote-based fields — combined 15-agent pool
   vote_tally?: VoteTally;
   votes_for_action?: number;
   regime_label?: string;
+
+  // Dual-panel breakdown
+  panel_a_votes?: VoteTally;
+  panel_b_votes?: VoteTally;
+  panels_conflict?: boolean;
+  conflict_note?: string;
 
   // HITL fields
   tier:                 SignalTier;
@@ -32,6 +38,7 @@ export interface Signal {
   strategy_fit:         StrategyFit;
 
   agent_views: {
+    // Panel A — analyst agents
     fundamental:  string;
     technical:    string;
     sentiment:    string;
@@ -41,6 +48,15 @@ export interface Signal {
     regime:       string;
     strategy:     string;
     risk:         string;
+    // Panel B — investor personas
+    buffett?: string;
+    munger?:  string;
+    lynch?:   string;
+    ackman?:  string;
+    cohen?:   string;
+    dalio?:   string;
+    wood?:    string;
+    bogle?:   string;
   };
   passed_confidence_gate: boolean;
 }

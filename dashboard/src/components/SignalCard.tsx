@@ -7,7 +7,7 @@ import { TIER_CONFIG, FIT_CONFIG } from "../lib/hitl";
 import { useHITLContext } from "../context/HITLContext";
 import clsx from "clsx";
 
-// ── Analyst rows ──────────────────────────────────────────────────────────────
+// ── Agent row definitions ─────────────────────────────────────────────────────
 
 const ANALYSTS = [
   { key: "fundamental",  label: "Fundamental",  color: "text-blue-400"   },
@@ -19,36 +19,103 @@ const ANALYSTS = [
   { key: "regime",       label: "Regime",       color: "text-pink-400"   },
 ] as const;
 
-// ── Vote tally display (replaces confidence bar) ──────────────────────────────
+const INVESTORS = [
+  { key: "buffett", label: "Buffett",  color: "text-amber-400"  },
+  { key: "munger",  label: "Munger",   color: "text-amber-300"  },
+  { key: "lynch",   label: "Lynch",    color: "text-lime-400"   },
+  { key: "ackman",  label: "Ackman",   color: "text-sky-400"    },
+  { key: "cohen",   label: "Cohen",    color: "text-violet-400" },
+  { key: "dalio",   label: "Dalio",    color: "text-blue-300"   },
+  { key: "wood",    label: "Wood",     color: "text-fuchsia-400"},
+  { key: "bogle",   label: "Bogle",    color: "text-slate-300"  },
+] as const;
 
-function VoteTallyRow({ tally, action, votesForAction }: {
+// ── Vote tally display ────────────────────────────────────────────────────────
+
+function TallyChips({ tally }: { tally: VoteTally }) {
+  return (
+    <span className="flex items-center gap-1.5 text-[11px] font-mono">
+      <span className="text-emerald-400">{tally.bullish}B</span>
+      <span className="text-slate-600">·</span>
+      <span className="text-red-400">{tally.bearish}Br</span>
+      <span className="text-slate-600">·</span>
+      <span className="text-slate-400">{tally.neutral}N</span>
+    </span>
+  );
+}
+
+function VoteTallyRow({ tally, panelA, panelB, action, votesForAction }: {
   tally: VoteTally;
+  panelA?: VoteTally;
+  panelB?: VoteTally;
   action: string;
   votesForAction: number;
 }) {
   const total = tally.bullish + tally.bearish + tally.neutral;
+  const hasPanels = panelA && panelB;
 
   return (
-    <div className="flex items-center gap-3">
-      {/* Vote counts */}
-      <div className="flex items-center gap-2 text-[11px] font-mono">
-        <span className="text-emerald-400">{tally.bullish}B</span>
-        <span className="text-slate-600">·</span>
-        <span className="text-red-400">{tally.bearish}Br</span>
-        <span className="text-slate-600">·</span>
-        <span className="text-slate-400">{tally.neutral}N</span>
+    <div className="space-y-1">
+      <div className="flex items-center gap-3 flex-wrap">
+        {hasPanels ? (
+          <>
+            <span className="text-[10px] text-slate-500 font-mono">Combined</span>
+            <TallyChips tally={tally} />
+          </>
+        ) : (
+          <TallyChips tally={tally} />
+        )}
+        {action !== "HOLD" && (
+          <span className={clsx(
+            "text-[10px] font-semibold px-1.5 py-0.5 rounded",
+            action === "BUY"
+              ? "bg-emerald-500/15 text-emerald-300"
+              : "bg-red-500/15 text-red-300",
+          )}>
+            {votesForAction}/{total} {action === "BUY" ? "BULLISH" : "BEARISH"}
+          </span>
+        )}
       </div>
-      {/* Majority summary */}
-      {action !== "HOLD" && (
-        <span className={clsx(
-          "text-[10px] font-semibold px-1.5 py-0.5 rounded",
-          action === "BUY"
-            ? "bg-emerald-500/15 text-emerald-300"
-            : "bg-red-500/15 text-red-300",
-        )}>
-          {votesForAction}/{total} {action === "BUY" ? "BULLISH" : "BEARISH"}
-        </span>
+      {hasPanels && (
+        <div className="flex items-center gap-4 text-[10px] font-mono text-slate-500">
+          <span>Analysts <TallyChips tally={panelA} /></span>
+          <span className="text-slate-700">|</span>
+          <span>Investors <TallyChips tally={panelB} /></span>
+        </div>
       )}
+    </div>
+  );
+}
+
+// ── Reusable agent view row ───────────────────────────────────────────────────
+
+function AgentViewRow({ agentKey, label, color, views }: {
+  agentKey: string;
+  label: string;
+  color: string;
+  views: Record<string, string | undefined>;
+}) {
+  const raw         = views[agentKey] ?? "";
+  const dirMatch    = raw.match(/DIRECTION:\s*(\w+)/i);
+  const reasonMatch = raw.match(/REASONING:\s*(.+)/is);
+  const dir    = dirMatch?.[1]  ?? "–";
+  const reason = reasonMatch?.[1]?.trim() ?? raw;
+  return (
+    <div className="bg-surface-700 rounded-xl p-3 space-y-1">
+      <div className="flex items-center justify-between">
+        <span className={clsx("text-[10px] font-semibold uppercase tracking-wider", color)}>
+          {label}
+        </span>
+        <span className={clsx(
+          "text-[10px] font-mono font-semibold",
+          dir === "BULLISH" ? "text-emerald-400"
+            : dir === "BEARISH" ? "text-red-400"
+            : "text-slate-400",
+        )}>
+          {dir}
+        </span>
+      </div>
+      <p className="text-xs text-slate-400">{reason}</p>
     </div>
   );
 }
@@ -178,7 +245,12 @@ export function SignalCard({ signal }: { signal: Signal }) {
     signal.action === "BUY"  ? tally.bullish :
     signal.action === "SELL" ? tally.bearish : 0
   );
-  const regimeLabel = signal.regime_label;
+  const regimeLabel     = signal.regime_label;
+  const panelA          = signal.panel_a_votes;
+  const panelB          = signal.panel_b_votes;
+  const panelsConflict  = signal.panels_conflict ?? false;
+  const conflictNote    = signal.conflict_note ?? "";
+  const totalAgents     = (panelA && panelB) ? 15 : 7;
 
   return (
     <div className={clsx("glass rounded-2xl overflow-hidden border", tierCfg.border)}>
@@ -229,9 +301,21 @@ export function SignalCard({ signal }: { signal: Signal }) {
           </div>
         </div>
 
-        {/* Vote tally row (replaces confidence bar) */}
+        {/* Vote tally row */}
         <div className="mt-3 space-y-1.5">
-          <VoteTallyRow tally={tally} action={signal.action} votesForAction={votesForAction} />
+          <VoteTallyRow
+            tally={tally}
+            panelA={panelA}
+            panelB={panelB}
+            action={signal.action}
+            votesForAction={votesForAction}
+          />
+          {panelsConflict && (
+            <div className="flex items-center gap-1.5 text-[10px] text-amber-400 font-mono">
+              <span>⚠</span>
+              <span>{conflictNote || "Panel conflict — analysts and investors disagree"}</span>
+            </div>
+          )}
           <p className="text-xs text-slate-400 line-clamp-2">{signal.rationale}</p>
         </div>
       </button>
@@ -260,51 +344,79 @@ export function SignalCard({ signal }: { signal: Signal }) {
           {/* Strategy Coach */}
           <StrategyFitBadge signal={signal} />
 
-          {/* 7 Analyst views */}
+          {/* Panel conflict banner */}
+          {panelsConflict && (
+            <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2.5 space-y-0.5">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-amber-400">
+                Panel Conflict — HOLD Enforced
+              </div>
+              <p className="text-xs text-amber-300/80">{conflictNote}</p>
+            </div>
+          )}
+
+          {/* Panel A — Analyst views */}
           <div className="space-y-2">
-            <h4 className="text-[10px] text-slate-500 uppercase tracking-widest">
-              Analyst Views{" "}
-              <span className="text-slate-600 normal-case tracking-normal font-normal">
-                7 analysts · vote-based arbiter
-              </span>
-            </h4>
-            {ANALYSTS.map(({ key, label, color }) => {
-              const raw         = signal.agent_views[key] ?? "";
-              const dirMatch    = raw.match(/DIRECTION:\s*(\w+)/i);
-              const reasonMatch = raw.match(/REASONING:\s*(.+)/is);
-              const dir    = dirMatch?.[1]  ?? "–";
-              const reason = reasonMatch?.[1]?.trim() ?? raw;
-              return (
-                <div key={key} className="bg-surface-700 rounded-xl p-3 space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className={clsx("text-[10px] font-semibold uppercase tracking-wider", color)}>
-                      {label}
-                    </span>
-                    <span className={clsx(
-                      "text-[10px] font-mono font-semibold",
-                      dir === "BULLISH" ? "text-emerald-400"
-                        : dir === "BEARISH" ? "text-red-400"
-                        : "text-slate-400",
-                    )}>
-                      {dir}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-400">{reason}</p>
-                </div>
-              );
-            })}
+            <div className="flex items-center justify-between">
+              <h4 className="text-[10px] text-slate-500 uppercase tracking-widest">
+                Analyst Panel
+              </h4>
+              {panelA && (
+                <span className="text-[10px] font-mono text-slate-600">
+                  {panelA.bullish}B · {panelA.bearish}Br · {panelA.neutral}N
+                </span>
+              )}
+            </div>
+            {ANALYSTS.map(({ key, label, color }) => (
+              <AgentViewRow
+                key={key}
+                agentKey={key}
+                label={label}
+                color={color}
+                views={signal.agent_views}
+              />
+            ))}
           </div>
+
+          {/* Panel B — Investor persona views */}
+          {INVESTORS.some(({ key }) => signal.agent_views[key]) && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h4 className="text-[10px] text-slate-500 uppercase tracking-widest">
+                  Investor Panel
+                </h4>
+                {panelB && (
+                  <span className="text-[10px] font-mono text-slate-600">
+                    {panelB.bullish}B · {panelB.bearish}Br · {panelB.neutral}N
+                  </span>
+                )}
+              </div>
+              {INVESTORS.map(({ key, label, color }) => (
+                <AgentViewRow
+                  key={key}
+                  agentKey={key}
+                  label={label}
+                  color={color}
+                  views={signal.agent_views}
+                />
+              ))}
+            </div>
+          )}
 
           {/* Vote gate status */}
           <div className={clsx(
             "text-xs font-mono rounded-xl px-3 py-2 text-center",
-            signal.action !== "HOLD"
-              ? "bg-emerald-500/10 text-emerald-400"
-              : "bg-yellow-500/10 text-yellow-400",
+            panelsConflict
+              ? "bg-amber-500/10 text-amber-400"
+              : signal.action !== "HOLD"
+                ? "bg-emerald-500/10 text-emerald-400"
+                : "bg-yellow-500/10 text-yellow-400",
           )}>
-            {signal.action !== "HOLD"
-              ? `✓ Vote gate passed — ${votesForAction}/7 analysts ${signal.action === "BUY" ? "BULLISH" : "BEARISH"}`
-              : "⚠ No majority — signal downgraded to HOLD"}
+            {panelsConflict
+              ? "⚠ Panel conflict — analysts and investors disagree, HOLD enforced"
+              : signal.action !== "HOLD"
+                ? `✓ Vote gate passed — ${votesForAction}/${totalAgents} agents ${signal.action === "BUY" ? "BULLISH" : "BEARISH"}`
+                : `⚠ No majority — signal downgraded to HOLD`
+            }
           </div>
 
           {/* Execute / Queue button — shown in Manual and Assisted modes */}
