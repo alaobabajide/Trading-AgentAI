@@ -1,131 +1,82 @@
 import { useMemo, useState } from "react";
-import { Loader2, RefreshCw, Search, Send, Zap } from "lucide-react";
+import { Loader2, RefreshCw, Search, Send, X, Zap } from "lucide-react";
 import clsx from "clsx";
 import { SignalCard } from "../components/SignalCard";
 import { useSignals } from "../lib/api";
+import {
+  STOCK_LIST, ETF_LIST, CRYPTO_LIST, FOREX_LIST, NGX_LIST,
+} from "../lib/marketMock";
 import type { Signal, SignalAction, SignalTier } from "../lib/types";
 
-// ── Quick-generate watchlists ─────────────────────────────────────────────────
-
-// US Stocks — top 100 by market cap / liquidity (S&P 500 leaders)
-const WL_US_MEGA: string[] = [
-  "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK.B","JPM","LLY",
-  "V",   "UNH", "AVGO","XOM", "MA",   "HD",  "PG",  "COST","JNJ","MRK",
-];
-const WL_US_LARGE: string[] = [
-  "CVX", "ABBV","BAC", "KO",  "PEP",  "NFLX","TMO", "ORCL","AMD","CRM",
-  "CSCO","ACN", "MCD", "LIN", "ADBE", "INTC","WMT", "DHR", "TXN","IBM",
-];
-const WL_US_GROWTH: string[] = [
-  "INTU","BKNG","ISRG","SPGI","NOW", "PANW","SNOW","PLTR","UBER","COIN",
-  "SHOP","SQ",  "PYPL","SNAP","RBLX","ABNB","DKNG","HOOD","ARM","SMCI",
-];
-const WL_US_FIN_IND: string[] = [
-  "GS",  "MS",  "BLK", "AXP", "C",   "DE",  "CAT", "HON", "RTX","GE",
-  "ETN", "LMT", "BA",  "NEE", "T",   "AMGN","GILD","SBUX","BX", "DIS",
-];
-
-// ETFs — broad market, sector, fixed income, international, thematic
-const WL_ETFS_BROAD: string[] = [
-  "SPY","QQQ","IWM","VTI","IVV","DIA","RSP","SCHB","VEA","EEM",
-];
-const WL_ETFS_SECTOR: string[] = [
-  "XLK","XLF","XLE","XLV","XLU","XLI","XLRE","XLB","XLC","XLP",
-  "SOXX","ARKK","IBIT","BITX","CIBR","BOTZ","ROBO","HACK","AIQ","UFO",
-];
-const WL_ETFS_FIXED: string[] = [
-  "TLT","IEF","SHY","AGG","LQD","HYG","TIP","BND","GLD","SLV",
-];
-
-// Crypto — major + mid cap
-const WL_CRYPTO: string[] = [
-  "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","ADAUSDT",
-  "DOGEUSDT","AVAXUSDT","LINKUSDT","DOTUSDT","MATICUSDT","LTCUSDT",
-  "UNIUSDT","AAVEUSDT","ATOMUSDT","NEARUSDT","APTUSDT","SUIUSDT",
-];
-
-// Forex — major, minor, and exotic pairs
-const WL_FOREX_MAJORS: string[] = [
-  "EURUSD","GBPUSD","USDJPY","AUDUSD","USDCHF","USDCAD","NZDUSD",
-];
-const WL_FOREX_CROSSES: string[] = [
-  "EURGBP","EURJPY","GBPJPY","AUDJPY","EURCHF","GBPCHF","EURCAD",
-  "CADJPY","AUDNZD","NZDJPY",
-];
-const WL_FOREX_METALS: string[] = [
-  "XAUUSD","XAGUSD","XAUEUR","XPTUSD",
-];
-
-// Nigerian Exchange (NGX) — top 50 by market cap / liquidity
-// Note: requires NGX market data provider (not yet supported by Alpaca)
-const WL_NGX_BANKING: string[] = [
-  "GTCO","ZENITHBANK","ACCESSCORP","UBA","STANBIC","FBNH",
-  "FIDELITYBK","FCMB","STERLING","WEMABANK","JAIZBANK","UNIONBANK",
-];
-const WL_NGX_INDUSTRIAL: string[] = [
-  "DANGCEM","BUACEMENT","WAPCO","CCNN","JBERGER","BERGER",
-  "TRANSCORP","GEREGU","SEPLAT","OANDO","CONOIL","TOTAL",
-];
-const WL_NGX_CONSUMER: string[] = [
-  "AIRTELAFRI","MTNN","BUAFOODS","NESTLE","DANGSUGAR","FLOURMILL",
-  "NB","GUINNESS","INTBREW","CADBURY","UNILEVER","HONYFLOUR",
-];
-const WL_NGX_AG_HEALTH: string[] = [
-  "PRESCO","OKOMUOIL","LIVESTOCK","FIDSON","MAYBAKER","NEIMETH",
-  "PZ","NASCON","CUSTODIAN","CHAMS","CAPHOTEL","LINKASSURE",
-  "TRANSCOHOT","CILEASING",
-];
-
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ── Quick Generate data ───────────────────────────────────────────────────────
 
 type AssetClass = "stock" | "crypto" | "forex" | "ngx";
 
-interface WatchlistSection {
+interface QTab {
+  id:         AssetClass;
   label:      string;
   symbols:    string[];
-  assetClass: AssetClass;
   badge?:     string;
+  color:      string;
+  pending?:   boolean; // not yet live — show tooltip instead of running
   note?:      string;
 }
 
-const WATCHLIST_SECTIONS: WatchlistSection[] = [
-  { label: "US Mega Cap",           symbols: WL_US_MEGA,       assetClass: "stock"  },
-  { label: "US Large Cap",          symbols: WL_US_LARGE,      assetClass: "stock"  },
-  { label: "US Growth / Tech",      symbols: WL_US_GROWTH,     assetClass: "stock"  },
-  { label: "US Financials / Industrials", symbols: WL_US_FIN_IND, assetClass: "stock" },
-  { label: "ETFs — Broad Market",   symbols: WL_ETFS_BROAD,    assetClass: "stock"  },
-  { label: "ETFs — Sector / Thematic", symbols: WL_ETFS_SECTOR, assetClass: "stock" },
-  { label: "ETFs — Fixed Income / Commodities", symbols: WL_ETFS_FIXED, assetClass: "stock" },
-  { label: "Crypto",                symbols: WL_CRYPTO,        assetClass: "crypto" },
-  { label: "Forex — Majors",        symbols: WL_FOREX_MAJORS,  assetClass: "forex", badge: "FX"  },
-  { label: "Forex — Crosses",       symbols: WL_FOREX_CROSSES, assetClass: "forex", badge: "FX"  },
-  { label: "Forex — Metals",        symbols: WL_FOREX_METALS,  assetClass: "forex", badge: "FX"  },
-  { label: "NGX — Banking",         symbols: WL_NGX_BANKING,   assetClass: "ngx", badge: "NGX", note: "Requires NGX data provider" },
-  { label: "NGX — Industrial / Energy", symbols: WL_NGX_INDUSTRIAL, assetClass: "ngx", badge: "NGX", note: "Requires NGX data provider" },
-  { label: "NGX — Consumer / Telecoms", symbols: WL_NGX_CONSUMER,  assetClass: "ngx", badge: "NGX", note: "Requires NGX data provider" },
-  { label: "NGX — Agriculture / Health / Other", symbols: WL_NGX_AG_HEALTH, assetClass: "ngx", badge: "NGX", note: "Requires NGX data provider" },
+// Combine all US stocks + ETFs under their own tabs, sorted A-Z within each
+const SORTED_STOCKS = [...STOCK_LIST].sort();
+const SORTED_ETFS   = [...ETF_LIST].sort();
+const SORTED_CRYPTO = [...CRYPTO_LIST].sort();
+const SORTED_FOREX  = [...FOREX_LIST].sort();
+const SORTED_NGX    = [...NGX_LIST].sort();
+
+const Q_TABS: QTab[] = [
+  { id: "stock",  label: "US Stocks", symbols: SORTED_STOCKS, color: "text-blue-400 border-blue-500/30 bg-blue-500/10" },
+  { id: "stock",  label: "ETFs",      symbols: SORTED_ETFS,   color: "text-violet-400 border-violet-500/30 bg-violet-500/10" },
+  { id: "crypto", label: "Crypto",    symbols: SORTED_CRYPTO, color: "text-orange-400 border-orange-500/30 bg-orange-500/10" },
+  { id: "forex",  label: "Forex",     symbols: SORTED_FOREX,  badge: "FX",  color: "text-sky-400 border-sky-500/30 bg-sky-500/10",   pending: true, note: "Forex data provider coming soon" },
+  { id: "ngx",    label: "NGX",       symbols: SORTED_NGX,    badge: "NGX", color: "text-green-400 border-green-500/30 bg-green-500/10", pending: true, note: "Requires NGX data provider" },
 ];
+
+const TOTAL_SYMBOLS = [...STOCK_LIST, ...ETF_LIST, ...CRYPTO_LIST, ...FOREX_LIST, ...NGX_LIST].length;
+
+/** All unique leading letters present in a sorted symbol list */
+function uniqueLetters(symbols: string[]): string[] {
+  return [...new Set(symbols.map((s) => s[0].toUpperCase()))].sort();
+}
 
 // ── Quick Generate Panel ──────────────────────────────────────────────────────
 
-interface QuickRunProps {
-  onGenerated: () => void;
-}
+interface QuickRunProps { onGenerated: () => void }
 
 function QuickRunPanel({ onGenerated }: QuickRunProps) {
-  const [open, setOpen]       = useState(false);
-  const [running, setRunning] = useState<string | null>(null);
-  const [done, setDone]       = useState<string[]>([]);
-  const [errors, setErrors]   = useState<Record<string, string>>({});
+  const [open, setOpen]         = useState(false);
+  const [activeTab, setActiveTab] = useState(0);
+  const [letter, setLetter]     = useState<string | null>(null);
+  const [search, setSearch]     = useState("");
+  const [running, setRunning]   = useState<string | null>(null);
+  const [done, setDone]         = useState<string[]>([]);
+  const [errors, setErrors]     = useState<Record<string, string>>({});
 
-  async function runSymbol(symbol: string, assetClass: AssetClass) {
-    // NGX and Forex are not yet live — show a friendly pending state
-    if (assetClass === "ngx") {
-      setErrors((p) => ({ ...p, [symbol]: "NGX data provider not yet configured" }));
-      return;
-    }
-    if (assetClass === "forex") {
-      setErrors((p) => ({ ...p, [symbol]: "Forex data provider not yet configured" }));
+  const tab = Q_TABS[activeTab];
+
+  const availLetters = useMemo(() => uniqueLetters(tab.symbols), [tab]);
+
+  const visible = useMemo(() => {
+    const q = search.trim().toUpperCase();
+    if (q)      return tab.symbols.filter((s) => s.includes(q));
+    if (letter) return tab.symbols.filter((s) => s.startsWith(letter));
+    return tab.symbols;
+  }, [tab, search, letter]);
+
+  function switchTab(i: number) {
+    setActiveTab(i);
+    setLetter(null);
+    setSearch("");
+  }
+
+  async function runSymbol(symbol: string) {
+    if (tab.pending) {
+      setErrors((p) => ({ ...p, [symbol]: tab.note ?? "Not yet available" }));
       return;
     }
     setRunning(symbol);
@@ -133,7 +84,7 @@ function QuickRunPanel({ onGenerated }: QuickRunProps) {
       const resp = await fetch("/api/signal", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ symbol, asset_class: assetClass, paper_mode: true }),
+        body:    JSON.stringify({ symbol, asset_class: tab.id, paper_mode: true }),
       });
       if (!resp.ok) {
         const d = await resp.json().catch(() => ({}));
@@ -148,24 +99,24 @@ function QuickRunPanel({ onGenerated }: QuickRunProps) {
     }
   }
 
-  function SymbolButton({ symbol, assetClass, badge }: { symbol: string; assetClass: AssetClass; badge?: string }) {
-    const isDone   = done.includes(symbol);
-    const isErr    = !!errors[symbol];
-    const loading  = running === symbol;
-    const isPending = assetClass === "ngx" || assetClass === "forex";
+  function SymbolBtn({ symbol }: { symbol: string }) {
+    const isDone    = done.includes(symbol);
+    const isErr     = !!errors[symbol];
+    const loading   = running === symbol;
+    const isPending = !!tab.pending;
     return (
       <button
-        onClick={() => runSymbol(symbol, assetClass)}
-        disabled={!!running && running !== symbol}
-        title={isErr ? errors[symbol] : isPending ? `${badge}: coming soon` : undefined}
+        onClick={() => runSymbol(symbol)}
+        disabled={!!running && !isPending}
+        title={isErr ? errors[symbol] : isPending ? tab.note : undefined}
         className={clsx(
-          "flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-mono font-medium border transition-all",
-          isDone     ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300" :
-          isErr      ? "bg-red-500/15 border-red-500/30 text-red-300" :
-          loading    ? "bg-brand-500/15 border-brand-500/30 text-brand-300 animate-pulse" :
-          isPending  ? "border-white/5 text-slate-600 cursor-help" :
-                       "border-white/10 text-slate-400 hover:text-slate-200 hover:border-white/20",
-          running && running !== symbol && "opacity-40 cursor-not-allowed",
+          "flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-mono font-medium border transition-all shrink-0",
+          isDone    ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300" :
+          isErr     ? "bg-red-500/15 border-red-500/30 text-red-300" :
+          loading   ? "bg-brand-500/15 border-brand-500/30 text-brand-300 animate-pulse" :
+          isPending ? "border-white/5 text-slate-600 cursor-help" :
+                      "border-white/10 text-slate-400 hover:text-slate-200 hover:border-white/20",
+          running && running !== symbol && !isPending && "opacity-40 cursor-not-allowed",
         )}
       >
         {loading && <Loader2 className="w-3 h-3 animate-spin" />}
@@ -174,10 +125,9 @@ function QuickRunPanel({ onGenerated }: QuickRunProps) {
     );
   }
 
-  const totalSymbols = WATCHLIST_SECTIONS.reduce((n, s) => n + s.symbols.length, 0);
-
   return (
     <div className="glass rounded-2xl overflow-hidden">
+      {/* Header */}
       <button
         onClick={() => setOpen((v) => !v)}
         className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-white/[0.02] transition-colors"
@@ -186,47 +136,108 @@ function QuickRunPanel({ onGenerated }: QuickRunProps) {
           <Send className="w-4 h-4 text-brand-400" />
           <span className="text-sm font-semibold">Quick Generate</span>
           <span className="text-[11px] text-slate-500 font-mono">
-            {totalSymbols} symbols — US stocks, ETFs, Crypto, Forex, NGX
+            {TOTAL_SYMBOLS} symbols — US Stocks, ETFs, Crypto, Forex, NGX
           </span>
         </div>
         <span className="text-xs text-slate-500">{open ? "▲" : "▼"}</span>
       </button>
 
       {open && (
-        <div className="border-t border-white/5 px-5 py-4 space-y-5">
-          {WATCHLIST_SECTIONS.map((section) => (
-            <div key={section.label} className="space-y-2">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] text-slate-500 uppercase tracking-widest font-semibold">
-                  {section.label}
-                </span>
-                {section.badge && (
-                  <span className={clsx(
-                    "text-[9px] font-bold px-1.5 py-0.5 rounded border",
-                    section.assetClass === "ngx"
-                      ? "bg-green-500/10 border-green-500/20 text-green-500"
-                      : "bg-sky-500/10 border-sky-500/20 text-sky-400",
-                  )}>
-                    {section.badge}
-                  </span>
+        <div className="border-t border-white/5 space-y-3">
+          {/* ── Category tabs ─────────────────────────────────────────────── */}
+          <div className="flex gap-1 px-5 pt-4 flex-wrap">
+            {Q_TABS.map((t, i) => (
+              <button
+                key={`${t.label}-${i}`}
+                onClick={() => switchTab(i)}
+                className={clsx(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all",
+                  activeTab === i ? t.color : "border-white/5 text-slate-500 hover:text-slate-300 hover:border-white/10",
                 )}
-                {section.note && (
-                  <span className="text-[10px] text-slate-600 font-mono italic">{section.note}</span>
+              >
+                {t.label}
+                {t.badge && (
+                  <span className="text-[9px] font-bold px-1 rounded border border-current opacity-70">{t.badge}</span>
+                )}
+                <span className={clsx(
+                  "text-[10px] px-1.5 py-0.5 rounded-full font-mono",
+                  activeTab === i ? "bg-white/10" : "bg-surface-700 text-slate-600",
+                )}>
+                  {t.symbols.length}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          {/* ── Search + A-Z filter ───────────────────────────────────────── */}
+          <div className="px-5 space-y-2">
+            {tab.pending && tab.note && (
+              <div className="text-[11px] text-amber-400/80 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 font-mono">
+                {tab.note}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2">
+              <div className="relative max-w-xs">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-500" />
+                <input
+                  value={search}
+                  onChange={(e) => { setSearch(e.target.value.toUpperCase()); setLetter(null); }}
+                  placeholder={`Search ${tab.label}…`}
+                  className="w-full bg-surface-700 border border-white/5 rounded-lg pl-7 pr-7 py-1.5 text-xs font-mono outline-none focus:ring-1 focus:ring-brand-500 placeholder:text-slate-600"
+                />
+                {search && (
+                  <button onClick={() => setSearch("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
+                    <X className="w-3 h-3" />
+                  </button>
                 )}
               </div>
-              <div className="flex flex-wrap gap-1.5">
-                {section.symbols.map((s) => (
-                  <SymbolButton key={s} symbol={s} assetClass={section.assetClass} badge={section.badge} />
+              <span className="text-[10px] text-slate-600 font-mono shrink-0">
+                {visible.length}/{tab.symbols.length}
+              </span>
+            </div>
+
+            {/* A-Z letter chips */}
+            {!search && availLetters.length > 1 && (
+              <div className="flex flex-wrap gap-0.5">
+                <button
+                  onClick={() => setLetter(null)}
+                  className={clsx(
+                    "px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold border transition-all",
+                    !letter ? "bg-brand-500/20 border-brand-500/40 text-brand-400" : "border-white/5 text-slate-500 hover:text-slate-300",
+                  )}
+                >All</button>
+                {availLetters.map((l) => (
+                  <button
+                    key={l}
+                    onClick={() => setLetter(letter === l ? null : l)}
+                    className={clsx(
+                      "px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold border transition-all",
+                      letter === l
+                        ? "bg-brand-500/20 border-brand-500/40 text-brand-400"
+                        : "border-white/5 text-slate-500 hover:text-slate-300",
+                    )}
+                  >{l}</button>
                 ))}
               </div>
-            </div>
-          ))}
+            )}
+          </div>
 
-          {done.length > 0 && (
-            <p className="text-[11px] text-emerald-400 font-mono">
-              ✓ {done.length} signal{done.length !== 1 ? "s" : ""} generated — refreshing feed…
-            </p>
-          )}
+          {/* ── Symbol buttons ────────────────────────────────────────────── */}
+          <div className="px-5 pb-4">
+            <div className="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto pr-1">
+              {visible.length === 0
+                ? <span className="text-xs text-slate-600 font-mono py-1">No matches</span>
+                : visible.map((s) => <SymbolBtn key={s} symbol={s} />)
+              }
+            </div>
+
+            {done.length > 0 && (
+              <p className="text-[11px] text-emerald-400 font-mono mt-3">
+                ✓ {done.length} signal{done.length !== 1 ? "s" : ""} generated — refreshing feed…
+              </p>
+            )}
+          </div>
         </div>
       )}
     </div>

@@ -24,22 +24,122 @@ export type IndicatorPoint = {
 };
 
 const SEED: Record<string, { base: number; vol: number }> = {
-  // Stocks
-  AAPL:    { base: 191.5,  vol: 0.012 },
-  MSFT:    { base: 408.2,  vol: 0.010 },
-  NVDA:    { base: 512.8,  vol: 0.022 },
-  TSLA:    { base: 248.4,  vol: 0.030 },
-  // ETFs
-  SPY:     { base: 579.4,  vol: 0.008 },
-  QQQ:     { base: 484.2,  vol: 0.011 },
-  IWM:     { base: 215.6,  vol: 0.013 },
-  GLD:     { base: 235.8,  vol: 0.007 },
-  TLT:     { base: 91.4,   vol: 0.009 },
-  XLK:     { base: 227.3,  vol: 0.012 },
-  EEM:     { base: 43.9,   vol: 0.014 },
-  // Crypto
-  BTCUSDT: { base: 67200,  vol: 0.028 },
-  ETHUSDT: { base: 3480,   vol: 0.025 },
+  // ── US Stocks ────────────────────────────────────────────────────────────────
+  AAPL:  { base: 191.5, vol: 0.012 }, MSFT:  { base: 408.2, vol: 0.010 },
+  NVDA:  { base: 512.8, vol: 0.022 }, TSLA:  { base: 248.4, vol: 0.030 },
+  AMZN:  { base: 182.0, vol: 0.016 }, GOOGL: { base: 175.0, vol: 0.014 },
+  META:  { base: 520.0, vol: 0.018 }, JPM:   { base: 200.0, vol: 0.012 },
+  BAC:   { base:  38.0, vol: 0.014 }, V:     { base: 275.0, vol: 0.010 },
+  UNH:   { base: 510.0, vol: 0.011 }, LLY:   { base: 800.0, vol: 0.018 },
+  AVGO:  { base: 175.0, vol: 0.020 }, XOM:   { base: 115.0, vol: 0.013 },
+  MA:    { base: 465.0, vol: 0.011 }, HD:    { base: 360.0, vol: 0.011 },
+  PG:    { base: 165.0, vol: 0.008 }, COST:  { base: 830.0, vol: 0.012 },
+  JNJ:   { base: 147.0, vol: 0.009 }, MRK:   { base: 128.0, vol: 0.010 },
+  CVX:   { base: 155.0, vol: 0.013 }, ABBV:  { base: 178.0, vol: 0.012 },
+  KO:    { base:  62.0, vol: 0.007 }, PEP:   { base: 175.0, vol: 0.008 },
+  NFLX:  { base: 630.0, vol: 0.020 }, TMO:   { base: 555.0, vol: 0.012 },
+  ORCL:  { base: 125.0, vol: 0.014 }, AMD:   { base: 165.0, vol: 0.025 },
+  CRM:   { base: 295.0, vol: 0.016 }, CSCO:  { base:  48.0, vol: 0.011 },
+  ACN:   { base: 320.0, vol: 0.011 }, MCD:   { base: 280.0, vol: 0.009 },
+  LIN:   { base: 460.0, vol: 0.010 }, ADBE:  { base: 450.0, vol: 0.016 },
+  INTC:  { base:  26.0, vol: 0.020 }, WMT:   { base:  88.0, vol: 0.009 },
+  DHR:   { base: 230.0, vol: 0.012 }, TXN:   { base: 185.0, vol: 0.012 },
+  IBM:   { base: 185.0, vol: 0.010 }, INTU:  { base: 660.0, vol: 0.015 },
+  BKNG:  { base:3800.0, vol: 0.016 }, ISRG:  { base: 500.0, vol: 0.014 },
+  SPGI:  { base: 460.0, vol: 0.010 }, NOW:   { base: 800.0, vol: 0.018 },
+  PANW:  { base: 320.0, vol: 0.020 }, SNOW:  { base: 155.0, vol: 0.030 },
+  PLTR:  { base:  25.0, vol: 0.035 }, UBER:  { base:  72.0, vol: 0.020 },
+  COIN:  { base: 180.0, vol: 0.040 }, SHOP:  { base:  70.0, vol: 0.025 },
+  SQ:    { base:  70.0, vol: 0.028 }, PYPL:  { base:  65.0, vol: 0.020 },
+  SNAP:  { base:  12.0, vol: 0.040 }, RBLX:  { base:  40.0, vol: 0.035 },
+  ABNB:  { base: 140.0, vol: 0.022 }, DKNG:  { base:  38.0, vol: 0.030 },
+  HOOD:  { base:  18.0, vol: 0.035 }, ARM:   { base: 130.0, vol: 0.030 },
+  SMCI:  { base: 800.0, vol: 0.050 }, BABA:  { base:  78.0, vol: 0.025 },
+  GS:    { base: 480.0, vol: 0.014 }, MS:    { base: 100.0, vol: 0.014 },
+  BLK:   { base: 860.0, vol: 0.012 }, AXP:   { base: 225.0, vol: 0.013 },
+  C:     { base:  62.0, vol: 0.015 }, DE:    { base: 380.0, vol: 0.013 },
+  CAT:   { base: 355.0, vol: 0.014 }, HON:   { base: 205.0, vol: 0.011 },
+  RTX:   { base: 100.0, vol: 0.012 }, GE:    { base: 155.0, vol: 0.018 },
+  ETN:   { base: 290.0, vol: 0.013 }, LMT:   { base: 460.0, vol: 0.010 },
+  BA:    { base: 175.0, vol: 0.018 }, NEE:   { base:  75.0, vol: 0.012 },
+  T:     { base:  18.0, vol: 0.010 }, AMGN:  { base: 290.0, vol: 0.011 },
+  GILD:  { base:  85.0, vol: 0.012 }, SBUX:  { base:  90.0, vol: 0.013 },
+  BX:    { base: 130.0, vol: 0.016 }, DIS:   { base: 100.0, vol: 0.015 },
+  PLD:   { base: 115.0, vol: 0.012 }, PM:    { base: 100.0, vol: 0.010 },
+  ABT:   { base: 108.0, vol: 0.011 }, MDLZ:  { base:  68.0, vol: 0.009 },
+  MO:    { base:  43.0, vol: 0.009 }, ADI:   { base: 220.0, vol: 0.015 },
+  // ── ETFs ─────────────────────────────────────────────────────────────────────
+  SPY:   { base: 579.4, vol: 0.008 }, QQQ:   { base: 484.2, vol: 0.011 },
+  IWM:   { base: 215.6, vol: 0.013 }, GLD:   { base: 235.8, vol: 0.007 },
+  TLT:   { base:  91.4, vol: 0.009 }, XLK:   { base: 227.3, vol: 0.012 },
+  EEM:   { base:  43.9, vol: 0.014 }, VTI:   { base: 245.0, vol: 0.008 },
+  IVV:   { base: 578.0, vol: 0.008 }, DIA:   { base: 385.0, vol: 0.009 },
+  RSP:   { base: 162.0, vol: 0.009 }, SCHB:  { base: 248.0, vol: 0.008 },
+  VEA:   { base:  48.0, vol: 0.009 }, ARKK:  { base:  45.0, vol: 0.025 },
+  XLV:   { base: 145.0, vol: 0.009 }, XLU:   { base:  68.0, vol: 0.009 },
+  XLRE:  { base:  40.0, vol: 0.011 }, SOXX:  { base: 210.0, vol: 0.018 },
+  IBIT:  { base:  38.0, vol: 0.028 }, BITX:  { base:  55.0, vol: 0.040 },
+  CIBR:  { base:  56.0, vol: 0.015 }, BOTZ:  { base:  25.0, vol: 0.018 },
+  ROBO:  { base:  55.0, vol: 0.018 }, HACK:  { base:  62.0, vol: 0.015 },
+  AIQ:   { base:  42.0, vol: 0.018 }, UFO:   { base:  16.0, vol: 0.018 },
+  SCHD:  { base:  78.0, vol: 0.008 }, VNQ:   { base:  86.0, vol: 0.011 },
+  XLF:   { base:  42.0, vol: 0.012 }, XLE:   { base:  88.0, vol: 0.013 },
+  XLB:   { base:  88.0, vol: 0.011 }, XLI:   { base: 120.0, vol: 0.010 },
+  XLC:   { base:  80.0, vol: 0.012 }, XLP:   { base:  78.0, vol: 0.008 },
+  SPDW:  { base:  36.0, vol: 0.010 }, SPEM:  { base:  38.0, vol: 0.013 },
+  VTIP:  { base:  49.0, vol: 0.005 }, HYG:   { base:  78.0, vol: 0.008 },
+  LQD:   { base: 108.0, vol: 0.008 }, SLV:   { base:  27.0, vol: 0.020 },
+  AGG:   { base:  97.0, vol: 0.005 }, BND:   { base:  73.0, vol: 0.005 },
+  IEF:   { base:  96.0, vol: 0.007 }, SHY:   { base:  83.0, vol: 0.003 },
+  TIP:   { base: 108.0, vol: 0.006 },
+  // ── Crypto ───────────────────────────────────────────────────────────────────
+  BTCUSDT:  { base: 67200,  vol: 0.028 }, ETHUSDT:  { base:  3480, vol: 0.025 },
+  SOLUSDT:  { base:   150,  vol: 0.035 }, BNBUSDT:  { base:   580, vol: 0.025 },
+  XRPUSDT:  { base:  0.52,  vol: 0.040 }, ADAUSDT:  { base:  0.44, vol: 0.040 },
+  DOGEUSDT: { base:  0.14,  vol: 0.045 }, AVAXUSDT: { base:    35, vol: 0.040 },
+  LINKUSDT: { base:    18,  vol: 0.035 }, DOTUSDT:  { base:   7.5, vol: 0.035 },
+  MATICUSDT:{ base:  0.85,  vol: 0.040 }, LTCUSDT:  { base:    82, vol: 0.030 },
+  UNIUSDT:  { base:    10,  vol: 0.040 }, AAVEUSDT: { base:   120, vol: 0.035 },
+  ATOMUSDT: { base:     9,  vol: 0.035 }, NEARUSDT: { base:   5.5, vol: 0.040 },
+  APTUSDT:  { base:    10,  vol: 0.040 }, SUIUSDT:  { base:   1.5, vol: 0.045 },
+  // ── Forex (quoted in majors; pips vol) ───────────────────────────────────────
+  EURUSD: { base: 1.085,  vol: 0.004 }, GBPUSD: { base: 1.265,  vol: 0.005 },
+  USDJPY: { base: 148.5,  vol: 0.004 }, AUDUSD: { base: 0.658,  vol: 0.006 },
+  USDCHF: { base: 0.895,  vol: 0.004 }, USDCAD: { base: 1.355,  vol: 0.004 },
+  NZDUSD: { base: 0.612,  vol: 0.006 }, EURGBP: { base: 0.858,  vol: 0.003 },
+  EURJPY: { base: 161.2,  vol: 0.005 }, GBPJPY: { base: 188.0,  vol: 0.006 },
+  AUDJPY: { base:  97.8,  vol: 0.006 }, EURCHF: { base: 0.970,  vol: 0.004 },
+  GBPCHF: { base:  1.130, vol: 0.005 }, EURCAD: { base: 1.469,  vol: 0.005 },
+  CADJPY: { base: 109.5,  vol: 0.005 }, AUDNZD: { base: 1.075,  vol: 0.004 },
+  NZDJPY: { base:  91.0,  vol: 0.006 }, XAUUSD: { base: 2350.0, vol: 0.010 },
+  XAGUSD: { base:  27.5,  vol: 0.018 }, XAUEUR: { base: 2167.0, vol: 0.010 },
+  XPTUSD: { base: 980.0,  vol: 0.015 },
+  // ── NGX — prices in NGN ──────────────────────────────────────────────────────
+  DANGCEM:   { base: 825.0,  vol: 0.018 }, AIRTELAFRI: { base:1800.0, vol: 0.020 },
+  MTNN:      { base: 225.0,  vol: 0.016 }, BUAFOODS:   { base: 370.0, vol: 0.018 },
+  SEPLAT:    { base:4200.0,  vol: 0.022 }, BUACEMENT:  { base: 116.0, vol: 0.018 },
+  GTCO:      { base:  55.0,  vol: 0.020 }, ZENITHBANK: { base:  42.0, vol: 0.020 },
+  ACCESSCORP:{ base:  24.0,  vol: 0.022 }, UBA:        { base:  24.5, vol: 0.022 },
+  STANBIC:   { base:  73.0,  vol: 0.016 }, FBNH:       { base:  23.0, vol: 0.022 },
+  FIDELITYBK:{ base:  12.0,  vol: 0.022 }, FCMB:       { base:   8.5, vol: 0.025 },
+  STERLING:  { base:   4.5,  vol: 0.030 }, WEMABANK:   { base:   7.5, vol: 0.025 },
+  JAIZBANK:  { base:   3.2,  vol: 0.030 }, UNIONBANK:  { base:   7.8, vol: 0.025 },
+  TRANSCORP: { base:  18.0,  vol: 0.025 }, NB:         { base:  26.0, vol: 0.018 },
+  NESTLE:    { base:1000.0,  vol: 0.016 }, PRESCO:     { base: 455.0, vol: 0.018 },
+  OKOMUOIL:  { base: 350.0,  vol: 0.018 }, FLOURMILL:  { base:  28.0, vol: 0.020 },
+  DANGSUGAR: { base:  27.0,  vol: 0.022 }, CADBURY:    { base:  25.0, vol: 0.020 },
+  UNILEVER:  { base:  23.0,  vol: 0.020 }, GUINNESS:   { base:  80.0, vol: 0.020 },
+  INTBREW:   { base:   4.5,  vol: 0.030 }, NASCON:     { base:  60.0, vol: 0.022 },
+  CONOIL:    { base:  98.0,  vol: 0.022 }, TOTALENERGIES:{ base:330.0,vol: 0.018 },
+  OANDO:     { base:  32.0,  vol: 0.025 }, GEREGU:     { base: 850.0, vol: 0.022 },
+  TRANSCOHOT:{ base: 230.0,  vol: 0.020 }, BERGER:     { base:  14.0, vol: 0.025 },
+  FIDSON:    { base:  15.0,  vol: 0.025 }, MAYBAKER:   { base:   8.0, vol: 0.025 },
+  PZ:        { base:  38.0,  vol: 0.022 }, WAPCO:      { base:  42.0, vol: 0.020 },
+  CUSTODIAN: { base:  12.0,  vol: 0.025 }, LINKASSURE: { base:   1.5, vol: 0.030 },
+  JBERGER:   { base: 122.0,  vol: 0.022 }, CCNN:       { base:  32.0, vol: 0.025 },
+  LIVESTOCK: { base:   3.5,  vol: 0.030 }, NEIMETH:    { base:   3.5, vol: 0.030 },
+  CHAMS:     { base:   1.8,  vol: 0.035 }, HONYFLOUR:  { base:   6.0, vol: 0.025 },
+  CAPHOTEL:  { base:   5.5,  vol: 0.025 }, CILEASING:  { base:   5.0, vol: 0.025 },
 };
 
 function rng(seed: number) {
@@ -510,7 +610,65 @@ export function getEtfData(symbol: string): EtfMetrics | null {
   return ETF_DATA[symbol] ?? null;
 }
 
-export const ETF_LIST    = ["SPY", "QQQ", "IWM", "GLD", "TLT", "XLK", "EEM"];
-export const STOCK_LIST  = ["AAPL", "MSFT", "NVDA", "TSLA"];
-export const CRYPTO_LIST = ["BTCUSDT", "ETHUSDT"];
-export const SYMBOLS = [...STOCK_LIST, ...ETF_LIST, ...CRYPTO_LIST];
+export const STOCK_LIST: string[] = [
+  // Mega Cap
+  "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","JPM","V","UNH",
+  "LLY","AVGO","XOM","MA","HD","PG","COST","JNJ","MRK","CVX",
+  // Large Cap
+  "ABBV","BAC","KO","PEP","NFLX","TMO","ORCL","AMD","CRM","CSCO",
+  "ACN","MCD","LIN","ADBE","INTC","WMT","DHR","TXN","IBM","INTU",
+  // Growth / Tech
+  "BKNG","ISRG","SPGI","NOW","PANW","SNOW","PLTR","UBER","COIN","SHOP",
+  "SQ","PYPL","SNAP","RBLX","ABNB","DKNG","HOOD","ARM","SMCI","BABA",
+  // Financials / Industrials
+  "GS","MS","BLK","AXP","C","DE","CAT","HON","RTX","GE",
+  "ETN","LMT","BA","NEE","T","AMGN","GILD","SBUX","BX","DIS",
+  // Additional
+  "PLD","PM","ABT","MDLZ","MO","ADI",
+];
+
+export const ETF_LIST: string[] = [
+  // Broad Market
+  "SPY","QQQ","IWM","VTI","IVV","DIA","RSP","SCHB","VEA","EEM",
+  // Sector / Thematic
+  "XLK","XLF","XLE","XLV","XLU","XLI","XLRE","XLB","XLC","XLP",
+  "SOXX","ARKK","IBIT","BITX","CIBR","BOTZ","ROBO","HACK","AIQ","UFO",
+  // Fixed Income / Commodities
+  "TLT","IEF","SHY","AGG","LQD","HYG","TIP","BND","GLD","SLV",
+  // International
+  "SPDW","SPEM","SCHD","VNQ","VTIP",
+];
+
+export const CRYPTO_LIST: string[] = [
+  "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","ADAUSDT",
+  "DOGEUSDT","AVAXUSDT","LINKUSDT","DOTUSDT","MATICUSDT","LTCUSDT",
+  "UNIUSDT","AAVEUSDT","ATOMUSDT","NEARUSDT","APTUSDT","SUIUSDT",
+];
+
+export const FOREX_LIST: string[] = [
+  // Majors
+  "EURUSD","GBPUSD","USDJPY","AUDUSD","USDCHF","USDCAD","NZDUSD",
+  // Crosses
+  "EURGBP","EURJPY","GBPJPY","AUDJPY","EURCHF","GBPCHF","EURCAD",
+  "CADJPY","AUDNZD","NZDJPY",
+  // Metals
+  "XAUUSD","XAGUSD","XAUEUR","XPTUSD",
+];
+
+export const NGX_LIST: string[] = [
+  // Banking
+  "GTCO","ZENITHBANK","ACCESSCORP","UBA","STANBIC","FBNH",
+  "FIDELITYBK","FCMB","STERLING","WEMABANK","JAIZBANK","UNIONBANK",
+  // Industrial / Energy
+  "DANGCEM","BUACEMENT","WAPCO","CCNN","JBERGER","BERGER",
+  "TRANSCORP","GEREGU","SEPLAT","OANDO","CONOIL","TOTALENERGIES",
+  // Consumer / Telecoms
+  "AIRTELAFRI","MTNN","BUAFOODS","NESTLE","DANGSUGAR","FLOURMILL",
+  "NB","GUINNESS","INTBREW","CADBURY","UNILEVER","HONYFLOUR",
+  // Agriculture / Health / Other
+  "PRESCO","OKOMUOIL","LIVESTOCK","FIDSON","MAYBAKER","NEIMETH",
+  "PZ","NASCON","CUSTODIAN","CHAMS","CAPHOTEL","LINKASSURE",
+  "TRANSCOHOT","CILEASING",
+];
+
+export const SYMBOLS = [...STOCK_LIST, ...ETF_LIST, ...CRYPTO_LIST, ...FOREX_LIST, ...NGX_LIST];

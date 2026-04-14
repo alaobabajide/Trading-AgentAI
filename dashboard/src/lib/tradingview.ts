@@ -1,42 +1,262 @@
 /** TradingView symbol mapping and widget helpers. */
 
+export type TvGroup = "Stocks" | "ETFs" | "Crypto" | "Forex" | "NGX";
+
 export type TvSymbol = {
-  tv: string;          // exchange:symbol used by TradingView
-  label: string;       // display name
-  group: "Stocks" | "ETFs" | "Crypto";
+  tv:          string;    // exchange:symbol used by TradingView widget
+  label:       string;    // display ticker
+  group:       TvGroup;
   description: string;
 };
 
 export const TV_SYMBOLS: TvSymbol[] = [
-  // Stocks
-  { tv: "NASDAQ:AAPL",  label: "AAPL",    group: "Stocks", description: "Apple Inc." },
-  { tv: "NASDAQ:MSFT",  label: "MSFT",    group: "Stocks", description: "Microsoft Corp." },
-  { tv: "NASDAQ:NVDA",  label: "NVDA",    group: "Stocks", description: "NVIDIA Corp." },
-  { tv: "NASDAQ:TSLA",  label: "TSLA",    group: "Stocks", description: "Tesla Inc." },
-  // ETFs
-  { tv: "AMEX:SPY",     label: "SPY",     group: "ETFs",   description: "SPDR S&P 500 ETF" },
-  { tv: "NASDAQ:QQQ",   label: "QQQ",     group: "ETFs",   description: "Invesco QQQ Trust" },
-  { tv: "AMEX:IWM",     label: "IWM",     group: "ETFs",   description: "iShares Russell 2000" },
-  { tv: "AMEX:GLD",     label: "GLD",     group: "ETFs",   description: "SPDR Gold Shares" },
-  { tv: "NASDAQ:TLT",   label: "TLT",     group: "ETFs",   description: "iShares 20+ Yr Treasury" },
-  { tv: "AMEX:XLK",     label: "XLK",     group: "ETFs",   description: "Technology Select SPDR" },
-  { tv: "AMEX:EEM",     label: "EEM",     group: "ETFs",   description: "iShares MSCI EM ETF" },
-  // Crypto
-  { tv: "BINANCE:BTCUSDT", label: "BTC/USDT", group: "Crypto", description: "Bitcoin / Tether" },
-  { tv: "BINANCE:ETHUSDT", label: "ETH/USDT", group: "Crypto", description: "Ethereum / Tether" },
+  // ── US Stocks — Mega Cap ─────────────────────────────────────────────────────
+  { tv: "NASDAQ:AAPL",  label: "AAPL",  group: "Stocks", description: "Apple Inc." },
+  { tv: "NASDAQ:MSFT",  label: "MSFT",  group: "Stocks", description: "Microsoft Corp." },
+  { tv: "NASDAQ:NVDA",  label: "NVDA",  group: "Stocks", description: "NVIDIA Corp." },
+  { tv: "NASDAQ:AMZN",  label: "AMZN",  group: "Stocks", description: "Amazon.com Inc." },
+  { tv: "NASDAQ:GOOGL", label: "GOOGL", group: "Stocks", description: "Alphabet Inc." },
+  { tv: "NASDAQ:META",  label: "META",  group: "Stocks", description: "Meta Platforms Inc." },
+  { tv: "NASDAQ:TSLA",  label: "TSLA",  group: "Stocks", description: "Tesla Inc." },
+  { tv: "NYSE:JPM",     label: "JPM",   group: "Stocks", description: "JPMorgan Chase" },
+  { tv: "NYSE:V",       label: "V",     group: "Stocks", description: "Visa Inc." },
+  { tv: "NYSE:UNH",     label: "UNH",   group: "Stocks", description: "UnitedHealth Group" },
+  { tv: "NYSE:LLY",     label: "LLY",   group: "Stocks", description: "Eli Lilly" },
+  { tv: "NASDAQ:AVGO",  label: "AVGO",  group: "Stocks", description: "Broadcom Inc." },
+  { tv: "NYSE:XOM",     label: "XOM",   group: "Stocks", description: "Exxon Mobil" },
+  { tv: "NYSE:MA",      label: "MA",    group: "Stocks", description: "Mastercard Inc." },
+  { tv: "NYSE:HD",      label: "HD",    group: "Stocks", description: "Home Depot" },
+  { tv: "NYSE:PG",      label: "PG",    group: "Stocks", description: "Procter & Gamble" },
+  { tv: "NASDAQ:COST",  label: "COST",  group: "Stocks", description: "Costco Wholesale" },
+  { tv: "NYSE:JNJ",     label: "JNJ",   group: "Stocks", description: "Johnson & Johnson" },
+  { tv: "NYSE:MRK",     label: "MRK",   group: "Stocks", description: "Merck & Co." },
+  { tv: "NYSE:CVX",     label: "CVX",   group: "Stocks", description: "Chevron Corp." },
+  // ── US Stocks — Large Cap ────────────────────────────────────────────────────
+  { tv: "NYSE:ABBV",    label: "ABBV",  group: "Stocks", description: "AbbVie Inc." },
+  { tv: "NYSE:BAC",     label: "BAC",   group: "Stocks", description: "Bank of America" },
+  { tv: "NYSE:KO",      label: "KO",    group: "Stocks", description: "Coca-Cola Co." },
+  { tv: "NASDAQ:PEP",   label: "PEP",   group: "Stocks", description: "PepsiCo Inc." },
+  { tv: "NASDAQ:NFLX",  label: "NFLX",  group: "Stocks", description: "Netflix Inc." },
+  { tv: "NYSE:TMO",     label: "TMO",   group: "Stocks", description: "Thermo Fisher Scientific" },
+  { tv: "NYSE:ORCL",    label: "ORCL",  group: "Stocks", description: "Oracle Corp." },
+  { tv: "NASDAQ:AMD",   label: "AMD",   group: "Stocks", description: "Advanced Micro Devices" },
+  { tv: "NYSE:CRM",     label: "CRM",   group: "Stocks", description: "Salesforce Inc." },
+  { tv: "NASDAQ:CSCO",  label: "CSCO",  group: "Stocks", description: "Cisco Systems" },
+  { tv: "NYSE:ACN",     label: "ACN",   group: "Stocks", description: "Accenture PLC" },
+  { tv: "NYSE:MCD",     label: "MCD",   group: "Stocks", description: "McDonald's Corp." },
+  { tv: "NYSE:LIN",     label: "LIN",   group: "Stocks", description: "Linde PLC" },
+  { tv: "NASDAQ:ADBE",  label: "ADBE",  group: "Stocks", description: "Adobe Inc." },
+  { tv: "NASDAQ:INTC",  label: "INTC",  group: "Stocks", description: "Intel Corp." },
+  { tv: "NYSE:WMT",     label: "WMT",   group: "Stocks", description: "Walmart Inc." },
+  { tv: "NYSE:DHR",     label: "DHR",   group: "Stocks", description: "Danaher Corp." },
+  { tv: "NASDAQ:TXN",   label: "TXN",   group: "Stocks", description: "Texas Instruments" },
+  { tv: "NYSE:IBM",     label: "IBM",   group: "Stocks", description: "IBM Corp." },
+  { tv: "NASDAQ:INTU",  label: "INTU",  group: "Stocks", description: "Intuit Inc." },
+  // ── US Stocks — Growth / Tech ─────────────────────────────────────────────────
+  { tv: "NASDAQ:BKNG",  label: "BKNG",  group: "Stocks", description: "Booking Holdings" },
+  { tv: "NASDAQ:ISRG",  label: "ISRG",  group: "Stocks", description: "Intuitive Surgical" },
+  { tv: "NYSE:SPGI",    label: "SPGI",  group: "Stocks", description: "S&P Global Inc." },
+  { tv: "NYSE:NOW",     label: "NOW",   group: "Stocks", description: "ServiceNow Inc." },
+  { tv: "NASDAQ:PANW",  label: "PANW",  group: "Stocks", description: "Palo Alto Networks" },
+  { tv: "NYSE:SNOW",    label: "SNOW",  group: "Stocks", description: "Snowflake Inc." },
+  { tv: "NYSE:PLTR",    label: "PLTR",  group: "Stocks", description: "Palantir Technologies" },
+  { tv: "NYSE:UBER",    label: "UBER",  group: "Stocks", description: "Uber Technologies" },
+  { tv: "NASDAQ:COIN",  label: "COIN",  group: "Stocks", description: "Coinbase Global" },
+  { tv: "NYSE:SHOP",    label: "SHOP",  group: "Stocks", description: "Shopify Inc." },
+  { tv: "NYSE:SQ",      label: "SQ",    group: "Stocks", description: "Block Inc." },
+  { tv: "NASDAQ:PYPL",  label: "PYPL",  group: "Stocks", description: "PayPal Holdings" },
+  { tv: "NYSE:SNAP",    label: "SNAP",  group: "Stocks", description: "Snap Inc." },
+  { tv: "NYSE:RBLX",    label: "RBLX",  group: "Stocks", description: "Roblox Corp." },
+  { tv: "NASDAQ:ABNB",  label: "ABNB",  group: "Stocks", description: "Airbnb Inc." },
+  { tv: "NASDAQ:DKNG",  label: "DKNG",  group: "Stocks", description: "DraftKings Inc." },
+  { tv: "NASDAQ:HOOD",  label: "HOOD",  group: "Stocks", description: "Robinhood Markets" },
+  { tv: "NASDAQ:ARM",   label: "ARM",   group: "Stocks", description: "Arm Holdings PLC" },
+  { tv: "NASDAQ:SMCI",  label: "SMCI",  group: "Stocks", description: "Super Micro Computer" },
+  { tv: "NYSE:BABA",    label: "BABA",  group: "Stocks", description: "Alibaba Group" },
+  // ── US Stocks — Financials / Industrials ──────────────────────────────────────
+  { tv: "NYSE:GS",      label: "GS",    group: "Stocks", description: "Goldman Sachs" },
+  { tv: "NYSE:MS",      label: "MS",    group: "Stocks", description: "Morgan Stanley" },
+  { tv: "NYSE:BLK",     label: "BLK",   group: "Stocks", description: "BlackRock Inc." },
+  { tv: "NYSE:AXP",     label: "AXP",   group: "Stocks", description: "American Express" },
+  { tv: "NYSE:C",       label: "C",     group: "Stocks", description: "Citigroup Inc." },
+  { tv: "NYSE:DE",      label: "DE",    group: "Stocks", description: "Deere & Company" },
+  { tv: "NYSE:CAT",     label: "CAT",   group: "Stocks", description: "Caterpillar Inc." },
+  { tv: "NASDAQ:HON",   label: "HON",   group: "Stocks", description: "Honeywell International" },
+  { tv: "NYSE:RTX",     label: "RTX",   group: "Stocks", description: "RTX Corp." },
+  { tv: "NYSE:GE",      label: "GE",    group: "Stocks", description: "GE Aerospace" },
+  { tv: "NYSE:ETN",     label: "ETN",   group: "Stocks", description: "Eaton Corp." },
+  { tv: "NYSE:LMT",     label: "LMT",   group: "Stocks", description: "Lockheed Martin" },
+  { tv: "NYSE:BA",      label: "BA",    group: "Stocks", description: "Boeing Co." },
+  { tv: "NYSE:NEE",     label: "NEE",   group: "Stocks", description: "NextEra Energy" },
+  { tv: "NYSE:T",       label: "T",     group: "Stocks", description: "AT&T Inc." },
+  { tv: "NASDAQ:AMGN",  label: "AMGN",  group: "Stocks", description: "Amgen Inc." },
+  { tv: "NASDAQ:GILD",  label: "GILD",  group: "Stocks", description: "Gilead Sciences" },
+  { tv: "NASDAQ:SBUX",  label: "SBUX",  group: "Stocks", description: "Starbucks Corp." },
+  { tv: "NYSE:BX",      label: "BX",    group: "Stocks", description: "Blackstone Inc." },
+  { tv: "NYSE:DIS",     label: "DIS",   group: "Stocks", description: "Walt Disney Co." },
+
+  // ── ETFs — Broad Market ───────────────────────────────────────────────────────
+  { tv: "AMEX:SPY",     label: "SPY",   group: "ETFs", description: "SPDR S&P 500 ETF" },
+  { tv: "NASDAQ:QQQ",   label: "QQQ",   group: "ETFs", description: "Invesco QQQ Trust" },
+  { tv: "AMEX:IWM",     label: "IWM",   group: "ETFs", description: "iShares Russell 2000" },
+  { tv: "AMEX:VTI",     label: "VTI",   group: "ETFs", description: "Vanguard Total Stock Market" },
+  { tv: "AMEX:IVV",     label: "IVV",   group: "ETFs", description: "iShares Core S&P 500" },
+  { tv: "AMEX:DIA",     label: "DIA",   group: "ETFs", description: "SPDR Dow Jones Industrial" },
+  { tv: "AMEX:RSP",     label: "RSP",   group: "ETFs", description: "Invesco S&P 500 Equal Weight" },
+  { tv: "AMEX:SCHB",    label: "SCHB",  group: "ETFs", description: "Schwab US Broad Market" },
+  { tv: "NASDAQ:VEA",   label: "VEA",   group: "ETFs", description: "Vanguard FTSE Dev. Markets" },
+  { tv: "AMEX:EEM",     label: "EEM",   group: "ETFs", description: "iShares MSCI Emerging Markets" },
+  // ── ETFs — Sector / Thematic ─────────────────────────────────────────────────
+  { tv: "AMEX:XLK",     label: "XLK",   group: "ETFs", description: "Technology Select SPDR" },
+  { tv: "AMEX:XLF",     label: "XLF",   group: "ETFs", description: "Financial Select SPDR" },
+  { tv: "AMEX:XLE",     label: "XLE",   group: "ETFs", description: "Energy Select SPDR" },
+  { tv: "AMEX:XLV",     label: "XLV",   group: "ETFs", description: "Health Care Select SPDR" },
+  { tv: "AMEX:XLU",     label: "XLU",   group: "ETFs", description: "Utilities Select SPDR" },
+  { tv: "AMEX:XLI",     label: "XLI",   group: "ETFs", description: "Industrial Select SPDR" },
+  { tv: "AMEX:XLRE",    label: "XLRE",  group: "ETFs", description: "Real Estate Select SPDR" },
+  { tv: "AMEX:XLB",     label: "XLB",   group: "ETFs", description: "Materials Select SPDR" },
+  { tv: "AMEX:XLC",     label: "XLC",   group: "ETFs", description: "Comm Services Select SPDR" },
+  { tv: "AMEX:XLP",     label: "XLP",   group: "ETFs", description: "Consumer Staples Select SPDR" },
+  { tv: "NASDAQ:SOXX",  label: "SOXX",  group: "ETFs", description: "iShares Semiconductor" },
+  { tv: "AMEX:ARKK",    label: "ARKK",  group: "ETFs", description: "ARK Innovation ETF" },
+  { tv: "NASDAQ:IBIT",  label: "IBIT",  group: "ETFs", description: "iShares Bitcoin Trust" },
+  { tv: "NASDAQ:BITX",  label: "BITX",  group: "ETFs", description: "2x Bitcoin Strategy ETF" },
+  { tv: "NASDAQ:CIBR",  label: "CIBR",  group: "ETFs", description: "First Trust Cybersecurity" },
+  { tv: "NASDAQ:BOTZ",  label: "BOTZ",  group: "ETFs", description: "Global X Robotics & AI" },
+  { tv: "NASDAQ:ROBO",  label: "ROBO",  group: "ETFs", description: "ROBO Global Robotics" },
+  { tv: "NASDAQ:HACK",  label: "HACK",  group: "ETFs", description: "ETFMG Cybersecurity" },
+  { tv: "NYSE:AIQ",     label: "AIQ",   group: "ETFs", description: "Global X AI & Technology" },
+  { tv: "AMEX:UFO",     label: "UFO",   group: "ETFs", description: "Procure Space ETF" },
+  // ── ETFs — Fixed Income / Commodities ────────────────────────────────────────
+  { tv: "NASDAQ:TLT",   label: "TLT",   group: "ETFs", description: "iShares 20+ Yr Treasury" },
+  { tv: "NASDAQ:IEF",   label: "IEF",   group: "ETFs", description: "iShares 7-10 Yr Treasury" },
+  { tv: "NASDAQ:SHY",   label: "SHY",   group: "ETFs", description: "iShares 1-3 Yr Treasury" },
+  { tv: "NASDAQ:AGG",   label: "AGG",   group: "ETFs", description: "iShares Core US Agg Bond" },
+  { tv: "NASDAQ:LQD",   label: "LQD",   group: "ETFs", description: "iShares IG Corporate Bond" },
+  { tv: "NASDAQ:HYG",   label: "HYG",   group: "ETFs", description: "iShares HY Corporate Bond" },
+  { tv: "NASDAQ:TIP",   label: "TIP",   group: "ETFs", description: "iShares TIPS Bond" },
+  { tv: "NASDAQ:BND",   label: "BND",   group: "ETFs", description: "Vanguard Total Bond Market" },
+  { tv: "AMEX:GLD",     label: "GLD",   group: "ETFs", description: "SPDR Gold Shares" },
+  { tv: "AMEX:SLV",     label: "SLV",   group: "ETFs", description: "iShares Silver Trust" },
+  { tv: "AMEX:SPDW",    label: "SPDW",  group: "ETFs", description: "SPDR Portfolio Dev. World ex-US" },
+  { tv: "AMEX:SPEM",    label: "SPEM",  group: "ETFs", description: "SPDR Portfolio Emerging Markets" },
+  { tv: "AMEX:SCHD",    label: "SCHD",  group: "ETFs", description: "Schwab US Dividend Equity" },
+  { tv: "AMEX:VNQ",     label: "VNQ",   group: "ETFs", description: "Vanguard Real Estate" },
+  { tv: "NASDAQ:VTIP",  label: "VTIP",  group: "ETFs", description: "Vanguard Short-Term Inflation" },
+
+  // ── Crypto ────────────────────────────────────────────────────────────────────
+  { tv: "BINANCE:BTCUSDT",   label: "BTC/USDT",   group: "Crypto", description: "Bitcoin / Tether" },
+  { tv: "BINANCE:ETHUSDT",   label: "ETH/USDT",   group: "Crypto", description: "Ethereum / Tether" },
+  { tv: "BINANCE:SOLUSDT",   label: "SOL/USDT",   group: "Crypto", description: "Solana / Tether" },
+  { tv: "BINANCE:BNBUSDT",   label: "BNB/USDT",   group: "Crypto", description: "BNB / Tether" },
+  { tv: "BINANCE:XRPUSDT",   label: "XRP/USDT",   group: "Crypto", description: "XRP / Tether" },
+  { tv: "BINANCE:ADAUSDT",   label: "ADA/USDT",   group: "Crypto", description: "Cardano / Tether" },
+  { tv: "BINANCE:DOGEUSDT",  label: "DOGE/USDT",  group: "Crypto", description: "Dogecoin / Tether" },
+  { tv: "BINANCE:AVAXUSDT",  label: "AVAX/USDT",  group: "Crypto", description: "Avalanche / Tether" },
+  { tv: "BINANCE:LINKUSDT",  label: "LINK/USDT",  group: "Crypto", description: "Chainlink / Tether" },
+  { tv: "BINANCE:DOTUSDT",   label: "DOT/USDT",   group: "Crypto", description: "Polkadot / Tether" },
+  { tv: "BINANCE:MATICUSDT", label: "MATIC/USDT", group: "Crypto", description: "Polygon / Tether" },
+  { tv: "BINANCE:LTCUSDT",   label: "LTC/USDT",   group: "Crypto", description: "Litecoin / Tether" },
+  { tv: "BINANCE:UNIUSDT",   label: "UNI/USDT",   group: "Crypto", description: "Uniswap / Tether" },
+  { tv: "BINANCE:AAVEUSDT",  label: "AAVE/USDT",  group: "Crypto", description: "Aave / Tether" },
+  { tv: "BINANCE:ATOMUSDT",  label: "ATOM/USDT",  group: "Crypto", description: "Cosmos / Tether" },
+  { tv: "BINANCE:NEARUSDT",  label: "NEAR/USDT",  group: "Crypto", description: "NEAR Protocol / Tether" },
+  { tv: "BINANCE:APTUSDT",   label: "APT/USDT",   group: "Crypto", description: "Aptos / Tether" },
+  { tv: "BINANCE:SUIUSDT",   label: "SUI/USDT",   group: "Crypto", description: "Sui / Tether" },
+
+  // ── Forex — Majors ────────────────────────────────────────────────────────────
+  { tv: "FX:EURUSD", label: "EUR/USD", group: "Forex", description: "Euro / US Dollar" },
+  { tv: "FX:GBPUSD", label: "GBP/USD", group: "Forex", description: "British Pound / US Dollar" },
+  { tv: "FX:USDJPY", label: "USD/JPY", group: "Forex", description: "US Dollar / Japanese Yen" },
+  { tv: "FX:AUDUSD", label: "AUD/USD", group: "Forex", description: "Australian Dollar / US Dollar" },
+  { tv: "FX:USDCHF", label: "USD/CHF", group: "Forex", description: "US Dollar / Swiss Franc" },
+  { tv: "FX:USDCAD", label: "USD/CAD", group: "Forex", description: "US Dollar / Canadian Dollar" },
+  { tv: "FX:NZDUSD", label: "NZD/USD", group: "Forex", description: "New Zealand Dollar / US Dollar" },
+  // ── Forex — Crosses ───────────────────────────────────────────────────────────
+  { tv: "FX:EURGBP", label: "EUR/GBP", group: "Forex", description: "Euro / British Pound" },
+  { tv: "FX:EURJPY", label: "EUR/JPY", group: "Forex", description: "Euro / Japanese Yen" },
+  { tv: "FX:GBPJPY", label: "GBP/JPY", group: "Forex", description: "British Pound / Japanese Yen" },
+  { tv: "FX:AUDJPY", label: "AUD/JPY", group: "Forex", description: "Australian Dollar / Yen" },
+  { tv: "FX:EURCHF", label: "EUR/CHF", group: "Forex", description: "Euro / Swiss Franc" },
+  { tv: "FX:GBPCHF", label: "GBP/CHF", group: "Forex", description: "British Pound / Swiss Franc" },
+  { tv: "FX:EURCAD", label: "EUR/CAD", group: "Forex", description: "Euro / Canadian Dollar" },
+  { tv: "FX:CADJPY", label: "CAD/JPY", group: "Forex", description: "Canadian Dollar / Yen" },
+  { tv: "FX:AUDNZD", label: "AUD/NZD", group: "Forex", description: "AUD / New Zealand Dollar" },
+  { tv: "FX:NZDJPY", label: "NZD/JPY", group: "Forex", description: "New Zealand Dollar / Yen" },
+  // ── Forex — Metals ────────────────────────────────────────────────────────────
+  { tv: "TVC:GOLD",   label: "XAU/USD", group: "Forex", description: "Gold / US Dollar" },
+  { tv: "TVC:SILVER", label: "XAG/USD", group: "Forex", description: "Silver / US Dollar" },
+  { tv: "TVC:PLATINUM", label: "XPT/USD", group: "Forex", description: "Platinum / US Dollar" },
+
+  // ── NGX — Nigerian Exchange ───────────────────────────────────────────────────
+  { tv: "NGXGROUP:DANGCEM",    label: "DANGCEM",    group: "NGX", description: "Dangote Cement" },
+  { tv: "NGXGROUP:AIRTELAFRI", label: "AIRTELAFRI", group: "NGX", description: "Airtel Africa" },
+  { tv: "NGXGROUP:MTNN",       label: "MTNN",       group: "NGX", description: "MTN Nigeria" },
+  { tv: "NGXGROUP:BUAFOODS",   label: "BUAFOODS",   group: "NGX", description: "BUA Foods" },
+  { tv: "NGXGROUP:SEPLAT",     label: "SEPLAT",     group: "NGX", description: "Seplat Energy" },
+  { tv: "NGXGROUP:BUACEMENT",  label: "BUACEMENT",  group: "NGX", description: "BUA Cement" },
+  { tv: "NGXGROUP:GTCO",       label: "GTCO",       group: "NGX", description: "Guaranty Trust Holding Co." },
+  { tv: "NGXGROUP:ZENITHBANK", label: "ZENITHBANK", group: "NGX", description: "Zenith Bank" },
+  { tv: "NGXGROUP:ACCESSCORP", label: "ACCESSCORP", group: "NGX", description: "Access Holdings" },
+  { tv: "NGXGROUP:UBA",        label: "UBA",        group: "NGX", description: "United Bank for Africa" },
+  { tv: "NGXGROUP:STANBIC",    label: "STANBIC",    group: "NGX", description: "Stanbic IBTC Holdings" },
+  { tv: "NGXGROUP:FBNH",       label: "FBNH",       group: "NGX", description: "FBN Holdings" },
+  { tv: "NGXGROUP:FIDELITYBK", label: "FIDELITYBK", group: "NGX", description: "Fidelity Bank" },
+  { tv: "NGXGROUP:FCMB",       label: "FCMB",       group: "NGX", description: "FCMB Group" },
+  { tv: "NGXGROUP:STERLING",   label: "STERLING",   group: "NGX", description: "Sterling Financial Holdings" },
+  { tv: "NGXGROUP:WEMABANK",   label: "WEMABANK",   group: "NGX", description: "Wema Bank" },
+  { tv: "NGXGROUP:UNIONBANK",  label: "UNIONBANK",  group: "NGX", description: "Union Bank of Nigeria" },
+  { tv: "NGXGROUP:JAIZBANK",   label: "JAIZBANK",   group: "NGX", description: "Jaiz Bank" },
+  { tv: "NGXGROUP:TRANSCORP",  label: "TRANSCORP",  group: "NGX", description: "Transnational Corp." },
+  { tv: "NGXGROUP:NB",         label: "NB",         group: "NGX", description: "Nigerian Breweries" },
+  { tv: "NGXGROUP:NESTLE",     label: "NESTLE",     group: "NGX", description: "Nestlé Nigeria" },
+  { tv: "NGXGROUP:PRESCO",     label: "PRESCO",     group: "NGX", description: "Presco PLC" },
+  { tv: "NGXGROUP:OKOMUOIL",   label: "OKOMUOIL",   group: "NGX", description: "Okomu Oil Palm" },
+  { tv: "NGXGROUP:FLOURMILL",  label: "FLOURMILL",  group: "NGX", description: "Flour Mills of Nigeria" },
+  { tv: "NGXGROUP:DANGSUGAR",  label: "DANGSUGAR",  group: "NGX", description: "Dangote Sugar Refinery" },
+  { tv: "NGXGROUP:CADBURY",    label: "CADBURY",    group: "NGX", description: "Cadbury Nigeria" },
+  { tv: "NGXGROUP:UNILEVER",   label: "UNILEVER",   group: "NGX", description: "Unilever Nigeria" },
+  { tv: "NGXGROUP:GUINNESS",   label: "GUINNESS",   group: "NGX", description: "Guinness Nigeria" },
+  { tv: "NGXGROUP:INTBREW",    label: "INTBREW",    group: "NGX", description: "International Breweries" },
+  { tv: "NGXGROUP:NASCON",     label: "NASCON",     group: "NGX", description: "NASCON Allied Industries" },
+  { tv: "NGXGROUP:CONOIL",     label: "CONOIL",     group: "NGX", description: "Conoil PLC" },
+  { tv: "NGXGROUP:OANDO",      label: "OANDO",      group: "NGX", description: "Oando PLC" },
+  { tv: "NGXGROUP:GEREGU",     label: "GEREGU",     group: "NGX", description: "Geregu Power" },
+  { tv: "NGXGROUP:TRANSCOHOT", label: "TRANSCOHOT", group: "NGX", description: "Transcorp Hotels" },
+  { tv: "NGXGROUP:BERGER",     label: "BERGER",     group: "NGX", description: "Berger Paints Nigeria" },
+  { tv: "NGXGROUP:FIDSON",     label: "FIDSON",     group: "NGX", description: "Fidson Healthcare" },
+  { tv: "NGXGROUP:MAYBAKER",   label: "MAYBAKER",   group: "NGX", description: "May & Baker Nigeria" },
+  { tv: "NGXGROUP:PZ",         label: "PZ",         group: "NGX", description: "PZ Cussons Nigeria" },
+  { tv: "NGXGROUP:WAPCO",      label: "WAPCO",      group: "NGX", description: "Lafarge Africa (WAPCO)" },
+  { tv: "NGXGROUP:CUSTODIAN",  label: "CUSTODIAN",  group: "NGX", description: "Custodian Investment" },
+  { tv: "NGXGROUP:JBERGER",    label: "JBERGER",    group: "NGX", description: "Julius Berger Nigeria" },
+  { tv: "NGXGROUP:CCNN",       label: "CCNN",       group: "NGX", description: "CCNN (Sokoto Cement)" },
+  { tv: "NGXGROUP:LIVESTOCK",  label: "LIVESTOCK",  group: "NGX", description: "Livestock Feeds" },
+  { tv: "NGXGROUP:NEIMETH",    label: "NEIMETH",    group: "NGX", description: "Neimeth International Pharma" },
+  { tv: "NGXGROUP:CHAMS",      label: "CHAMS",      group: "NGX", description: "Chams Holding Company" },
+  { tv: "NGXGROUP:HONYFLOUR",  label: "HONYFLOUR",  group: "NGX", description: "Honeywell Flour Mills" },
+  { tv: "NGXGROUP:CAPHOTEL",   label: "CAPHOTEL",   group: "NGX", description: "Capital Hotel" },
+  { tv: "NGXGROUP:LINKASSURE", label: "LINKASSURE", group: "NGX", description: "Linkage Assurance" },
+  { tv: "NGXGROUP:TRANSCOHOT", label: "TRANSCOHOT", group: "NGX", description: "Transcorp Hotels" },
+  { tv: "NGXGROUP:CILEASING",  label: "CILEASING",  group: "NGX", description: "C&I Leasing" },
 ];
 
-/** Symbol lookup by short label (e.g. "AAPL" → "NASDAQ:AAPL") */
+/** Symbol lookup by short label */
 export function tvSymbol(label: string): string {
-  return TV_SYMBOLS.find((s) => s.label === label || s.label === label.replace("USDT", "/USDT"))?.tv
-    ?? `NASDAQ:${label}`;
+  return (
+    TV_SYMBOLS.find(
+      (s) => s.label === label ||
+             s.label === label.replace("USDT", "/USDT") ||
+             s.label.replace("/", "") === label
+    )?.tv ?? `NASDAQ:${label}`
+  );
 }
 
-/** Ticker tape symbols for the scrolling strip */
-export const TICKER_TAPE_SYMBOLS = TV_SYMBOLS.map((s) => ({
-  proName: s.tv,
-  title: s.label,
-}));
+/** Ticker tape symbols for the scrolling strip — limit to 30 liquid names */
+export const TICKER_TAPE_SYMBOLS = TV_SYMBOLS
+  .filter((s) => ["Stocks", "ETFs", "Crypto"].includes(s.group))
+  .slice(0, 30)
+  .map((s) => ({ proName: s.tv, title: s.label }));
 
 /** Base dark theme config shared across all widgets */
 export const TV_THEME = {
