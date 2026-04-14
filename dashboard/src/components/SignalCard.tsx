@@ -378,29 +378,27 @@ export function SignalCard({ signal }: { signal: Signal }) {
           </div>
 
           {/* Panel B — Investor persona views */}
-          {INVESTORS.some(({ key }) => signal.agent_views[key]) && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <h4 className="text-[10px] text-slate-500 uppercase tracking-widest">
-                  Investor Panel
-                </h4>
-                {panelB && (
-                  <span className="text-[10px] font-mono text-slate-600">
-                    {panelB.bullish}B · {panelB.bearish}Br · {panelB.neutral}N
-                  </span>
-                )}
-              </div>
-              {INVESTORS.map(({ key, label, color }) => (
-                <AgentViewRow
-                  key={key}
-                  agentKey={key}
-                  label={label}
-                  color={color}
-                  views={signal.agent_views}
-                />
-              ))}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <h4 className="text-[10px] text-slate-500 uppercase tracking-widest">
+                Investor Panel
+              </h4>
+              {panelB && (
+                <span className="text-[10px] font-mono text-slate-600">
+                  {panelB.bullish}B · {panelB.bearish}Br · {panelB.neutral}N
+                </span>
+              )}
             </div>
-          )}
+            {INVESTORS.map(({ key, label, color }) => (
+              <AgentViewRow
+                key={key}
+                agentKey={key}
+                label={label}
+                color={color}
+                views={signal.agent_views}
+              />
+            ))}
+          </div>
 
           {/* Vote gate status */}
           <div className={clsx(

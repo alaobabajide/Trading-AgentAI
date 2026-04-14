@@ -31,7 +31,24 @@ function agentViews(
   regime: "TRENDING_UP" | "TRENDING_DOWN" | "RANGING" | "HIGH_VOLATILITY",
 ): Signal["agent_views"] {
   const regimeDir = regime === "TRENDING_UP" ? "BULLISH" : regime === "TRENDING_DOWN" ? "BEARISH" : "NEUTRAL";
+  const bull = direction === "BULLISH";
+  const bear = direction === "BEARISH";
+
+  // Investor personas — each expresses their own philosophy-filtered view.
+  // Buffett/Munger lean neutral unless trend is overwhelmingly clear.
+  // Cohen mirrors the direction (momentum trader).
+  // Bogle almost always stays neutral.
+  const buffettDir  = bull ? "BULLISH"  : bear ? "NEUTRAL"  : "NEUTRAL";
+  const mungerDir   = bull ? "NEUTRAL"  : bear ? "NEUTRAL"  : "NEUTRAL";
+  const lynchDir    = direction;
+  const ackmanDir   = bull ? "BULLISH"  : bear ? "BEARISH"  : "NEUTRAL";
+  const cohenDir    = direction;
+  const dalioDir    = bull ? "BULLISH"  : bear ? "BEARISH"  : "NEUTRAL";
+  const woodDir     = bull ? "BULLISH"  : bear ? "BEARISH"  : "NEUTRAL";
+  const bogleDir    = "NEUTRAL";
+
   return {
+    // Panel A — analysts
     fundamental:  `DIRECTION: ${direction}\nREASONING: ${reasoning}`,
     technical:    `DIRECTION: ${direction}\nREASONING: Technical momentum ${direction.toLowerCase()} — RSI and MACD aligned.`,
     sentiment:    `DIRECTION: ${direction}\nREASONING: Market sentiment broadly ${direction.toLowerCase()} on recent catalysts.`,
@@ -41,6 +58,15 @@ function agentViews(
     regime:       `DIRECTION: ${regimeDir}\nREGIME: ${regime}\nREASONING: ${regime.replace(/_/g, " ")} regime detected.`,
     strategy:     `FIT: ALIGNED\nADJUSTMENT: None needed.\nCOACHING: Signal fits current profile and time horizon.`,
     risk:         JSON.stringify({ action: direction === "BULLISH" ? "BUY" : direction === "BEARISH" ? "SELL" : "HOLD", confidence: 0.75, suggested_position_pct: 0.04, stop_loss_pct: 0.02, take_profit_pct: 0.06, devil_advocate_score: 20, devil_advocate_case: "Counter-thesis: unexpected macro reversal could invalidate this setup.", rationale: reasoning }),
+    // Panel B — investor personas
+    buffett:  `DIRECTION: ${buffettDir}\nREASONING: Paper mode [Buffett/quality] — ${bull ? "secular trend and quarterly momentum support a high-quality long-term position." : "insufficient certainty to deploy capital; Buffett waits for overwhelming evidence."}`,
+    munger:   `DIRECTION: ${mungerDir}\nREASONING: Paper mode [Munger/ultra-selective] — ${bull ? "trend is positive but Munger requires stronger conviction before committing; default NEUTRAL." : "Munger: inaction is preferable to a bad trade; standing aside."}`,
+    lynch:    `DIRECTION: ${lynchDir}\nREASONING: Paper mode [Lynch/GARP] — ${bull ? "multi-timeframe momentum intact; earnings-cycle growth story confirmed by volume." : bear ? "growth story showing signs of deterioration; Lynch would reduce exposure." : "mixed signals across timeframes; GARP criteria not clearly met."}`,
+    ackman:   `DIRECTION: ${ackmanDir}\nREASONING: Paper mode [Ackman/concentrated] — ${bull ? "structural thesis confirmed across timeframes with catalyst volume; Ackman builds position." : bear ? "structural damage detected; Ackman exits concentrated position." : "insufficient conviction for Ackman's concentrated approach."}`,
+    cohen:    `DIRECTION: ${cohenDir}\nREASONING: Paper mode [Cohen/momentum] — ${bull ? "RSI, MACD, short-term ROC all accelerating; flow signals confirm institutional buying." : bear ? "momentum reversing; Cohen cuts position on flow deterioration." : "momentum neutral; Cohen stays flat."}`,
+    dalio:    `DIRECTION: ${dalioDir}\nREASONING: Paper mode [Dalio/all-weather] — ${bull ? "macro regime supportive; balanced risk exposure warranted." : bear ? "risk assets under pressure in current macro regime; reduce exposure." : "balanced regime signals; Dalio holds all-weather allocation."}`,
+    wood:     `DIRECTION: ${woodDir}\nREASONING: Paper mode [Wood/innovation] — ${bull ? "secular innovation trend intact; strong ROC with volume confirms institutional accumulation." : bear ? "secular growth narrative challenged; Wood reassesses conviction." : "transition zone; Wood maintains position but watches growth catalysts."}`,
+    bogle:    `DIRECTION: ${bogleDir}\nREASONING: Paper mode [Bogle/passive] — no extreme structural signals detected; Bogle: own the index, not the individual stock.`,
   };
 }
 
