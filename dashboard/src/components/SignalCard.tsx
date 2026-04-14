@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronUp, Loader2, ShieldAlert, Zap } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2, ShieldAlert, Zap, ChevronsUpDown } from "lucide-react";
 import { format } from "date-fns";
 import { Signal, VoteTally } from "../lib/types";
 import { SignalBadge } from "./SignalBadge";
@@ -230,7 +230,9 @@ function ExecuteButton({ signal, compact = false }: { signal: Signal; compact?: 
 // ── Main card ─────────────────────────────────────────────────────────────────
 
 export function SignalCard({ signal }: { signal: Signal }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded,       setExpanded]       = useState(false);
+  const [showAnalysts,   setShowAnalysts]   = useState(true);
+  const [showInvestors,  setShowInvestors]  = useState(true);
 
   const tier    = signal.tier ?? "WARM";
   const tierCfg = TIER_CONFIG[tier];
@@ -356,17 +358,24 @@ export function SignalCard({ signal }: { signal: Signal }) {
 
           {/* Panel A — Analyst views */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <h4 className="text-[10px] text-slate-500 uppercase tracking-widest">
+            <button
+              onClick={() => setShowAnalysts((v) => !v)}
+              className="w-full flex items-center justify-between group"
+            >
+              <h4 className="text-[10px] text-slate-500 uppercase tracking-widest group-hover:text-slate-400 transition-colors">
                 Analyst Panel
+                <span className="ml-2 text-slate-700 normal-case tracking-normal font-normal">7 agents</span>
               </h4>
-              {panelA && (
-                <span className="text-[10px] font-mono text-slate-600">
-                  {panelA.bullish}B · {panelA.bearish}Br · {panelA.neutral}N
-                </span>
-              )}
-            </div>
-            {ANALYSTS.map(({ key, label, color }) => (
+              <div className="flex items-center gap-2">
+                {panelA && (
+                  <span className="text-[10px] font-mono text-slate-600">
+                    {panelA.bullish}B · {panelA.bearish}Br · {panelA.neutral}N
+                  </span>
+                )}
+                <ChevronsUpDown className="w-3 h-3 text-slate-600 group-hover:text-slate-400 transition-colors" />
+              </div>
+            </button>
+            {showAnalysts && ANALYSTS.map(({ key, label, color }) => (
               <AgentViewRow
                 key={key}
                 agentKey={key}
@@ -379,17 +388,24 @@ export function SignalCard({ signal }: { signal: Signal }) {
 
           {/* Panel B — Investor persona views */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <h4 className="text-[10px] text-slate-500 uppercase tracking-widest">
+            <button
+              onClick={() => setShowInvestors((v) => !v)}
+              className="w-full flex items-center justify-between group"
+            >
+              <h4 className="text-[10px] text-slate-500 uppercase tracking-widest group-hover:text-slate-400 transition-colors">
                 Investor Panel
+                <span className="ml-2 text-slate-700 normal-case tracking-normal font-normal">8 personas</span>
               </h4>
-              {panelB && (
-                <span className="text-[10px] font-mono text-slate-600">
-                  {panelB.bullish}B · {panelB.bearish}Br · {panelB.neutral}N
-                </span>
-              )}
-            </div>
-            {INVESTORS.map(({ key, label, color }) => (
+              <div className="flex items-center gap-2">
+                {panelB && (
+                  <span className="text-[10px] font-mono text-slate-600">
+                    {panelB.bullish}B · {panelB.bearish}Br · {panelB.neutral}N
+                  </span>
+                )}
+                <ChevronsUpDown className="w-3 h-3 text-slate-600 group-hover:text-slate-400 transition-colors" />
+              </div>
+            </button>
+            {showInvestors && INVESTORS.map(({ key, label, color }) => (
               <AgentViewRow
                 key={key}
                 agentKey={key}
