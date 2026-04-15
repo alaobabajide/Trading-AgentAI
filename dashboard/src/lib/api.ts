@@ -72,6 +72,37 @@ export async function fetchCachedSignals(): Promise<Signal[]> {
   return safeJson(res);
 }
 
+// ── Signal persistence helpers ────────────────────────────────────────────────
+
+const SIGNALS_STORAGE_KEY = "ta_signals_cache_v1";
+
+function loadStoredSignals(): Signal[] {
+  try {
+    const raw = localStorage.getItem(SIGNALS_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as Signal[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistSignals(signals: Signal[]) {
+  try { localStorage.setItem(SIGNALS_STORAGE_KEY, JSON.stringify(signals)); } catch { /* quota */ }
+}
+
+/**
+ * Merge server signals into the local list.
+ * - Same symbol → server entry replaces local (it's fresher; re-running brings it to top)
+ * - New symbol  → appended
+ * - Result sorted newest → oldest by generated_at
+ */
+function mergeSignals(local: Signal[], incoming: Signal[]): Signal[] {
+  const bySymbol = new Map<string, Signal>(local.map((s) => [s.symbol, s]));
+  for (const s of incoming) bySymbol.set(s.symbol, s);
+  return [...bySymbol.values()].sort(
+    (a, b) => new Date(b.generated_at).getTime() - new Date(a.generated_at).getTime(),
+  );
+}
+
 // ── React hooks ───────────────────────────────────────────────────────────────
 
 type ApiState = "loading" | "live" | "mock";
@@ -105,27 +136,31 @@ export function usePortfolio() {
 }
 
 /**
- * Loads cached signals from the real API, falls back to mock.
- * Polls every 30s so new signals generated from the Brain Console appear automatically.
- * Exposes a `refresh()` imperative trigger for the manual refresh button.
+ * Loads cached signals from the real API, merges with locally-persisted list.
+ *
+ * Behaviour:
+ * - Signals survive server restarts — stored in localStorage between sessions.
+ * - Generating a signal for an existing symbol updates it in place and brings
+ *   it to the top (newest generated_at sorts first).
+ * - Generating a signal for a new symbol appends it without clearing others.
+ * - Falls back to mock placeholder cards only when no real signals exist yet.
  */
 export function useSignals() {
-  const [signals, setSignals]   = useState<Signal[]>(mockSignals);
+  // liveSignals: only real (non-mock) signals; seed from localStorage
+  const [liveSignals, setLiveSignals] = useState<Signal[]>(() => loadStoredSignals());
   const [apiState, setApiState] = useState<ApiState>("loading");
   const [refreshing, setRefreshing] = useState(false);
 
-  // Stable load function — shared by polling and manual refresh
-  async function load(manual = false) {
-    if (manual) setRefreshing(true);
-    try {
-      const data = await fetchCachedSignals();
-      if (data.length > 0) setSignals(data as Signal[]);
-      setApiState("live");
-    } catch {
-      setApiState((s) => s === "loading" ? "mock" : s);
-    } finally {
-      if (manual) setRefreshing(false);
-    }
+  // Show real signals if we have any; fall back to mock placeholder until then
+  const signals = liveSignals.length > 0 ? liveSignals : mockSignals;
+
+  function applyIncoming(data: Signal[]) {
+    if (data.length === 0) return;
+    setLiveSignals((prev) => {
+      const merged = mergeSignals(prev, data);
+      persistSignals(merged);
+      return merged;
+    });
   }
 
   useEffect(() => {
@@ -135,7 +170,7 @@ export function useSignals() {
       try {
         const data = await fetchCachedSignals();
         if (!cancelled) {
-          if (data.length > 0) setSignals(data as Signal[]);
+          applyIncoming(data as Signal[]);
           setApiState("live");
         }
       } catch {
@@ -146,7 +181,20 @@ export function useSignals() {
     poll();
     const id = setInterval(poll, 30_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function load(manual = false) {
+    if (manual) setRefreshing(true);
+    try {
+      const data = await fetchCachedSignals();
+      applyIncoming(data as Signal[]);
+      setApiState("live");
+    } catch {
+      setApiState((s) => s === "loading" ? "mock" : s);
+    } finally {
+      if (manual) setRefreshing(false);
+    }
+  }
 
   const refresh = () => load(true);
 
