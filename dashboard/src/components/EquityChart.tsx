@@ -40,6 +40,20 @@ export function EquityChart({ data }: Props) {
     label: format(new Date(d.time), "HH:mm"),
   }));
 
+  // Zoom Y-axis into the actual data range (same as Alpaca's own chart).
+  // Without this, a $1k move on a $100k account looks completely flat
+  // because the axis defaults to starting at $0.
+  const values  = data.map((d) => d.equity);
+  const dataMin = Math.min(...values);
+  const dataMax = Math.max(...values);
+  const range   = dataMax - dataMin || dataMax * 0.002;   // at least 0.2% of value
+  const pad     = range * 0.15;                           // 15% breathing room
+  const yMin    = Math.floor((dataMin - pad) / 100) * 100;
+  const yMax    = Math.ceil ((dataMax + pad) / 100) * 100;
+
+  // Tick formatter: show full dollar value (e.g. $101.5k) so small moves are legible
+  const tickFmt = (v: number) => `$${(v / 1000).toFixed(1)}k`;
+
   return (
     <ResponsiveContainer width="100%" height={220}>
       <AreaChart data={formatted} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
@@ -58,11 +72,12 @@ export function EquityChart({ data }: Props) {
           interval="preserveStartEnd"
         />
         <YAxis
+          domain={[yMin, yMax]}
           tick={{ fill: "#64748b", fontSize: 11, fontFamily: "JetBrains Mono" }}
           tickLine={false}
           axisLine={false}
-          width={70}
-          tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+          width={72}
+          tickFormatter={tickFmt}
         />
         <Tooltip content={<CustomTooltip />} />
         <Area
