@@ -27,6 +27,14 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 };
 
 export function EquityChart({ data }: Props) {
+  if (data.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-[220px] text-slate-500 text-sm font-mono">
+        Connecting to Alpaca…
+      </div>
+    );
+  }
+
   const formatted = data.map((d) => ({
     ...d,
     label: format(new Date(d.time), "HH:mm"),

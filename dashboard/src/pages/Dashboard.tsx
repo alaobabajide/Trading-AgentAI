@@ -4,8 +4,8 @@ import { EquityChart } from "../components/EquityChart";
 import { PositionsTable } from "../components/PositionsTable";
 import { SignalCard } from "../components/SignalCard";
 import { StatCard } from "../components/StatCard";
-import { mockEquitySeries } from "../lib/mock";
 import { usePortfolio, useSignals, useEquitySeries } from "../lib/api";
+import type { EquityPoint } from "../lib/types";
 
 function LiveBadge({ live }: { live: boolean }) {
   return (
@@ -25,8 +25,28 @@ export function Dashboard() {
   const { series: liveSeries, isLive: equityLive } = useEquitySeries();
   const isLive = apiState === "live";
 
-  // Use live equity history if available; fall back to mock so chart is never blank
-  const series = liveSeries.length >= 2 ? liveSeries : mockEquitySeries();
+  // Build the equity series — never use random mock data.
+  // Priority:
+  //   1. Live history from Alpaca (≥2 points)             → use as-is
+  //   2. Live portfolio snapshot (real equity known)       → 2-point line
+  //   3. Not yet connected                                 → empty (chart shows loading)
+  const series: EquityPoint[] = (() => {
+    if (liveSeries.length >= 2) return liveSeries;
+
+    if (isLive && p.equity > 0) {
+      // Portfolio data is live — synthesise a 2-point line so the chart
+      // always reflects real current equity even when history is loading.
+      const now      = new Date().toISOString();
+      const dayStart = new Date(Date.now() - 8 * 3_600_000).toISOString();
+      const open     = p.equity - p.daily_pnl;
+      return [
+        { time: dayStart, equity: open > 0 ? open : p.equity, pnl: 0 },
+        { time: now,      equity: p.equity,                   pnl: p.daily_pnl },
+      ];
+    }
+
+    return [];   // nothing real yet — EquityChart handles empty gracefully
+  })();
 
   const pnlUp = p.daily_pnl >= 0;
 
@@ -73,7 +93,7 @@ export function Dashboard() {
               <LiveBadge live={equityLive} />
             </div>
             <span className="text-xs text-slate-500">
-              {equityLive ? "Today (Alpaca)" : "Last 24 h · Mock"}
+              {equityLive ? "Today (Alpaca)" : isLive ? "Connecting…" : "Waiting for data"}
             </span>
           </div>
           <EquityChart data={series} />

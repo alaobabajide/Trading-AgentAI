@@ -492,65 +492,96 @@ def get_portfolio():
 
 
 @app.get("/portfolio/history")
-def get_portfolio_history(period: str = "1D", timeframe: str = "5Min"):
+def get_portfolio_history():
     """Return the equity curve from Alpaca's portfolio history API.
 
-    Calls GET /v2/account/portfolio/history directly so we aren't bound to
-    alpaca-py version quirks.  Returns [] if credentials are missing or the
-    market has no data for the requested period (e.g. weekend / pre-market).
+    Strategy (tried in order until ≥2 non-null points are found):
+      1. Today, 5-min bars, extended hours  — intraday detail
+      2. This week, 1-hour bars             — covers weekends / holidays
+      3. This month, daily bars             — covers longer gaps
+      4. Past year, daily bars              — for very new / sparse accounts
+      5. Current account snapshot           — 2-point line from last_equity→equity
 
-    period:    1D | 1W | 1M | 3M | 6M | 1A   (default 1D)
-    timeframe: 1Min | 5Min | 15Min | 1H | 1D  (default 5Min)
+    Never returns random mock data — always reflects the real Alpaca account.
     """
     import httpx as _httpx
-    from datetime import timezone as _tz
+    from datetime import timezone as _utc
     from config import get_settings
     cfg = get_settings()
 
     if not cfg.alpaca_api_key:
-        log.warning("/portfolio/history called with no ALPACA_API_KEY — returning []")
+        log.warning("/portfolio/history: no ALPACA_API_KEY configured")
         return []
 
-    base = cfg.alpaca_base_url.rstrip("/")
+    base    = cfg.alpaca_base_url.rstrip("/")
     headers = {
         "APCA-API-KEY-ID":     cfg.alpaca_api_key,
         "APCA-API-SECRET-KEY": cfg.alpaca_secret_key,
     }
-    params = {
-        "period":         period,
-        "timeframe":      timeframe,
-        "extended_hours": "false",
-    }
 
+    def _fetch_period(period: str, timeframe: str) -> list:
+        """Hit Alpaca portfolio/history and return filtered [{time,equity,pnl}]."""
+        try:
+            r = _httpx.get(
+                f"{base}/v2/account/portfolio/history",
+                headers=headers,
+                params={"period": period, "timeframe": timeframe, "extended_hours": "true"},
+                timeout=15,
+            )
+            if r.status_code != 200:
+                log.warning("Alpaca history %s/%s → HTTP %d: %s", period, timeframe, r.status_code, r.text[:200])
+                return []
+            data       = r.json()
+            timestamps = data.get("timestamp",   []) or []
+            equities   = data.get("equity",       []) or []
+            pnls       = data.get("profit_loss",  []) or []
+            pts = []
+            for ts, eq, pnl in zip(timestamps, equities, pnls):
+                if eq is None:
+                    continue
+                pts.append({
+                    "time":   datetime.fromtimestamp(ts, tz=_utc.utc).isoformat(),
+                    "equity": float(eq),
+                    "pnl":    float(pnl) if pnl is not None else 0.0,
+                })
+            return pts
+        except Exception as exc:
+            log.warning("Alpaca history %s/%s error: %s", period, timeframe, exc)
+            return []
+
+    # ── Try progressively broader windows ────────────────────────────────────
+    for period, timeframe in [
+        ("1D",  "5Min"),
+        ("1W",  "1H"),
+        ("1M",  "1D"),
+        ("1A",  "1D"),
+    ]:
+        pts = _fetch_period(period, timeframe)
+        if len(pts) >= 2:
+            log.info("Portfolio history: %d pts (period=%s tf=%s)", len(pts), period, timeframe)
+            return pts
+        log.info("Portfolio history: %d pts for %s/%s — trying wider window", len(pts), period, timeframe)
+
+    # ── Last resort: 2-point line from account snapshot ───────────────────────
+    # This handles brand-new paper accounts with no trading history at all.
+    log.warning("Portfolio history: no history data — building from account snapshot")
     try:
-        resp = _httpx.get(
-            f"{base}/v2/account/portfolio/history",
-            headers=headers,
-            params=params,
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        r = _httpx.get(f"{base}/v2/account", headers=headers, timeout=10)
+        r.raise_for_status()
+        acct        = r.json()
+        equity      = float(acct.get("equity",      0))
+        last_equity = float(acct.get("last_equity", equity))
+        now         = datetime.now(_utc.utc)
+        day_start   = now.replace(hour=13, minute=30, second=0, microsecond=0)   # 09:30 ET = 13:30 UTC
+        if day_start > now:                                                        # pre-market edge case
+            day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return [
+            {"time": day_start.isoformat(), "equity": last_equity, "pnl": 0.0},
+            {"time": now.isoformat(),        "equity": equity,      "pnl": equity - last_equity},
+        ]
     except Exception as exc:
-        log.error("Alpaca portfolio history failed: %s", exc)
+        log.error("Portfolio history account fallback failed: %s", exc)
         return []
-
-    timestamps   = data.get("timestamp",    []) or []
-    equities     = data.get("equity",        []) or []
-    profit_loss  = data.get("profit_loss",   []) or []
-
-    from datetime import timezone as _utc
-    points = []
-    for ts, eq, pnl in zip(timestamps, equities, profit_loss):
-        if eq is None:          # non-trading gap — skip
-            continue
-        points.append({
-            "time":   datetime.fromtimestamp(ts, tz=_utc.utc).isoformat(),
-            "equity": float(eq),
-            "pnl":    float(pnl) if pnl is not None else 0.0,
-        })
-    log.info("Portfolio history: %d points (period=%s timeframe=%s)", len(points), period, timeframe)
-    return points
 
 
 if __name__ == "__main__":
