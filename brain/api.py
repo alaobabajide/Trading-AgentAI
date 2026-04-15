@@ -532,6 +532,7 @@ def get_portfolio_history(period: str = "1D"):
         pnls       = list(getattr(hist, "profit_loss", None) or [])
         nulls = sum(1 for e in equities if e is None)
         log.info("  raw: %d pts, %d null", len(equities), nulls)
+
         return [
             {
                 "time":   datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
@@ -544,14 +545,23 @@ def get_portfolio_history(period: str = "1D"):
 
     def _fetch(alp_period: str, alp_tf: str) -> list:
         log.info("Portfolio history: period=%s tf=%s", alp_period, alp_tf)
+        # For intraday timeframes include pre/post-market so we get the full
+        # 24-hour window (7 PM → 6 PM) that Alpaca's own app shows.
+        intraday = alp_tf in ("1Min", "5Min", "15Min", "1H")
         try:
             from alpaca.trading.requests import GetPortfolioHistoryRequest
-            req  = GetPortfolioHistoryRequest(period=alp_period, timeframe=alp_tf)
+            kwargs: dict = dict(period=alp_period, timeframe=alp_tf)
+            if intraday:
+                kwargs["extended_hours"] = True
+            req  = GetPortfolioHistoryRequest(**kwargs)
             hist = client.get_portfolio_history(filter=req)
         except Exception as e1:
-            log.warning("  SDK request failed (%s), trying kwargs", e1)
+            log.warning("  SDK request failed (%s), trying direct kwargs", e1)
             try:
-                hist = client.get_portfolio_history(period=alp_period, timeframe=alp_tf)
+                kw: dict = dict(period=alp_period, timeframe=alp_tf)
+                if intraday:
+                    kw["extended_hours"] = True
+                hist = client.get_portfolio_history(**kw)
             except Exception as e2:
                 log.warning("  kwargs also failed: %s", e2)
                 return []
