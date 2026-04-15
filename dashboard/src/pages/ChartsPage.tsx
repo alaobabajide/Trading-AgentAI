@@ -222,28 +222,60 @@ export function ChartsPage() {
                 <TradingViewChart symbol={active.tv} interval={interval} />
               </div>
               {/* Indicator legend */}
-              <div className="glass rounded-xl px-4 py-2.5 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs">
-                <span className="text-slate-500 font-semibold uppercase tracking-widest text-[10px]">Indicators</span>
-                <span className="flex items-center gap-1.5">
-                  <span className="inline-block w-4 h-0.5 bg-[#22d3ee]" />
-                  <span className="text-slate-300">Bollinger Bands</span>
-                  <span className="text-slate-500">(volatility envelope)</span>
+              <div className="glass rounded-xl px-4 py-3 flex flex-wrap items-center gap-x-1 gap-y-2">
+                <span className="text-slate-500 font-semibold uppercase tracking-widest text-[10px] mr-3">Chart Key</span>
+
+                {/* BB */}
+                <span className="flex items-center gap-1.5 bg-[#22d3ee]/10 border border-[#22d3ee]/30 rounded-lg px-2.5 py-1">
+                  <span className="inline-block w-3 h-0.5 bg-[#22d3ee]" />
+                  <span className="font-bold text-[#22d3ee] text-xs">BB</span>
+                  <span className="text-slate-400 text-[11px]">Bollinger Bands</span>
+                  <span className="text-slate-600 text-[10px]">— volatility envelope around price</span>
                 </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="inline-block w-4 h-0.5 bg-[#f59e0b]" />
-                  <span className="text-slate-300">Support / Resistance</span>
-                  <span className="text-slate-500">(pivot highs &amp; lows)</span>
+
+                {/* SL / RL */}
+                <span className="flex items-center gap-1.5 bg-[#f59e0b]/10 border border-[#f59e0b]/30 rounded-lg px-2.5 py-1">
+                  <span className="inline-block w-3 h-0.5 bg-[#f59e0b]" />
+                  <span className="font-bold text-[#f59e0b] text-xs">SL&nbsp;/&nbsp;RL</span>
+                  <span className="text-slate-400 text-[11px]">Support &amp; Resistance Levels</span>
+                  <span className="text-slate-600 text-[10px]">— price floors (SL) &amp; ceilings (RL)</span>
                 </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="inline-block w-4 h-0.5 bg-[#a78bfa]" />
-                  <span className="text-slate-300">SMA (9)</span>
-                  <span className="text-slate-500">(trend)</span>
+
+                {/* MA */}
+                <span className="flex items-center gap-1.5 bg-[#a78bfa]/10 border border-[#a78bfa]/30 rounded-lg px-2.5 py-1">
+                  <span className="inline-block w-3 h-0.5 bg-[#a78bfa]" />
+                  <span className="font-bold text-[#a78bfa] text-xs">MA</span>
+                  <span className="text-slate-400 text-[11px]">Moving Average (9)</span>
+                  <span className="text-slate-600 text-[10px]">— short-term trend direction</span>
                 </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="inline-block w-3 h-3 rounded-sm bg-slate-700 border border-slate-500 text-center leading-none text-slate-300 font-mono" style={{ fontSize: 8 }}>✎</span>
-                  <span className="text-slate-300">Fibonacci / Trendlines</span>
-                  <span className="text-slate-500">(use left-side drawing toolbar)</span>
+
+                {/* RSI */}
+                <span className="flex items-center gap-1.5 bg-slate-700/40 border border-slate-600/40 rounded-lg px-2.5 py-1">
+                  <span className="font-bold text-emerald-400 text-xs">RSI</span>
+                  <span className="text-slate-400 text-[11px]">Relative Strength Index</span>
+                  <span className="text-slate-600 text-[10px]">— overbought (&gt;70) / oversold (&lt;30)</span>
                 </span>
+
+                {/* MACD */}
+                <span className="flex items-center gap-1.5 bg-slate-700/40 border border-slate-600/40 rounded-lg px-2.5 py-1">
+                  <span className="font-bold text-rose-400 text-xs">MACD</span>
+                  <span className="text-slate-400 text-[11px]">Moving Avg Convergence Divergence</span>
+                  <span className="text-slate-600 text-[10px]">— momentum &amp; trend shifts</span>
+                </span>
+
+                {/* FIB + TL */}
+                <span className="flex items-center gap-1.5 bg-slate-700/40 border border-slate-600/40 rounded-lg px-2.5 py-1">
+                  <span className="font-bold text-yellow-300 text-xs">FIB</span>
+                  <span className="text-slate-400 text-[11px]">Fibonacci Retracement</span>
+                  <span className="text-slate-600 text-[10px]">— key pullback levels (23.6%–78.6%)</span>
+                </span>
+                <span className="flex items-center gap-1.5 bg-slate-700/40 border border-slate-600/40 rounded-lg px-2.5 py-1">
+                  <span className="font-bold text-sky-300 text-xs">TL</span>
+                  <span className="text-slate-400 text-[11px]">Trendline</span>
+                  <span className="text-slate-600 text-[10px]">— connect swing highs or lows</span>
+                </span>
+
+                <span className="ml-auto text-slate-600 text-[10px] italic">FIB &amp; TL: draw using the ✎ toolbar on the left of the chart</span>
               </div>
             </div>
           )}
