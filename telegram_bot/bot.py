@@ -434,21 +434,24 @@ def _sync_exec_signal(symbol: str, asset_class: str, action: str) -> str:
         signal = _build_trading_signal(cached)
 
         cfg = get_settings()
+        bars_fetched = True  # track whether price data loaded successfully
         if asset_class == "stock":
             from execution.stock.engine import StockExecutionEngine
             from data.market_data import AlpacaMarketData
-            # Fetch recent bars for ATR sizing
+            # Fetch recent bars for ATR-based position sizing
             bars_closes: list[float] = []
             bars_highs:  list[float] = []
             bars_lows:   list[float] = []
             try:
                 md = AlpacaMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)
-                snap = md.snapshot(symbol, lookback_days=20)
-                bars_closes = list(snap.closes)
-                bars_highs  = list(snap.highs)
-                bars_lows   = list(snap.lows)
+                snap = md.snapshot(symbol, days=20)          # fix: 'days' not 'lookback_days'
+                bars_closes = [b.close for b in snap.bars]   # fix: iterate bars list
+                bars_highs  = [b.high  for b in snap.bars]
+                bars_lows   = [b.low   for b in snap.bars]
+                bars_fetched = bool(bars_closes)
             except Exception as e:
                 log.warning("Could not fetch bars for sizing: %s", e)
+                bars_fetched = False
 
             engine = StockExecutionEngine(
                 cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,
@@ -464,6 +467,11 @@ def _sync_exec_signal(symbol: str, asset_class: str, action: str) -> str:
             result = engine.execute(signal)
 
         if result is None:
+            if not bars_fetched:
+                return (
+                    "❌ Could not fetch price data for sizing.\n"
+                    "Check that Alpaca credentials are configured and the symbol is valid."
+                )
             return "⚠️ Order blocked by risk controls (circuit breaker or position sizing)."
 
         return _fmt_order(result)
@@ -485,7 +493,8 @@ def _sync_exec_direct(
             from alpaca.trading.requests import MarketOrderRequest
             from alpaca.trading.enums import OrderSide, TimeInForce
 
-            client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=True)
+            is_paper = "paper" in cfg.alpaca_base_url.lower()
+            client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
             req = MarketOrderRequest(
                 symbol=symbol,
                 notional=round(amount_usd, 2),

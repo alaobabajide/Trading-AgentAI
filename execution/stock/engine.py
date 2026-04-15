@@ -45,7 +45,8 @@ class StockExecutionEngine:
     ) -> None:
         from alpaca.trading.client import TradingClient
 
-        self._trading = TradingClient(alpaca_api_key, alpaca_secret_key, paper=True)
+        is_paper = "paper" in alpaca_base_url.lower()
+        self._trading = TradingClient(alpaca_api_key, alpaca_secret_key, paper=is_paper)
         self._trailing = TrailingStopManager()
         self._risk: RiskControls | None = None
         self._max_pos = max_position_pct
@@ -76,18 +77,10 @@ class StockExecutionEngine:
             log.warning("Circuit breaker active — refusing to execute %s", signal.symbol)
             return None
 
-        # Get current price
-        from alpaca.data import StockHistoricalDataClient
-        from alpaca.data.requests import StockLatestQuoteRequest
-        from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest, TakeProfitRequest, StopLossRequest
+        from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
 
-        quote_client = StockHistoricalDataClient(
-            self._trading._base_url,
-            self._trading._base_url,
-        )
-
-        # Fetch current price from bars
+        # Current price comes from the last bar close passed in by the caller
         current_price = bars_closes[-1] if bars_closes else 0.0
         if current_price <= 0:
             log.error("Cannot execute: invalid current price for %s", signal.symbol)
