@@ -1,9 +1,10 @@
 import clsx from "clsx";
-import { Brain, Package, Shield, Timer, TrendingUp } from "lucide-react";
+import { Brain, Package, Shield, Timer, TrendingUp, Zap } from "lucide-react";
 import {
   HITLMode, UserProfile, DEFAULT_PROFILE,
   MODE_CONFIG, loadProfile, saveProfile,
 } from "../lib/hitl";
+import { useConfigStatus } from "../lib/api";
 import { useState } from "react";
 
 function Section({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
@@ -120,6 +121,7 @@ function SecondSlider({
 export function SettingsPage() {
   const [profile, setProfile] = useState<UserProfile>(loadProfile);
   const [saved, setSaved] = useState(false);
+  const configStatus = useConfigStatus();
 
   function update(partial: Partial<UserProfile>) {
     setProfile((p) => ({ ...p, ...partial }));
@@ -141,8 +143,46 @@ export function SettingsPage() {
 
   return (
     <div className="max-w-2xl space-y-6">
+      {/* Auto-Trade engine status */}
+      <Section icon={<Zap className="w-4 h-4" />} title="Auto-Trade Engine">
+        {configStatus === null ? (
+          <div className="text-xs text-slate-500 font-mono animate-pulse">Checking engine status…</div>
+        ) : configStatus.auto_trade ? (
+          <div className="flex items-start gap-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-3">
+            <span className="mt-0.5 w-2 h-2 rounded-full bg-emerald-400 shrink-0 animate-pulse" />
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-emerald-300">Orchestrator running</p>
+              <p className="text-[11px] text-slate-400 font-mono">
+                Scanning watchlist every 15 minutes — AAPL, MSFT, NVDA, TSLA, SPY, QQQ, BTCUSDT, ETHUSDT + more.
+                BUY/SELL signals are executed automatically on Alpaca / Binance.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-start gap-3 bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3">
+            <span className="mt-0.5 w-2 h-2 rounded-full bg-red-400 shrink-0" />
+            <div className="space-y-1.5">
+              <p className="text-sm font-medium text-red-300">Orchestrator not running — no trades will be placed</p>
+              <p className="text-[11px] text-slate-400 font-mono leading-relaxed">
+                To enable auto-trading, add the following environment variable in Railway:
+              </p>
+              <div className="bg-surface-800 rounded-lg px-3 py-2 font-mono text-[11px] text-emerald-400 border border-white/5">
+                AUTO_TRADE = true
+              </div>
+              <p className="text-[11px] text-slate-500 font-mono">
+                Then redeploy. The orchestrator will scan symbols every 15 min and submit orders when signals are HOT or WARM.
+              </p>
+            </div>
+          </div>
+        )}
+      </Section>
+
       {/* HITL Mode */}
-      <Section icon={<Brain className="w-4 h-4" />} title="Execution Mode">
+      <Section icon={<Brain className="w-4 h-4" />} title="Execution Mode (Dashboard)">
+        <div className="text-[11px] text-amber-400/80 bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2 font-mono">
+          This controls how the <b>dashboard signal cards</b> behave — it does not affect the background orchestrator.
+          Set AUTO_TRADE=true above to enable real background trading.
+        </div>
         <div className="space-y-2">
           {(["auto", "assisted", "manual"] as HITLMode[]).map((m) => (
             <OptionRow
@@ -161,7 +201,7 @@ export function SettingsPage() {
           ))}
         </div>
         <div className="text-[11px] text-slate-500 font-mono bg-surface-700 rounded-xl px-3 py-2">
-          Signal tier logic: HOT = 6–7 analysts aligned + trending regime · WARM = 4–5 aligned · COLD = ≤3 aligned or high volatility
+          Signal tier logic: HOT = 11+/15 agents aligned · WARM = 8–10/15 aligned · COLD = ≤7 aligned or panels conflict
         </div>
       </Section>
 

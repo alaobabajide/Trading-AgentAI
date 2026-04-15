@@ -19,6 +19,17 @@ else
     echo "[start] TELEGRAM_BOT_TOKEN not set — bot disabled."
 fi
 
+# ── 2b. Start auto-trading orchestrator (if AUTO_TRADE=true) ─────────────────
+if [ "$AUTO_TRADE" = "true" ]; then
+    echo "[start] AUTO_TRADE=true — launching orchestrator (15-min scan cycle)…"
+    # Wait for uvicorn to be ready before orchestrator tries to call /signal
+    sleep 8
+    python -m monitoring.orchestrator &
+    echo "[start] Orchestrator PID=$!"
+else
+    echo "[start] AUTO_TRADE not set — orchestrator disabled (set AUTO_TRADE=true in Railway env vars to enable)."
+fi
+
 # ── 3. Start nginx in foreground (keeps container alive) ─────────────────────
 echo "[start] Launching nginx on port ${PORT}…"
 exec nginx -g 'daemon off;'

@@ -143,6 +143,7 @@ def health():
 @app.get("/config-status")
 def config_status():
     """Returns which API keys are configured (true/false only — never exposes values)."""
+    import os
     from config import get_settings
     cfg = get_settings()
     return {
@@ -152,6 +153,7 @@ def config_status():
         "telegram":        bool(cfg.telegram_bot_token),
         "alpaca_base_url": cfg.alpaca_base_url,
         "binance_testnet": cfg.binance_testnet,
+        "auto_trade":      os.environ.get("AUTO_TRADE", "").lower() == "true",
         "ready_for_signals":  bool(cfg.anthropic_api_key),
         "ready_for_trading":  bool(cfg.anthropic_api_key and cfg.alpaca_api_key),
     }

@@ -17,8 +17,6 @@ import schedule
 
 from config import get_settings
 from data.portfolio import PortfolioFetcher, PortfolioState
-from execution.stock.engine import StockExecutionEngine
-from execution.crypto.engine import CryptoExecutionEngine
 from monitoring.metrics import (
     brain_latency_histogram,
     circuit_breaker_gauge,
@@ -50,14 +48,6 @@ class Orchestrator:
         self._portfolio_fetcher = PortfolioFetcher(
             cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,
             cfg.binance_api_key, cfg.binance_secret_key, cfg.binance_testnet,
-        )
-        self._stock_engine = StockExecutionEngine(
-            cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,
-            cfg.max_position_pct, cfg.circuit_breaker_drawdown,
-        )
-        self._crypto_engine = CryptoExecutionEngine(
-            cfg.binance_api_key, cfg.binance_secret_key, cfg.binance_testnet,
-            cfg.max_position_pct, cfg.max_crypto_allocation_pct,
         )
 
         self._peak_equity: float = 0.0
@@ -117,27 +107,33 @@ class Orchestrator:
             log.info("HOLD for %s (confidence=%.2f)", symbol, confidence)
             return
 
-        log.info("Signal: %s %s confidence=%.2f", action, symbol, confidence)
+        log.info("Signal: %s %s confidence=%.2f — submitting order via /execute", action, symbol, confidence)
 
-        # Route to correct engine
-        from brain.signal import TradingSignal
-        trading_signal = TradingSignal(
-            symbol=symbol,
-            asset_class=asset_class,
-            action=action,
-            confidence=confidence,
-            rationale=sig.get("rationale", ""),
-            suggested_position_pct=sig.get("suggested_position_pct", 0.01),
-            stop_loss_pct=sig.get("stop_loss_pct", 0.02),
-            take_profit_pct=sig.get("take_profit_pct", 0.05),
-        )
+        # Delegate to the brain API's /execute endpoint.
+        # This avoids the empty-bars problem: /execute fetches live price from
+        # Alpaca/Binance itself and uses notional sizing (equity × position_pct).
+        try:
+            exec_resp = httpx.post(
+                f"{self._brain_url}/execute",
+                json={
+                    "symbol":                 symbol,
+                    "asset_class":            asset_class,
+                    "action":                 action,
+                    "suggested_position_pct": sig.get("suggested_position_pct", 0.01),
+                    "stop_loss_pct":          sig.get("stop_loss_pct",          0.02),
+                    "take_profit_pct":        sig.get("take_profit_pct",        0.05),
+                },
+                timeout=30,
+            )
+            exec_resp.raise_for_status()
+            result = exec_resp.json()
+            log.info("Order result for %s: %s", symbol, result)
+            status = "submitted"
+        except Exception as exc:
+            log.error("Execute API call failed for %s: %s", symbol, exc)
+            result = None
+            status = "skipped"
 
-        if asset_class == "stock":
-            result = self._stock_engine.execute(trading_signal, [], [], [])
-        else:
-            result = self._crypto_engine.execute(trading_signal, portfolio.equity)
-
-        status = "submitted" if result else "skipped"
         exchange = "alpaca" if asset_class == "stock" else "binance"
         order_counter.labels(symbol=symbol, action=action, exchange=exchange, status=status).inc()
 

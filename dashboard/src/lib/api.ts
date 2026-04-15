@@ -29,6 +29,7 @@ export interface ConfigStatus {
   telegram:           boolean;
   alpaca_base_url:    string;
   binance_testnet:    boolean;
+  auto_trade:         boolean;
   ready_for_signals:  boolean;
   ready_for_trading:  boolean;
 }
