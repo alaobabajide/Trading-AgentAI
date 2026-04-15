@@ -4,7 +4,7 @@
  * Falls back silently to mock data if the backend is unavailable.
  */
 import { useEffect, useState } from "react";
-import { PortfolioSnapshot, Signal } from "./types";
+import { EquityPoint, PortfolioSnapshot, Signal } from "./types";
 import { mockPortfolio, mockSignals } from "./mock";
 
 const BASE = "/api";
@@ -199,6 +199,43 @@ export function useSignals() {
   const refresh = () => load(true);
 
   return { signals, apiState, refresh, refreshing };
+}
+
+/**
+ * Fetches the real equity curve from Alpaca portfolio history.
+ * Falls back to mock series if the backend is unavailable or returns
+ * no data (e.g. weekend / pre-market with no trading activity).
+ * Re-polls every 60 s so intraday moves stay current.
+ */
+export function useEquitySeries() {
+  const [series, setSeries]   = useState<EquityPoint[]>([]);
+  const [isLive, setIsLive]   = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      try {
+        const res = await fetch(`${BASE}/portfolio/history`, {
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await safeJson<EquityPoint[]>(res);
+        if (!cancelled && data.length >= 2) {
+          setSeries(data);
+          setIsLive(true);
+        }
+      } catch {
+        // leave whatever is already in state — mock stays as fallback
+      }
+    }
+
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  return { series, isLive };
 }
 
 /**

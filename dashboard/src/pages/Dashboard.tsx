@@ -5,9 +5,7 @@ import { PositionsTable } from "../components/PositionsTable";
 import { SignalCard } from "../components/SignalCard";
 import { StatCard } from "../components/StatCard";
 import { mockEquitySeries } from "../lib/mock";
-import { usePortfolio, useSignals } from "../lib/api";
-
-const series = mockEquitySeries();
+import { usePortfolio, useSignals, useEquitySeries } from "../lib/api";
 
 function LiveBadge({ live }: { live: boolean }) {
   return (
@@ -24,7 +22,11 @@ function LiveBadge({ live }: { live: boolean }) {
 export function Dashboard() {
   const { portfolio: p, apiState } = usePortfolio();
   const { signals, apiState: sigState } = useSignals();
+  const { series: liveSeries, isLive: equityLive } = useEquitySeries();
   const isLive = apiState === "live";
+
+  // Use live equity history if available; fall back to mock so chart is never blank
+  const series = liveSeries.length >= 2 ? liveSeries : mockEquitySeries();
 
   const pnlUp = p.daily_pnl >= 0;
 
@@ -66,8 +68,13 @@ export function Dashboard() {
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         <div className="xl:col-span-2 glass rounded-2xl p-5">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-semibold">Equity Curve</h2>
-            <span className="text-xs text-slate-500">Last 24 h</span>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold">Equity Curve</h2>
+              <LiveBadge live={equityLive} />
+            </div>
+            <span className="text-xs text-slate-500">
+              {equityLive ? "Today (Alpaca)" : "Last 24 h · Mock"}
+            </span>
           </div>
           <EquityChart data={series} />
         </div>

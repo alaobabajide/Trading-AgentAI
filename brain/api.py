@@ -491,6 +491,68 @@ def get_portfolio():
     }
 
 
+@app.get("/portfolio/history")
+def get_portfolio_history(period: str = "1D", timeframe: str = "5Min"):
+    """Return the equity curve from Alpaca's portfolio history API.
+
+    Calls GET /v2/account/portfolio/history directly so we aren't bound to
+    alpaca-py version quirks.  Returns [] if credentials are missing or the
+    market has no data for the requested period (e.g. weekend / pre-market).
+
+    period:    1D | 1W | 1M | 3M | 6M | 1A   (default 1D)
+    timeframe: 1Min | 5Min | 15Min | 1H | 1D  (default 5Min)
+    """
+    import httpx as _httpx
+    from datetime import timezone as _tz
+    from config import get_settings
+    cfg = get_settings()
+
+    if not cfg.alpaca_api_key:
+        log.warning("/portfolio/history called with no ALPACA_API_KEY — returning []")
+        return []
+
+    base = cfg.alpaca_base_url.rstrip("/")
+    headers = {
+        "APCA-API-KEY-ID":     cfg.alpaca_api_key,
+        "APCA-API-SECRET-KEY": cfg.alpaca_secret_key,
+    }
+    params = {
+        "period":         period,
+        "timeframe":      timeframe,
+        "extended_hours": "false",
+    }
+
+    try:
+        resp = _httpx.get(
+            f"{base}/v2/account/portfolio/history",
+            headers=headers,
+            params=params,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        log.error("Alpaca portfolio history failed: %s", exc)
+        return []
+
+    timestamps   = data.get("timestamp",    []) or []
+    equities     = data.get("equity",        []) or []
+    profit_loss  = data.get("profit_loss",   []) or []
+
+    from datetime import timezone as _utc
+    points = []
+    for ts, eq, pnl in zip(timestamps, equities, profit_loss):
+        if eq is None:          # non-trading gap — skip
+            continue
+        points.append({
+            "time":   datetime.fromtimestamp(ts, tz=_utc.utc).isoformat(),
+            "equity": float(eq),
+            "pnl":    float(pnl) if pnl is not None else 0.0,
+        })
+    log.info("Portfolio history: %d points (period=%s timeframe=%s)", len(points), period, timeframe)
+    return points
+
+
 if __name__ == "__main__":
     from config import get_settings
     cfg = get_settings()
