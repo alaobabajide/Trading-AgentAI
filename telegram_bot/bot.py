@@ -14,6 +14,7 @@ Commands
 from __future__ import annotations
 
 import asyncio
+import html as _html
 import logging
 from datetime import datetime, timezone
 
@@ -63,19 +64,24 @@ def _allowed(update: Update) -> bool:
 
 # ── Formatters ────────────────────────────────────────────────────────────────
 
+def _e(text: str) -> str:
+    """Escape a string for safe inclusion in Telegram HTML messages."""
+    return _html.escape(str(text))
+
+
 def _fmt_signal(d: dict) -> str:
     action    = d.get("action", "HOLD")
-    symbol    = d.get("symbol", "?")
-    tier      = d.get("tier", "WARM")
+    symbol    = _e(d.get("symbol", "?"))
+    tier      = _e(d.get("tier", "WARM"))
     conf      = d.get("confidence", 0)
     pos_pct   = d.get("suggested_position_pct", 0)
     sl_pct    = d.get("stop_loss_pct", 0)
     tp_pct    = d.get("take_profit_pct", 0)
-    rationale = d.get("rationale", "")
+    rationale = _e(d.get("rationale", ""))
     views     = d.get("agent_views", {})
     da_score  = d.get("devil_advocate_score", 0)
-    da_case   = d.get("devil_advocate_case", "")
-    fit       = d.get("strategy_fit", "ALIGNED")
+    da_case   = _e(d.get("devil_advocate_case", ""))
+    fit       = _e(d.get("strategy_fit", "ALIGNED"))
 
     lines = [
         f"🧠 <b>TradingAgent — {symbol}</b>",
@@ -90,11 +96,11 @@ def _fmt_signal(d: dict) -> str:
     ]
 
     if rationale:
-        lines += ["", f"<i>{rationale[:280]}</i>"]
+        lines += ["", f"<i>{rationale[:300]}</i>"]
 
     # Agent views — skip risk (verbose) to keep message compact
     view_lines = [
-        f"  {_VIEW_ICON.get(k, '•')} <i>{k.replace('_', ' ').title()}:</i> {str(v)[:120]}"
+        f"  {_VIEW_ICON.get(k, '•')} <i>{_e(k.replace('_', ' ').title())}:</i> {_e(str(v))[:120]}"
         for k, v in views.items()
         if k != "risk" and v
     ]
@@ -113,7 +119,11 @@ def _fmt_signal(d: dict) -> str:
     fit_e = _FIT_EMOJI.get(fit, "")
     lines += ["", f"{fit_e} <b>Strategy fit:</b> {fit}"]
 
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    # Telegram hard limit is 4096 chars — truncate with notice if needed
+    if len(text) > 4000:
+        text = text[:3980] + "\n\n<i>… (truncated)</i>"
+    return text
 
 
 def _fmt_portfolio(d: dict) -> str:
@@ -256,7 +266,17 @@ async def cmd_signal(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             InlineKeyboardButton("❌ Dismiss", callback_data="dismiss"),
         ]])
 
-    await msg.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+    try:
+        await msg.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+    except Exception as html_exc:
+        log.warning("HTML reply failed (%s) — sending plain-text fallback", html_exc)
+        # Strip all tags for the fallback so Telegram accepts it unconditionally
+        import re
+        plain = re.sub(r"<[^>]+>", "", text)
+        try:
+            await msg.edit_text(plain[:4000], reply_markup=keyboard)
+        except Exception as plain_exc:
+            log.error("Plain-text fallback also failed for %s: %s", symbol, plain_exc)
 
 
 async def cmd_buy(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

@@ -10,7 +10,9 @@ prevent the /health endpoint from responding.
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
@@ -21,8 +23,36 @@ from pydantic import BaseModel, Field
 
 log = logging.getLogger(__name__)
 
-# ── In-memory signal cache ─────────────────────────────────────────────────────
-_signal_cache: dict[str, dict] = {}
+# ── Persistent signal cache ────────────────────────────────────────────────────
+# Survives uvicorn/process restarts within the same container.
+# Falls back silently if the filesystem is read-only.
+_CACHE_FILE = os.environ.get("SIGNAL_CACHE_FILE", "/tmp/ta_signal_cache.json")
+_MAX_CACHE  = 100   # keep the 100 most-recent unique symbols
+
+
+def _load_cache() -> dict[str, dict]:
+    try:
+        with open(_CACHE_FILE) as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            log.info("Loaded %d cached signals from %s", len(data), _CACHE_FILE)
+            return data
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        log.warning("Could not load signal cache from disk: %s", exc)
+    return {}
+
+
+def _save_cache(cache: dict[str, dict]) -> None:
+    try:
+        with open(_CACHE_FILE, "w") as f:
+            json.dump(cache, f)
+    except Exception as exc:
+        log.warning("Could not persist signal cache: %s", exc)
+
+
+_signal_cache: dict[str, dict] = _load_cache()
 
 
 # ── Request / response models ──────────────────────────────────────────────────
@@ -219,8 +249,9 @@ def generate_signal(req: SignalRequest):
         log.error("Debate failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Agent debate failed: {exc}")
 
-    # Cache
+    # Cache — persist to disk so signals survive process restarts
     _signal_cache[req.symbol] = signal.to_dict()
+    _save_cache(_signal_cache)
 
     d = signal.to_dict()
     return SignalResponse(
