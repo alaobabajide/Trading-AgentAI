@@ -217,9 +217,33 @@ export function ChartsPage() {
             </div>
           ) : (
             /* Full advanced chart */
-            <div className="flex-1 min-h-0 p-6 flex flex-col">
+            <div className="flex-1 min-h-0 p-6 flex flex-col gap-3">
               <div className="glass rounded-2xl overflow-hidden flex-1 min-h-0" style={{ minHeight: 480 }}>
                 <TradingViewChart symbol={active.tv} interval={interval} />
+              </div>
+              {/* Indicator legend */}
+              <div className="glass rounded-xl px-4 py-2.5 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs">
+                <span className="text-slate-500 font-semibold uppercase tracking-widest text-[10px]">Indicators</span>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block w-4 h-0.5 bg-[#22d3ee]" />
+                  <span className="text-slate-300">Bollinger Bands</span>
+                  <span className="text-slate-500">(volatility envelope)</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block w-4 h-0.5 bg-[#f59e0b]" />
+                  <span className="text-slate-300">Support / Resistance</span>
+                  <span className="text-slate-500">(pivot highs &amp; lows)</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block w-4 h-0.5 bg-[#a78bfa]" />
+                  <span className="text-slate-300">SMA (9)</span>
+                  <span className="text-slate-500">(trend)</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block w-3 h-3 rounded-sm bg-slate-700 border border-slate-500 text-center leading-none text-slate-300 font-mono" style={{ fontSize: 8 }}>✎</span>
+                  <span className="text-slate-300">Fibonacci / Trendlines</span>
+                  <span className="text-slate-500">(use left-side drawing toolbar)</span>
+                </span>
               </div>
             </div>
           )}

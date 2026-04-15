@@ -51,15 +51,38 @@ export function TradingViewChart({ symbol, interval = "D", height = 520 }: Props
         toolbar_bg: "#0d0f1e",
         hide_top_toolbar: false,
         hide_legend: false,
+        hide_side_toolbar: false,   // shows drawing toolbar (Fibonacci, trendlines, etc.)
         save_image: false,
         enable_publishing: false,
         allow_symbol_change: false,
+        drawings_access: { type: "all", tools: [{ name: "Regression Trend" }] },
         studies: [
-          "MASimple@tv-basicstudies",
-          "RSI@tv-basicstudies",
-          "MACD@tv-basicstudies",
-          "BB@tv-basicstudies",
+          // ── Trend & Volatility (main pane) ──────────────────────────────
+          "MASimple@tv-basicstudies",          // 9-period SMA (fast trend)
+          "BB@tv-basicstudies",                // Bollinger Bands (volatility envelope)
+          // ── Support / Resistance (main pane) ────────────────────────────
+          "PivotPointsHighLow@tv-basicstudies",// Auto S/R levels (swing pivots)
+          // ── Momentum oscillators (sub-panes) ────────────────────────────
+          "RSI@tv-basicstudies",               // RSI (14)
+          "MACD@tv-basicstudies",              // MACD
         ],
+        studies_overrides: {
+          // Bollinger Bands — bright cyan so they stand out from candles
+          "Bollinger Bands.upper.color": "#22d3ee",
+          "Bollinger Bands.lower.color": "#22d3ee",
+          "Bollinger Bands.median.color": "#0ea5e9",
+          "Bollinger Bands.upper.linewidth": 1,
+          "Bollinger Bands.lower.linewidth": 1,
+          "Bollinger Bands.background.color": "rgba(34,211,238,0.04)",
+          // Pivot Points — bright amber for S/R levels
+          "Pivot Points High Low.High.color": "#f59e0b",
+          "Pivot Points High Low.Low.color":  "#f59e0b",
+          "Pivot Points High Low.High.linewidth": 2,
+          "Pivot Points High Low.Low.linewidth":  2,
+          // SMA — purple so it doesn't clash with BB
+          "Moving Average.plot.color": "#a78bfa",
+          "Moving Average.plot.linewidth": 2,
+        },
         overrides: {
           "paneProperties.background": "#0d0f1e",
           "paneProperties.backgroundType": "solid",
