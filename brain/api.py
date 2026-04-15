@@ -495,15 +495,15 @@ def get_portfolio():
 def get_portfolio_history(period: str = "1D"):
     """Return the equity curve for the requested period.
 
-    period (query param):
-        1D  → today's intraday data, 5-min bars
-        1M  → last month, daily bars
-        1Y  → last year,  daily bars
-        all → all available history, daily bars
+    Calls the Alpaca REST API directly (not the SDK) so we control every
+    query parameter exactly, including extended_hours for intraday data.
 
-    Uses the same alpaca-py TradingClient that already works for
-    positions/equity — no raw httpx, no parameter format guessing.
+    period (query param):
+        1D  → today, 5-min bars + extended hours  (matches Alpaca app 1D tab)
+        1M  → last month, daily bars
+        1Y  → last year, daily bars
     """
+    import httpx
     from datetime import timezone
     from config import get_settings
     cfg = get_settings()
@@ -512,24 +512,42 @@ def get_portfolio_history(period: str = "1D"):
         log.warning("/portfolio/history: no ALPACA_API_KEY configured")
         return []
 
-    from alpaca.trading.client import TradingClient
-    is_paper = "paper" in cfg.alpaca_base_url.lower()
-    client   = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
-
-    # Map UI period → (Alpaca period, Alpaca timeframe)
-    # Fallback chains: if the primary request returns < 2 pts, widen the window.
-    PERIOD_CHAINS: dict[str, list[tuple[str, str]]] = {
-        "1D":  [("1D", "5Min"), ("1W", "1D"), ("1M", "1D")],
-        "1M":  [("1M", "1D"),   ("3M", "1D")],
-        "1Y":  [("1A", "1D"),   ("6M", "1D"), ("3M", "1D")],
-        "all": [("all", "1D"),  ("1A", "1D"), ("6M", "1D")],
+    base_url = cfg.alpaca_base_url.rstrip("/")
+    headers  = {
+        "APCA-API-KEY-ID":     cfg.alpaca_api_key,
+        "APCA-API-SECRET-KEY": cfg.alpaca_secret_key,
     }
-    chain = PERIOD_CHAINS.get(period, PERIOD_CHAINS["1D"])
 
-    def _to_points(hist) -> list:
-        timestamps = list(getattr(hist, "timestamp",   None) or [])
-        equities   = list(getattr(hist, "equity",      None) or [])
-        pnls       = list(getattr(hist, "profit_loss", None) or [])
+    # Each entry: (period, timeframe, extended_hours)
+    CHAINS: dict[str, list[tuple[str, str, bool]]] = {
+        "1D":  [("1D", "5Min", True),  ("1W", "1D", False), ("1M", "1D", False)],
+        "1M":  [("1M", "1D",   False), ("3M", "1D", False)],
+        "1Y":  [("1A", "1D",   False), ("6M", "1D", False), ("3M", "1D", False)],
+        "all": [("all","1D",   False), ("1A", "1D", False)],
+    }
+    chain = CHAINS.get(period, CHAINS["1D"])
+
+    def _fetch(alp_period: str, alp_tf: str, ext_hours: bool) -> list:
+        params: dict = {"period": alp_period, "timeframe": alp_tf}
+        if ext_hours:
+            params["extended_hours"] = "true"
+        log.info("Portfolio history REST: %s", params)
+        try:
+            r = httpx.get(
+                f"{base_url}/v2/account/portfolio/history",
+                headers=headers,
+                params=params,
+                timeout=15.0,
+            )
+            r.raise_for_status()
+            body = r.json()
+        except Exception as exc:
+            log.warning("  REST call failed: %s", exc)
+            return []
+
+        timestamps = body.get("timestamp") or []
+        equities   = body.get("equity")    or []
+        pnls       = body.get("profit_loss") or []
         nulls = sum(1 for e in equities if e is None)
         log.info("  raw: %d pts, %d null", len(equities), nulls)
 
@@ -540,45 +558,23 @@ def get_portfolio_history(period: str = "1D"):
                 "pnl":    float(pnl) if pnl is not None else 0.0,
             }
             for ts, eq, pnl in zip(timestamps, equities, pnls)
-            if eq is not None
+            if eq is not None and float(eq) > 0
         ]
 
-    def _fetch(alp_period: str, alp_tf: str) -> list:
-        log.info("Portfolio history: period=%s tf=%s", alp_period, alp_tf)
-        # For intraday timeframes include pre/post-market so we get the full
-        # 24-hour window (7 PM → 6 PM) that Alpaca's own app shows.
-        intraday = alp_tf in ("1Min", "5Min", "15Min", "1H")
-        try:
-            from alpaca.trading.requests import GetPortfolioHistoryRequest
-            kwargs: dict = dict(period=alp_period, timeframe=alp_tf)
-            if intraday:
-                kwargs["extended_hours"] = True
-            req  = GetPortfolioHistoryRequest(**kwargs)
-            hist = client.get_portfolio_history(filter=req)
-        except Exception as e1:
-            log.warning("  SDK request failed (%s), trying direct kwargs", e1)
-            try:
-                kw: dict = dict(period=alp_period, timeframe=alp_tf)
-                if intraday:
-                    kw["extended_hours"] = True
-                hist = client.get_portfolio_history(**kw)
-            except Exception as e2:
-                log.warning("  kwargs also failed: %s", e2)
-                return []
-        return _to_points(hist)
-
-    for alp_period, alp_tf in chain:
-        pts = _fetch(alp_period, alp_tf)
+    for alp_period, alp_tf, ext_hours in chain:
+        pts = _fetch(alp_period, alp_tf, ext_hours)
         if len(pts) >= 2:
-            log.info("Portfolio history: returning %d pts", len(pts))
+            log.info("Portfolio history: returning %d pts for period=%s", len(pts), period)
             return pts
 
     # Last resort: 2-point line from account snapshot
-    log.warning("Portfolio history: all attempts returned <2 pts — using account snapshot")
+    log.warning("Portfolio history: all REST attempts returned <2 pts — using account snapshot")
     try:
-        acct        = client.get_account()
-        equity      = float(acct.equity)
-        last_equity = float(acct.last_equity)
+        r    = httpx.get(f"{base_url}/v2/account", headers=headers, timeout=10.0)
+        r.raise_for_status()
+        acct        = r.json()
+        equity      = float(acct.get("equity", 0))
+        last_equity = float(acct.get("last_equity", equity))
         now         = datetime.now(timezone.utc)
         day_start   = now.replace(hour=13, minute=30, second=0, microsecond=0)
         if day_start > now:
