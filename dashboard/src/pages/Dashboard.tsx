@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { DollarSign, TrendingDown, TrendingUp, Wallet } from "lucide-react";
 import { AllocationDonut } from "../components/AllocationDonut";
 import { EquityChart } from "../components/EquityChart";
@@ -19,10 +20,13 @@ function LiveBadge({ live }: { live: boolean }) {
   );
 }
 
+type EquityPeriod = "1D" | "1M" | "1Y";
+
 export function Dashboard() {
   const { portfolio: p, apiState } = usePortfolio();
   const { signals, apiState: sigState } = useSignals();
-  const { series: liveSeries, isLive: equityLive } = useEquitySeries();
+  const [equityPeriod, setEquityPeriod] = useState<EquityPeriod>("1D");
+  const { series: liveSeries, isLive: equityLive } = useEquitySeries(equityPeriod);
   const isLive = apiState === "live";
 
   // Build the equity series — never use random mock data.
@@ -92,11 +96,28 @@ export function Dashboard() {
               <h2 className="text-sm font-semibold">Equity Curve</h2>
               <LiveBadge live={equityLive} />
             </div>
-            <span className="text-xs text-slate-500">
-              {equityLive ? "Today (Alpaca)" : isLive ? "Connecting…" : "Waiting for data"}
-            </span>
+            <div className="flex items-center gap-3">
+              <div className="flex gap-1">
+                {(["1D", "1M", "1Y"] as EquityPeriod[]).map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => setEquityPeriod(p)}
+                    className={`text-[11px] font-mono px-2 py-0.5 rounded transition-colors ${
+                      equityPeriod === p
+                        ? "bg-brand-500/20 text-brand-400 border border-brand-500/30"
+                        : "text-slate-500 hover:text-slate-300"
+                    }`}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
+              <span className="text-xs text-slate-500">
+                {equityLive ? "Alpaca" : isLive ? "Connecting…" : "Waiting for data"}
+              </span>
+            </div>
           </div>
-          <EquityChart data={series} />
+          <EquityChart data={series} period={equityPeriod} />
         </div>
 
         <div className="space-y-4">

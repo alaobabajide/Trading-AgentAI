@@ -203,20 +203,21 @@ export function useSignals() {
 
 /**
  * Fetches the real equity curve from Alpaca portfolio history.
- * Falls back to mock series if the backend is unavailable or returns
- * no data (e.g. weekend / pre-market with no trading activity).
+ * Accepts a period ("1D" | "1M" | "1Y") and re-fetches whenever it changes.
  * Re-polls every 60 s so intraday moves stay current.
  */
-export function useEquitySeries() {
+export function useEquitySeries(period: "1D" | "1M" | "1Y" = "1D") {
   const [series, setSeries]   = useState<EquityPoint[]>([]);
   const [isLive, setIsLive]   = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    setSeries([]);   // clear stale data while new period loads
+    setIsLive(false);
 
     async function load() {
       try {
-        const res = await fetch(`${BASE}/portfolio/history`, {
+        const res = await fetch(`${BASE}/portfolio/history?period=${period}`, {
           signal: AbortSignal.timeout(15_000),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -233,7 +234,7 @@ export function useEquitySeries() {
     load();
     const id = setInterval(load, 60_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, []);
+  }, [period]);
 
   return { series, isLive };
 }

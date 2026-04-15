@@ -12,6 +12,7 @@ import { EquityPoint } from "../lib/types";
 
 interface Props {
   data: EquityPoint[];
+  period?: "1D" | "1M" | "1Y";
 }
 
 const CustomTooltip = ({ active, payload, label }: any) => {
@@ -26,7 +27,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   );
 };
 
-export function EquityChart({ data }: Props) {
+export function EquityChart({ data, period = "1D" }: Props) {
   if (data.length === 0) {
     return (
       <div className="flex items-center justify-center h-[220px] text-slate-500 text-sm font-mono">
@@ -35,9 +36,12 @@ export function EquityChart({ data }: Props) {
     );
   }
 
+  // X-axis label format depends on the selected period
+  const labelFmt = period === "1D" ? "HH:mm" : period === "1M" ? "MMM d" : "MMM yy";
+
   const formatted = data.map((d) => ({
     ...d,
-    label: format(new Date(d.time), "HH:mm"),
+    label: format(new Date(d.time), labelFmt),
   }));
 
   // Zoom Y-axis into the actual data range (same as Alpaca's own chart).

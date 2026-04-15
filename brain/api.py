@@ -492,10 +492,17 @@ def get_portfolio():
 
 
 @app.get("/portfolio/history")
-def get_portfolio_history():
-    """Return the equity curve using the same alpaca-py TradingClient that
-    already works for positions / equity.  Tries progressively wider time
-    windows so data always appears regardless of time-of-day or market status.
+def get_portfolio_history(period: str = "1D"):
+    """Return the equity curve for the requested period.
+
+    period (query param):
+        1D  → today's intraday data, 5-min bars
+        1M  → last month, daily bars
+        1Y  → last year,  daily bars
+        all → all available history, daily bars
+
+    Uses the same alpaca-py TradingClient that already works for
+    positions/equity — no raw httpx, no parameter format guessing.
     """
     from datetime import timezone
     from config import get_settings
@@ -505,19 +512,26 @@ def get_portfolio_history():
         log.warning("/portfolio/history: no ALPACA_API_KEY configured")
         return []
 
-    # Use the same SDK + paper flag as portfolio.py — known-working pattern
     from alpaca.trading.client import TradingClient
     is_paper = "paper" in cfg.alpaca_base_url.lower()
     client   = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
 
+    # Map UI period → (Alpaca period, Alpaca timeframe)
+    # Fallback chains: if the primary request returns < 2 pts, widen the window.
+    PERIOD_CHAINS: dict[str, list[tuple[str, str]]] = {
+        "1D":  [("1D", "5Min"), ("1W", "1D"), ("1M", "1D")],
+        "1M":  [("1M", "1D"),   ("3M", "1D")],
+        "1Y":  [("1A", "1D"),   ("6M", "1D"), ("3M", "1D")],
+        "all": [("all", "1D"),  ("1A", "1D"), ("6M", "1D")],
+    }
+    chain = PERIOD_CHAINS.get(period, PERIOD_CHAINS["1D"])
+
     def _to_points(hist) -> list:
-        """Convert a PortfolioHistory SDK object to [{time,equity,pnl}]."""
-        timestamps = list(getattr(hist, "timestamp",    None) or [])
-        equities   = list(getattr(hist, "equity",       None) or [])
-        pnls       = list(getattr(hist, "profit_loss",  None) or [])
-        total  = len(equities)
-        nulls  = sum(1 for e in equities if e is None)
-        log.info("  raw: %d pts, %d null equity values", total, nulls)
+        timestamps = list(getattr(hist, "timestamp",   None) or [])
+        equities   = list(getattr(hist, "equity",      None) or [])
+        pnls       = list(getattr(hist, "profit_loss", None) or [])
+        nulls = sum(1 for e in equities if e is None)
+        log.info("  raw: %d pts, %d null", len(equities), nulls)
         return [
             {
                 "time":   datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
@@ -528,52 +542,43 @@ def get_portfolio_history():
             if eq is not None
         ]
 
-    def _fetch(period: str, timeframe: str) -> list:
-        log.info("Portfolio history: trying period=%s timeframe=%s", period, timeframe)
+    def _fetch(alp_period: str, alp_tf: str) -> list:
+        log.info("Portfolio history: period=%s tf=%s", alp_period, alp_tf)
         try:
             from alpaca.trading.requests import GetPortfolioHistoryRequest
-            req  = GetPortfolioHistoryRequest(period=period, timeframe=timeframe)
+            req  = GetPortfolioHistoryRequest(period=alp_period, timeframe=alp_tf)
             hist = client.get_portfolio_history(filter=req)
-        except Exception as sdk_exc:
-            # Some alpaca-py versions use positional args or different request class
-            log.warning("  GetPortfolioHistoryRequest failed (%s) — trying kwargs", sdk_exc)
+        except Exception as e1:
+            log.warning("  SDK request failed (%s), trying kwargs", e1)
             try:
-                hist = client.get_portfolio_history(period=period, timeframe=timeframe)
-            except Exception as kw_exc:
-                log.warning("  kwargs call also failed: %s", kw_exc)
+                hist = client.get_portfolio_history(period=alp_period, timeframe=alp_tf)
+            except Exception as e2:
+                log.warning("  kwargs also failed: %s", e2)
                 return []
         return _to_points(hist)
 
-    # ── Ordered from most-granular to broadest ────────────────────────────────
-    for period, timeframe in [
-        ("1D",  "5Min"),   # today, 5-min bars
-        ("1W",  "1D"),     # this week, daily bars
-        ("1M",  "1D"),     # this month, daily bars
-        ("6M",  "1D"),     # 6-month history, daily bars
-    ]:
-        pts = _fetch(period, timeframe)
+    for alp_period, alp_tf in chain:
+        pts = _fetch(alp_period, alp_tf)
         if len(pts) >= 2:
-            log.info("Portfolio history: returning %d pts (period=%s tf=%s)", len(pts), period, timeframe)
+            log.info("Portfolio history: returning %d pts", len(pts))
             return pts
 
-    # ── Last resort: 2-point line from account snapshot ──────────────────────
-    log.warning("Portfolio history: all SDK attempts failed — building from account snapshot")
+    # Last resort: 2-point line from account snapshot
+    log.warning("Portfolio history: all attempts returned <2 pts — using account snapshot")
     try:
         acct        = client.get_account()
         equity      = float(acct.equity)
         last_equity = float(acct.last_equity)
         now         = datetime.now(timezone.utc)
-        # 09:30 ET = 13:30 UTC (approximate market open)
         day_start   = now.replace(hour=13, minute=30, second=0, microsecond=0)
         if day_start > now:
             day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        log.info("Account snapshot: equity=%.2f last_equity=%.2f", equity, last_equity)
         return [
             {"time": day_start.isoformat(), "equity": last_equity, "pnl": 0.0},
             {"time": now.isoformat(),        "equity": equity,      "pnl": equity - last_equity},
         ]
     except Exception as exc:
-        log.error("Portfolio history account fallback failed: %s", exc)
+        log.error("Account snapshot fallback failed: %s", exc)
         return []
 
 
