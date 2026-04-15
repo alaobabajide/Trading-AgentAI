@@ -24,6 +24,8 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 
 from config import get_settings
@@ -550,32 +552,77 @@ def _sync_exec_direct(
         return f"❌ Execution failed: {exc}"
 
 
+# ── Plain-text fallback ───────────────────────────────────────────────────────
+
+async def cmd_unknown_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Reply to any plain-text message with the command list."""
+    await update.message.reply_text(
+        "👋 I don't understand plain text — use a command:\n\n"
+        "/signal AAPL stock — get a trade signal\n"
+        "/buy AAPL 500 stock — place a buy order\n"
+        "/sell AAPL 500 stock — place a sell order\n"
+        "/positions — view open positions\n"
+        "/health — system status\n"
+        "/help — full command reference",
+        parse_mode=None,
+    )
+
+
 # ── Bot entry point ───────────────────────────────────────────────────────────
 
 def run_bot() -> None:
+    import time as _time
+
     cfg = get_settings()
     if not cfg.telegram_bot_token:
         log.warning("TELEGRAM_BOT_TOKEN not set — Telegram bot disabled.")
         return
 
-    application = (
-        Application.builder()
-        .token(cfg.telegram_bot_token)
-        .build()
-    )
+    token = cfg.telegram_bot_token
 
-    application.add_handler(CommandHandler("start",     cmd_start))
-    application.add_handler(CommandHandler("help",      cmd_help))
-    application.add_handler(CommandHandler("signal",    cmd_signal))
-    application.add_handler(CommandHandler("trend",     cmd_signal))   # alias
-    application.add_handler(CommandHandler("buy",       cmd_buy))
-    application.add_handler(CommandHandler("sell",      cmd_sell))
-    application.add_handler(CommandHandler("positions", cmd_positions))
-    application.add_handler(CommandHandler("health",    cmd_health))
-    application.add_handler(CallbackQueryHandler(handle_callback))
+    # ── 1. Delete any stale webhook so polling receives updates ─────────────
+    try:
+        r = httpx.get(
+            f"https://api.telegram.org/bot{token}/deleteWebhook",
+            params={"drop_pending_updates": "true"},
+            timeout=10,
+        )
+        log.info("Webhook cleared: %s", r.json())
+    except Exception as exc:
+        log.warning("Could not delete webhook (non-fatal): %s", exc)
 
-    log.info("Telegram bot polling…")
-    application.run_polling(drop_pending_updates=True)
+    # ── 2. Retry loop — restart bot on crash ─────────────────────────────────
+    attempt = 0
+    while True:
+        attempt += 1
+        log.info("Telegram bot starting (attempt %d)…", attempt)
+        try:
+            application = (
+                Application.builder()
+                .token(token)
+                .build()
+            )
+
+            application.add_handler(CommandHandler("start",     cmd_start))
+            application.add_handler(CommandHandler("help",      cmd_help))
+            application.add_handler(CommandHandler("signal",    cmd_signal))
+            application.add_handler(CommandHandler("trend",     cmd_signal))
+            application.add_handler(CommandHandler("buy",       cmd_buy))
+            application.add_handler(CommandHandler("sell",      cmd_sell))
+            application.add_handler(CommandHandler("positions", cmd_positions))
+            application.add_handler(CommandHandler("health",    cmd_health))
+            application.add_handler(CallbackQueryHandler(handle_callback))
+            # Catch any plain-text message (not a /command) and explain usage
+            application.add_handler(
+                MessageHandler(filters.TEXT & ~filters.COMMAND, cmd_unknown_text)
+            )
+
+            log.info("Telegram bot polling (attempt %d)…", attempt)
+            application.run_polling(drop_pending_updates=True)
+            log.warning("run_polling returned unexpectedly — restarting in 5s…")
+        except Exception as exc:
+            log.error("Telegram bot crashed (attempt %d): %s — restarting in 5s…", attempt, exc)
+        _time.sleep(5)
 
 
 if __name__ == "__main__":
