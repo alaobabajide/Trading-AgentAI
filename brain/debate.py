@@ -175,13 +175,18 @@ def _aggregate_dual_panel(
 def _action_from_votes(
     tally: dict[str, int],
     panels_conflict: bool = False,
-    threshold: int = 8,
+    threshold: int = 6,
 ) -> Literal["BUY", "SELL", "HOLD"]:
     """
-    Dual-panel majority-vote arbiter.  15 total agents; default threshold = 8.
-    Panel conflict immediately forces HOLD regardless of combined count.
+    Dual-panel majority-vote arbiter.  15 total agents; default threshold = 6.
+    Panel conflict only forces HOLD when BOTH panels are strongly directional
+    and opposing (≥3 votes each).  Weak/neutral panel conflict is advisory only.
     """
-    if panels_conflict:
+    a_bullish = tally.get("bullish", 0)
+    a_bearish = tally.get("bearish", 0)
+    # Only block on conflict when it's a strong disagreement
+    strong_conflict = panels_conflict and a_bullish >= 3 and a_bearish >= 3
+    if strong_conflict:
         return "HOLD"
     if tally["bullish"] >= threshold:
         return "BUY"
@@ -200,20 +205,21 @@ def _compute_tier(
     """
     Deterministic tier from combined 15-agent vote count + regime.
 
-    HOT  = 11+ of 15 aligned AND no conflict AND regime is TRENDING
-    WARM = 8–10 of 15 aligned AND no conflict AND regime allows trading
-    COLD = < 8 aligned  OR  panel conflict  OR  HIGH_VOLATILITY  OR  RANGING  OR  HOLD
+    HOT  = 10+ of 15 aligned AND no strong conflict AND regime is TRENDING
+    WARM = 6–9 of 15 aligned AND no strong conflict AND regime allows trading
+    COLD = < 6 aligned  OR  strong panel conflict  OR  HIGH_VOLATILITY  OR  RANGING  OR  HOLD
     """
     aligned  = tally["bullish"] if action == "BUY" else tally["bearish"] if action == "SELL" else 0
     high_vol = (
         "HIGH_VOLATILITY" in regime_label
-        or (indicators.get("atr_14", 0) / max(indicators.get("price", 1), 1)) > 0.03
+        or (indicators.get("atr_14", 0) / max(indicators.get("price", 1), 1)) > 0.04
     )
-    blocked = high_vol or "RANGING" in regime_label or action == "HOLD" or panels_conflict
+    strong_conflict = panels_conflict and tally.get("bullish", 0) >= 3 and tally.get("bearish", 0) >= 3
+    blocked = high_vol or "RANGING" in regime_label or action == "HOLD" or strong_conflict
 
-    if blocked or aligned < 8:
+    if blocked or aligned < 6:
         return "COLD"
-    if aligned >= 11:
+    if aligned >= 10:
         return "HOT"
     return "WARM"
 
@@ -325,9 +331,9 @@ def _paper_quant(indicators: dict) -> str:
         notes.append(f"Stoch K={stoch_k:.1f} neutral")
 
     # ROC10 as mean-reversion catalyst (sharp moves revert)
-    if roc_10 < -8.0:
-        b += 1; notes.append(f"ROC10={roc_10:+.1f}% sharp drop → reversion candidate")
-    elif roc_10 > 8.0:
+    if roc_10 < -4.0:
+        b += 1; notes.append(f"ROC10={roc_10:+.1f}% pullback → reversion candidate")
+    elif roc_10 > 4.0:
         s += 1; notes.append(f"ROC10={roc_10:+.1f}% sharp rally → reversion risk")
     else:
         notes.append(f"ROC10={roc_10:+.1f}% within normal range")
@@ -355,18 +361,18 @@ def _paper_fundamental(indicators: dict) -> str:
     b, s, notes = 0, 0, []
 
     # ROC20 — intermediate momentum (earnings-cycle horizon)
-    if roc_20 > 8.0:
-        b += 1; notes.append(f"ROC20={roc_20:+.1f}% strong intermediate uptrend")
-    elif roc_20 < -8.0:
-        s += 1; notes.append(f"ROC20={roc_20:+.1f}% strong intermediate downtrend")
+    if roc_20 > 5.0:
+        b += 1; notes.append(f"ROC20={roc_20:+.1f}% intermediate uptrend")
+    elif roc_20 < -5.0:
+        s += 1; notes.append(f"ROC20={roc_20:+.1f}% intermediate downtrend")
     else:
         notes.append(f"ROC20={roc_20:+.1f}% moderate")
 
     # ROC60 — quarterly momentum
-    if roc_60 > 15.0:
-        b += 1; notes.append(f"ROC60={roc_60:+.1f}% secular uptrend")
-    elif roc_60 < -15.0:
-        s += 1; notes.append(f"ROC60={roc_60:+.1f}% secular downtrend")
+    if roc_60 > 8.0:
+        b += 1; notes.append(f"ROC60={roc_60:+.1f}% quarterly uptrend")
+    elif roc_60 < -8.0:
+        s += 1; notes.append(f"ROC60={roc_60:+.1f}% quarterly downtrend")
     else:
         notes.append(f"ROC60={roc_60:+.1f}%")
 
@@ -460,23 +466,23 @@ def _paper_macro(indicators: dict) -> str:
 
     # Price vs SMA200 — bull/bear market structure
     dev_200 = (price - sma_200) / max(sma_200, 1e-9) * 100
-    if price > sma_200 * 1.03:
+    if price > sma_200 * 1.015:
         b += 1; notes.append(f"Price {dev_200:+.1f}% above SMA200 — bull market structure")
-    elif price < sma_200 * 0.97:
+    elif price < sma_200 * 0.985:
         s += 1; notes.append(f"Price {dev_200:+.1f}% below SMA200 — bear market structure")
     else:
         notes.append(f"Price at SMA200 crossover zone ({dev_200:+.1f}%)")
 
     # ROC60 — macro quarterly momentum
-    if roc_60 > 12.0:
+    if roc_60 > 7.0:
         b += 1; notes.append(f"ROC60={roc_60:+.1f}% positive macro momentum")
-    elif roc_60 < -12.0:
+    elif roc_60 < -7.0:
         s += 1; notes.append(f"ROC60={roc_60:+.1f}% negative macro momentum")
     else:
         notes.append(f"ROC60={roc_60:+.1f}% subdued macro momentum")
 
     # 52W high proximity — secular trend health
-    if high_proximity < 0.05:
+    if high_proximity < 0.08:
         b += 1; notes.append(f"Near 52W high ({high_proximity*100:.1f}% from peak) — strong secular trend")
     elif high_proximity > 0.25:
         s += 1; notes.append(f"Far from 52W high ({high_proximity*100:.0f}% drawdown) — weak macro backdrop")
@@ -504,15 +510,15 @@ def _paper_sentiment(indicators: dict) -> str:
     b, s, notes = 0, 0, []
 
     # ROC5 — recent crowd momentum
-    if roc_5 > 3.0:
+    if roc_5 > 1.5:
         b += 1; notes.append(f"ROC5={roc_5:+.1f}% buying momentum")
-    elif roc_5 < -3.0:
+    elif roc_5 < -1.5:
         s += 1; notes.append(f"ROC5={roc_5:+.1f}% selling panic")
     else:
         notes.append(f"ROC5={roc_5:+.1f}% low short-term momentum")
 
     # Volume with price direction — crowd participation
-    if volume_ratio > 2.0:
+    if volume_ratio > 1.5:
         if roc_5 > 0:
             b += 1; notes.append(f"Volume surge {volume_ratio:.1f}x on up-move → crowd FOMO")
         else:
@@ -560,26 +566,26 @@ def _paper_investor_buffett(indicators: dict) -> str:
     b, s, notes = 0, 0, []
 
     dev_200 = (price - sma_200) / max(sma_200, 1e-9) * 100
-    if price > sma_200 * 1.05:
+    if price > sma_200 * 1.03:
         b += 1; notes.append(f"Price {dev_200:+.1f}% above SMA200 — healthy secular uptrend")
-    elif price < sma_200 * 0.95:
+    elif price < sma_200 * 0.97:
         s += 1; notes.append(f"Price {dev_200:+.1f}% below SMA200 — secular downtrend")
     else:
         notes.append(f"Price near SMA200 ({dev_200:+.1f}%) — neutral long-term structure")
 
-    if roc_60 > 20.0:
+    if roc_60 > 10.0:
         b += 1; notes.append(f"ROC60={roc_60:+.1f}% — strong business momentum proxy")
-    elif roc_60 < -15.0:
+    elif roc_60 < -10.0:
         s += 1; notes.append(f"ROC60={roc_60:+.1f}% — deteriorating fundamentals proxy")
     else:
-        notes.append(f"ROC60={roc_60:+.1f}% — insufficient for Buffett's conviction threshold")
+        notes.append(f"ROC60={roc_60:+.1f}% — moderate momentum")
 
-    if roc_20 > 12.0 and b > 0:
+    if roc_20 > 6.0 and b > 0:
         b += 1; notes.append(f"ROC20={roc_20:+.1f}% confirms intermediate strength")
-    elif roc_20 < -12.0 and s > 0:
+    elif roc_20 < -6.0 and s > 0:
         s += 1; notes.append(f"ROC20={roc_20:+.1f}% confirms intermediate weakness")
     else:
-        notes.append(f"ROC20={roc_20:+.1f}% — moderate, Buffett needs stronger conviction")
+        notes.append(f"ROC20={roc_20:+.1f}% — moderate")
 
     direction = "BULLISH" if b >= 2 else "BEARISH" if s >= 2 else "NEUTRAL"
     return (
@@ -603,15 +609,15 @@ def _paper_investor_munger(indicators: dict) -> str:
     dev_200 = (price - sma_200) / max(sma_200, 1e-9) * 100
     notes = []
 
-    # Munger requires ALL three conditions for BULLISH — very selective
-    above_200   = price > sma_200 * 1.08
-    strong_roc  = roc_60 > 25.0
+    # Munger requires strong conditions for BULLISH — selective but not impossible
+    above_200   = price > sma_200 * 1.06
+    strong_roc  = roc_60 > 15.0
     near_highs  = high_proximity < 0.10
 
     if above_200 and strong_roc:
         notes.append(f"Price {dev_200:+.1f}% above SMA200 + ROC60={roc_60:+.1f}% — Munger conviction met")
         direction = "BULLISH"
-    elif price < sma_200 * 0.92 and roc_60 < -20.0:
+    elif price < sma_200 * 0.94 and roc_60 < -15.0:
         notes.append(f"Price {dev_200:+.1f}% below SMA200 + ROC60={roc_60:+.1f}% — avoid / exit")
         direction = "BEARISH"
     else:
@@ -642,23 +648,23 @@ def _paper_investor_lynch(indicators: dict) -> str:
     b, s, notes = 0, 0, []
 
     dev_20 = (price - sma_20) / max(sma_20, 1e-9) * 100
-    if roc_20 > 10.0:
-        b += 1; notes.append(f"ROC20={roc_20:+.1f}% — earnings-cycle momentum strong")
-    elif roc_20 < -10.0:
+    if roc_20 > 5.0:
+        b += 1; notes.append(f"ROC20={roc_20:+.1f}% — earnings-cycle momentum positive")
+    elif roc_20 < -5.0:
         s += 1; notes.append(f"ROC20={roc_20:+.1f}% — earnings-cycle deteriorating")
     else:
         notes.append(f"ROC20={roc_20:+.1f}% — moderate growth")
 
-    if roc_60 > 15.0 and roc_5 > 2.0:
-        b += 1; notes.append(f"ROC60={roc_60:+.1f}% + recent acceleration ROC5={roc_5:+.1f}% — story intact")
-    elif roc_60 < -10.0 and roc_5 < -2.0:
-        s += 1; notes.append(f"ROC60={roc_60:+.1f}% + recent deceleration ROC5={roc_5:+.1f}% — story broken")
+    if roc_60 > 8.0 and roc_5 > 1.0:
+        b += 1; notes.append(f"ROC60={roc_60:+.1f}% + recent momentum ROC5={roc_5:+.1f}% — story intact")
+    elif roc_60 < -8.0 and roc_5 < -1.0:
+        s += 1; notes.append(f"ROC60={roc_60:+.1f}% + recent weakness ROC5={roc_5:+.1f}% — story broken")
     else:
         notes.append(f"ROC60={roc_60:+.1f}%, ROC5={roc_5:+.1f}% — mixed signals")
 
-    if price > sma_20 * 1.01 and volume_ratio > 1.2:
+    if price > sma_20 * 1.005 and volume_ratio > 1.1:
         b += 1; notes.append(f"Above SMA20 ({dev_20:+.1f}%) on {volume_ratio:.1f}x volume — crowd confirming")
-    elif price < sma_20 * 0.99 and volume_ratio > 1.4:
+    elif price < sma_20 * 0.995 and volume_ratio > 1.3:
         s += 1; notes.append(f"Below SMA20 ({dev_20:+.1f}%) on {volume_ratio:.1f}x volume — distribution")
     else:
         notes.append(f"SMA20 {dev_20:+.1f}%, volume {volume_ratio:.2f}x — inconclusive")
@@ -686,9 +692,9 @@ def _paper_investor_ackman(indicators: dict) -> str:
     b, s, notes = 0, 0, []
 
     dev_200 = (price - sma_200) / max(sma_200, 1e-9) * 100
-    if roc_20 > 12.0 and roc_60 > 18.0:
+    if roc_20 > 6.0 and roc_60 > 10.0:
         b += 1; notes.append(f"ROC20={roc_20:+.1f}%, ROC60={roc_60:+.1f}% — multi-timeframe thesis confirmed")
-    elif roc_20 < -12.0 and roc_60 < -15.0:
+    elif roc_20 < -6.0 and roc_60 < -10.0:
         s += 1; notes.append(f"ROC20={roc_20:+.1f}%, ROC60={roc_60:+.1f}% — thesis broken across timeframes")
     else:
         notes.append(f"ROC20={roc_20:+.1f}%, ROC60={roc_60:+.1f}% — mixed, need more conviction")
@@ -786,23 +792,23 @@ def _paper_investor_dalio(indicators: dict) -> str:
 
     b, s, notes = 0, 0, []
 
-    if atr_pct > 0.025:
+    if atr_pct > 0.035:
         notes.append(f"ATR%={atr_pct*100:.1f}% elevated — Dalio reduces risk exposure, NEUTRAL bias")
         return (
             f"DIRECTION: NEUTRAL\n"
             f"REASONING: Paper mode [Dalio/all-weather] — {'; '.join(notes)}."
         )
 
-    if price > sma_200 * 1.03 and roc_60 > 15.0:
+    if price > sma_200 * 1.015 and roc_60 > 8.0:
         b += 1; notes.append(f"Above SMA200 ({dev_200:+.1f}%) + ROC60={roc_60:+.1f}% — healthy macro regime")
-    elif price < sma_200 * 0.97 and roc_60 < -10.0:
+    elif price < sma_200 * 0.985 and roc_60 < -8.0:
         s += 1; notes.append(f"Below SMA200 ({dev_200:+.1f}%) + ROC60={roc_60:+.1f}% — deteriorating macro")
     else:
         notes.append(f"SMA200 {dev_200:+.1f}%, ROC60={roc_60:+.1f}% — mixed macro signals")
 
-    if roc_20 > 8.0 and b > 0:
+    if roc_20 > 4.0 and b > 0:
         b += 1; notes.append(f"ROC20={roc_20:+.1f}% confirms intermediate strength")
-    elif roc_20 < -8.0 and s > 0:
+    elif roc_20 < -4.0 and s > 0:
         s += 1; notes.append(f"ROC20={roc_20:+.1f}% confirms intermediate weakness")
     else:
         notes.append(f"ROC20={roc_20:+.1f}% — Dalio: balanced signal, lean NEUTRAL")
@@ -835,17 +841,17 @@ def _paper_investor_wood(indicators: dict) -> str:
     b, s, notes = 0, 0, []
 
     # Wood's primary: secular trend is everything
-    if price > sma_200 * 1.02 and roc_60 > 18.0:
+    if price > sma_200 * 1.01 and roc_60 > 10.0:
         b += 1; notes.append(f"Above SMA200 ({dev_200:+.1f}%) + ROC60={roc_60:+.1f}% — innovation secular trend intact")
-    elif price < sma_200 * 0.95 and roc_60 < -20.0:
+    elif price < sma_200 * 0.97 and roc_60 < -12.0:
         s += 1; notes.append(f"Below SMA200 ({dev_200:+.1f}%) + ROC60={roc_60:+.1f}% — secular trend broken")
     else:
         notes.append(f"SMA200 {dev_200:+.1f}%, ROC60={roc_60:+.1f}% — transition zone")
 
     # Wood buys dips — ATR pullback in uptrend = opportunity
-    if roc_20 > 8.0:
+    if roc_20 > 5.0:
         b += 1; notes.append(f"ROC20={roc_20:+.1f}% — intermediate growth acceleration")
-    elif roc_20 > 0 and atr_pct > 0.02 and b > 0:
+    elif roc_20 > 0 and atr_pct > 0.015 and b > 0:
         b += 1; notes.append(f"ROC20={roc_20:+.1f}% moderate + ATR%={atr_pct*100:.1f}% pullback in uptrend — buy the dip")
     elif roc_20 < -10.0:
         s += 1; notes.append(f"ROC20={roc_20:+.1f}% — growth story decelerating")
@@ -1297,7 +1303,7 @@ class DebateOrchestrator:
         panel_a_tally, panel_b_tally, combined_tally, panels_conflict, conflict_note = (
             _aggregate_dual_panel(analyst_views, investor_views)
         )
-        action           = _action_from_votes(combined_tally, panels_conflict=panels_conflict, threshold=8)
+        action           = _action_from_votes(combined_tally, panels_conflict=panels_conflict, threshold=6)
         regime_view      = analyst_views.get("regime", "")
         regime_label     = _parse_regime_label(regime_view)
         votes_for_action = (

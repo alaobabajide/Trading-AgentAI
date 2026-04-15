@@ -65,21 +65,32 @@ class AlpacaMarketData:
         from alpaca.data.timeframe import TimeFrame
         from alpaca.data.enums import DataFeed
 
-        end = datetime.now(timezone.utc)
+        end   = datetime.now(timezone.utc)
         start = end - timedelta(days=days)
 
-        req = StockBarsRequest(
-            symbol_or_symbols=symbol,
-            timeframe=TimeFrame.Day,
-            start=start,
-            end=end,
-            feed=DataFeed.IEX,   # free tier — avoids SIP subscription error
-        )
-        resp = self._client.get_stock_bars(req)
-        df: pd.DataFrame = resp.df
-
         bars: list[Bar] = []
+
+        # Try SIP feed first (paper accounts get SIP access), fall back to IEX
+        for feed in (DataFeed.SIP, DataFeed.IEX):
+            try:
+                req  = StockBarsRequest(
+                    symbol_or_symbols=symbol,
+                    timeframe=TimeFrame.Day,
+                    start=start,
+                    end=end,
+                    feed=feed,
+                )
+                resp = self._client.get_stock_bars(req)
+                df: pd.DataFrame = resp.df
+                if not df.empty:
+                    break   # got data — stop trying
+                log.debug("Empty bars from %s feed for %s, trying next feed", feed, symbol)
+            except Exception as exc:
+                log.debug("Feed %s failed for %s (%s), trying next", feed, symbol, exc)
+                df = pd.DataFrame()
+
         if df.empty:
+            log.warning("No bar data returned for %s after trying all feeds", symbol)
             return bars
 
         # Multi-index: (symbol, timestamp) → flatten
