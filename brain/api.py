@@ -495,78 +495,47 @@ def get_portfolio():
 def get_portfolio_history(period: str = "1D"):
     """Return the equity curve for the requested period.
 
-    1D  → reconstructed from live positions + 5-min price bars via
-          StockHistoricalDataClient / CryptoHistoricalDataClient.
-          Gives a true 24-hour equity curve (288 5-min points) because
-          crypto bars are available 24/7 and stock bars fill market hours.
-          This bypasses Alpaca's portfolio history API which returns mostly
-          null slots for paper accounts outside market hours.
+    All periods use the same approach: reconstruct equity from live
+    positions + historical price bars via Alpaca's market data API.
 
-    1M / 1Y → Alpaca portfolio history REST API (daily bars).
+        equity[t] = cash + Σ(qty_i × close_price_i[t])
+
+    1D  → 5-minute bars, last 24 h  (up to 288 pts)
+    1M  → daily bars,    last 30 d  (up to 30 pts)
+    1Y  → daily bars,    last 365 d (up to 365 pts)
+
+    This is reliable for all periods because it uses the market data API
+    (StockHistoricalDataClient / CryptoHistoricalDataClient) which always
+    has data, unlike the portfolio history API which returns null-heavy
+    results for paper accounts outside market hours.
     """
-    import httpx
-    import pandas as pd
-    from datetime import timezone, timedelta
     from config import get_settings
-    from alpaca.trading.client import TradingClient
-
     cfg = get_settings()
     if not cfg.alpaca_api_key:
         return []
 
     is_paper = "paper" in cfg.alpaca_base_url.lower()
 
-    # ── 1D: reconstruct from positions + market-data bars ────────────────────
-    if period == "1D":
-        return _build_1d_equity(cfg, is_paper)
-
-    # ── 1M / 1Y: TradingClient SDK (daily bars, no extended_hours needed) ───────
-    from alpaca.trading.requests import GetPortfolioHistoryRequest
-    from datetime import timezone
-
-    client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
-
-    chains = {
-        "1M": [("1M", "1D"), ("3M", "1D")],
-        "1Y": [("1A", "1D"), ("6M", "1D"), ("3M", "1D")],
-    }
-    for alp_period, alp_tf in chains.get(period, [("1M", "1D")]):
-        try:
-            req  = GetPortfolioHistoryRequest(period=alp_period, timeframe=alp_tf)
-            hist = client.get_portfolio_history(filter=req)
-
-            timestamps = list(getattr(hist, "timestamp",   None) or [])
-            equities   = list(getattr(hist, "equity",      None) or [])
-            profit_raw = list(getattr(hist, "profit_loss", None) or [None] * len(timestamps))
-
-            pts = []
-            for i in range(min(len(timestamps), len(equities))):
-                eq = equities[i]
-                if eq is None:
-                    continue
-                pnl = profit_raw[i] if i < len(profit_raw) and profit_raw[i] is not None else 0.0
-                pts.append({
-                    "time":   datetime.fromtimestamp(timestamps[i], tz=timezone.utc).isoformat(),
-                    "equity": float(eq),
-                    "pnl":    float(pnl),
-                })
-            log.info("portfolio history SDK %s/%s → %d pts", alp_period, alp_tf, len(pts))
-            if len(pts) >= 2:
-                return pts
-        except Exception as exc:
-            log.warning("portfolio history SDK %s/%s failed: %s", alp_period, alp_tf, exc)
-
-    return []
+    lookback = {"1D": 1, "1M": 30, "1Y": 365}.get(period, 1)
+    daily    = period != "1D"
+    return _build_equity(cfg, is_paper, lookback_days=lookback, use_daily=daily)
 
 
 def _build_1d_equity(cfg, is_paper: bool) -> list:
+    return _build_equity(cfg, is_paper, lookback_days=1, use_daily=False)
+
+
+def _build_equity(cfg, is_paper: bool, lookback_days: int, use_daily: bool) -> list:
     """
-    Reconstruct the 1D equity curve from live positions + 5-minute price bars.
+    Reconstruct an equity curve from live positions + historical price bars.
 
-    equity[t] = cash + Σ(qty_i × close_price_i[t])
+        equity[t] = cash + Σ(qty_i × close_price_i[t])
 
-    Stock bars cover market hours (9:30 AM – 4 PM ET); crypto bars are 24/7.
-    Prices are carried forward between bars so the curve is continuous.
+    use_daily=False → 5-minute bars (for 1D)
+    use_daily=True  → daily bars    (for 1M / 1Y)
+
+    Stock bars: market hours only; prices carried forward between sessions.
+    Crypto bars: 24/7, fills overnight gaps.
     """
     import pandas as pd
     from datetime import timezone, timedelta
@@ -577,81 +546,83 @@ def _build_1d_equity(cfg, is_paper: bool) -> list:
     from alpaca.data.enums import DataFeed
 
     now   = datetime.now(timezone.utc)
-    start = now - timedelta(hours=24)
-    tf    = TimeFrame(5, TimeFrameUnit.Minute)
+    start = now - timedelta(days=lookback_days)
+    tf    = TimeFrame.Day if use_daily else TimeFrame(5, TimeFrameUnit.Minute)
+    label = f"{'daily' if use_daily else '5min'}/{lookback_days}d"
 
     try:
-        client    = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
-        acct      = client.get_account()
-        cash      = float(acct.cash)
-        raw_pos   = client.get_all_positions()
+        client  = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
+        acct    = client.get_account()
+        cash    = float(acct.cash)
+        raw_pos = client.get_all_positions()
     except Exception as exc:
-        log.error("1D equity: failed to fetch account/positions: %s", exc)
+        log.error("equity(%s): account/positions failed: %s", label, exc)
         return []
 
     if not raw_pos:
-        log.info("1D equity: no positions, returning flat cash line")
+        log.info("equity(%s): no positions — flat cash line", label)
         pts, t = [], start
+        step = timedelta(days=1) if use_daily else timedelta(minutes=5)
         while t <= now:
             pts.append({"time": t.isoformat(), "equity": cash, "pnl": 0.0})
-            t += timedelta(minutes=5)
+            t += step
         return pts
 
-    # Separate by asset class
-    stock_pos  = {}   # symbol → qty
-    crypto_pos = {}   # symbol (slash form) → qty
-
+    stock_pos: dict  = {}
+    crypto_pos: dict = {}
     for p in raw_pos:
-        qty        = float(p.qty)
-        sym        = p.symbol
-        asset_cls  = str(getattr(p, "asset_class", "")).lower()
+        qty       = float(p.qty)
+        sym       = p.symbol
+        asset_cls = str(getattr(p, "asset_class", "")).lower()
         if "crypto" in asset_cls:
-            # Alpaca crypto symbols: "BTCUSD" → "BTC/USD"
             slash = sym[:-3] + "/" + sym[-3:] if "/" not in sym else sym
             crypto_pos[slash] = qty
         else:
             stock_pos[sym] = qty
 
-    log.info("1D equity: %d stock + %d crypto positions, cash=%.2f",
-             len(stock_pos), len(crypto_pos), cash)
+    log.info("equity(%s): %d stock + %d crypto pos, cash=%.2f",
+             label, len(stock_pos), len(crypto_pos), cash)
 
-    # price_series: {timestamp_utc: {symbol: close}}
-    price_series: dict = {}
+    price_series: dict = {}   # {datetime_utc: {symbol: close_price}}
 
-    data_client = StockHistoricalDataClient(cfg.alpaca_api_key, cfg.alpaca_secret_key)
+    def _load_df(df, sym_map: dict) -> None:
+        """Parse a bars DataFrame (possibly MultiIndex) into price_series."""
+        if df is None or df.empty:
+            return
+        if isinstance(df.index, pd.MultiIndex):
+            for sym in sym_map:
+                lvl0 = df.index.get_level_values(0)
+                if sym not in lvl0:
+                    continue
+                for ts, row in df.loc[sym].iterrows():
+                    t = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
+                    t = t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t
+                    price_series.setdefault(t, {})[sym] = float(row["close"])
+        else:
+            sym = next(iter(sym_map))
+            for ts, row in df.iterrows():
+                t = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
+                t = t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t
+                price_series.setdefault(t, {})[sym] = float(row["close"])
 
-    # ── Stock bars (market hours) ─────────────────────────────────────────────
+    # ── Stock bars ────────────────────────────────────────────────────────────
     if stock_pos:
+        sc = StockHistoricalDataClient(cfg.alpaca_api_key, cfg.alpaca_secret_key)
         for feed in (DataFeed.SIP, DataFeed.IEX):
             try:
                 req = StockBarsRequest(
                     symbol_or_symbols=list(stock_pos.keys()),
                     timeframe=tf, start=start, end=now, feed=feed,
                 )
-                df = data_client.get_stock_bars(req).df
-                if df.empty:
-                    continue
-                # MultiIndex: (symbol, timestamp)
-                if isinstance(df.index, pd.MultiIndex):
-                    for sym in stock_pos:
-                        if sym not in df.index.get_level_values(0):
-                            continue
-                        for ts, row in df.loc[sym].iterrows():
-                            t = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
-                            t = t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t
-                            price_series.setdefault(t, {})[sym] = float(row["close"])
-                else:
-                    sym = list(stock_pos.keys())[0]
-                    for ts, row in df.iterrows():
-                        t = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
-                        t = t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t
-                        price_series.setdefault(t, {})[sym] = float(row["close"])
-                log.info("1D equity: %s stock bars via %s feed", len(price_series), feed)
-                break
+                df = sc.get_stock_bars(req).df
+                if not df.empty:
+                    _load_df(df, stock_pos)
+                    log.info("equity(%s): %d stock bar ts via %s", label, len(price_series), feed)
+                    break
             except Exception as exc:
-                log.warning("1D equity: stock bars %s failed: %s", feed, exc)
+                log.warning("equity(%s): stock bars %s: %s", label, feed, exc)
 
-    # ── Crypto bars (24/7 — fills overnight gaps) ────────────────────────────
+    # ── Crypto bars (24/7) ────────────────────────────────────────────────────
     if crypto_pos:
         try:
             from alpaca.data.historical import CryptoHistoricalDataClient
@@ -662,30 +633,16 @@ def _build_1d_equity(cfg, is_paper: bool) -> list:
                 timeframe=tf, start=start, end=now,
             )
             df = cc.get_crypto_bars(req).df
-            if not df.empty:
-                if isinstance(df.index, pd.MultiIndex):
-                    for sym in crypto_pos:
-                        if sym not in df.index.get_level_values(0):
-                            continue
-                        for ts, row in df.loc[sym].iterrows():
-                            t = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
-                            t = t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t
-                            price_series.setdefault(t, {})[sym] = float(row["close"])
-                else:
-                    sym = list(crypto_pos.keys())[0]
-                    for ts, row in df.iterrows():
-                        t = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
-                        t = t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t
-                        price_series.setdefault(t, {})[sym] = float(row["close"])
-            log.info("1D equity: crypto bars added, total ts=%d", len(price_series))
+            _load_df(df, crypto_pos)
+            log.info("equity(%s): crypto bars added, total ts=%d", label, len(price_series))
         except Exception as exc:
-            log.warning("1D equity: crypto bars failed: %s", exc)
+            log.warning("equity(%s): crypto bars: %s", label, exc)
 
     if not price_series:
-        log.warning("1D equity: no price bars — returning empty")
+        log.warning("equity(%s): no price bars — empty", label)
         return []
 
-    # ── Build equity time series with price carry-forward ────────────────────
+    # ── Build time series with carry-forward pricing ──────────────────────────
     sorted_ts  = sorted(price_series.keys())
     last_price: dict = {}
     pts        = []
@@ -694,33 +651,32 @@ def _build_1d_equity(cfg, is_paper: bool) -> list:
         last_price.update(price_series[t])
         equity = cash
         for sym, qty in stock_pos.items():
-            p = last_price.get(sym)
-            if p:
-                equity += qty * p
+            px = last_price.get(sym)
+            if px:
+                equity += qty * px
         for sym, qty in crypto_pos.items():
-            p = last_price.get(sym)
-            if p:
-                equity += qty * p
+            px = last_price.get(sym)
+            if px:
+                equity += qty * px
         pts.append({"time": t.isoformat(), "equity": equity, "pnl": 0.0})
 
-    log.info("1D equity: built %d points from %d positions", len(pts), len(raw_pos))
+    log.info("equity(%s): %d pts from %d positions", label, len(pts), len(raw_pos))
     return pts
 
 
 @app.get("/portfolio/history/debug")
 def portfolio_history_debug():
-    """Diagnostic: shows how many price-bar points were retrieved per source."""
+    """Diagnostic: shows point counts for 1D/1M/1Y equity builds."""
     from config import get_settings
     cfg = get_settings()
     if not cfg.alpaca_api_key:
         return {"error": "no ALPACA_API_KEY"}
     is_paper = "paper" in cfg.alpaca_base_url.lower()
-    pts = _build_1d_equity(cfg, is_paper)
-    return {
-        "points_returned": len(pts),
-        "first_2": pts[:2],
-        "last_2":  pts[-2:],
-    }
+    out = {}
+    for period, days, daily in [("1D", 1, False), ("1M", 30, True), ("1Y", 365, True)]:
+        pts = _build_equity(cfg, is_paper, lookback_days=days, use_daily=daily)
+        out[period] = {"pts": len(pts), "first": pts[:1], "last": pts[-1:]}
+    return out
 
 
 if __name__ == "__main__":
