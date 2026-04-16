@@ -495,175 +495,238 @@ def get_portfolio():
 def get_portfolio_history(period: str = "1D"):
     """Return the equity curve for the requested period.
 
-    Calls the Alpaca REST API directly via httpx so every query parameter
-    is explicit and pydantic model validation cannot silently drop fields.
+    1D  → reconstructed from live positions + 5-min price bars via
+          StockHistoricalDataClient / CryptoHistoricalDataClient.
+          Gives a true 24-hour equity curve (288 5-min points) because
+          crypto bars are available 24/7 and stock bars fill market hours.
+          This bypasses Alpaca's portfolio history API which returns mostly
+          null slots for paper accounts outside market hours.
 
-    period: 1D (5-min bars, full extended-hours day) | 1M | 1Y (daily bars)
-
-    1D strategy:
-      1. period=1D + timeframe=5Min + extended_hours=true  → up to ~288 pts
-         covering the full ~24 h window Alpaca shows in its own app.
-         Requires >=30 non-null points; if fewer (paper account null gaps),
-         fall through.
-      2. period=1D + timeframe=5Min (no extended hours) → market-session bars
-         (9:30 AM – 4:00 PM ET ≈ 78 pts on a trading day).
-      3. period=1W + timeframe=1D → 7 daily bars as last intraday fallback.
-      4. Account snapshot → 2-point line (always succeeds if credentials work).
+    1M / 1Y → Alpaca portfolio history REST API (daily bars).
     """
     import httpx
-    from datetime import timezone
+    import pandas as pd
+    from datetime import timezone, timedelta
     from config import get_settings
     from alpaca.trading.client import TradingClient
 
     cfg = get_settings()
     if not cfg.alpaca_api_key:
-        log.warning("/portfolio/history: no ALPACA_API_KEY configured")
         return []
 
     is_paper = "paper" in cfg.alpaca_base_url.lower()
+
+    # ── 1D: reconstruct from positions + market-data bars ────────────────────
+    if period == "1D":
+        return _build_1d_equity(cfg, is_paper)
+
+    # ── 1M / 1Y: portfolio history REST API (daily bars) ─────────────────────
     base_url = cfg.alpaca_base_url.rstrip("/")
     headers  = {
         "APCA-API-KEY-ID":     cfg.alpaca_api_key,
         "APCA-API-SECRET-KEY": cfg.alpaca_secret_key,
     }
 
-    def _rest(params: dict) -> list:
-        """GET /v2/account/portfolio/history and return parsed non-null points."""
+    chains = {
+        "1M": [("1M", "1D"), ("3M", "1D")],
+        "1Y": [("1A", "1D"), ("6M", "1D"), ("3M", "1D")],
+    }
+    for alp_period, alp_tf in chains.get(period, [("1M", "1D")]):
         try:
             r = httpx.get(
                 f"{base_url}/v2/account/portfolio/history",
                 headers=headers,
-                params=params,
+                params={"period": alp_period, "timeframe": alp_tf},
                 timeout=20.0,
             )
             r.raise_for_status()
-            body = r.json()
+            body       = r.json()
+            timestamps = body.get("timestamp") or []
+            equities   = body.get("equity")    or []
+            profit_raw = body.get("profit_loss") or []
+            n   = min(len(timestamps), len(equities))
+            pts = []
+            for i in range(n):
+                eq = equities[i]
+                if eq is None:
+                    continue
+                pnl = profit_raw[i] if i < len(profit_raw) and profit_raw[i] is not None else 0.0
+                pts.append({
+                    "time":   datetime.fromtimestamp(timestamps[i], tz=timezone.utc).isoformat(),
+                    "equity": float(eq),
+                    "pnl":    float(pnl),
+                })
+            log.info("portfolio history %s/%s → %d pts", alp_period, alp_tf, len(pts))
+            if len(pts) >= 2:
+                return pts
         except Exception as exc:
-            log.warning("history REST %s failed: %s", params, exc)
-            return []
+            log.warning("portfolio history %s/%s failed: %s", alp_period, alp_tf, exc)
 
-        timestamps = body.get("timestamp") or []
-        equities   = body.get("equity")    or []
-        profit_raw = body.get("profit_loss") or []
+    return []
 
-        n   = min(len(timestamps), len(equities))
-        pts = []
-        for i in range(n):
-            eq = equities[i]
-            if eq is None:
-                continue
-            pnl = profit_raw[i] if i < len(profit_raw) and profit_raw[i] is not None else 0.0
-            pts.append({
-                "time":   datetime.fromtimestamp(timestamps[i], tz=timezone.utc).isoformat(),
-                "equity": float(eq),
-                "pnl":    float(pnl),
-            })
-        log.info("history REST %s → %d/%d non-null pts", params, len(pts), n)
+
+def _build_1d_equity(cfg, is_paper: bool) -> list:
+    """
+    Reconstruct the 1D equity curve from live positions + 5-minute price bars.
+
+    equity[t] = cash + Σ(qty_i × close_price_i[t])
+
+    Stock bars cover market hours (9:30 AM – 4 PM ET); crypto bars are 24/7.
+    Prices are carried forward between bars so the curve is continuous.
+    """
+    import pandas as pd
+    from datetime import timezone, timedelta
+    from alpaca.trading.client import TradingClient
+    from alpaca.data.historical import StockHistoricalDataClient
+    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+    from alpaca.data.enums import DataFeed
+
+    now   = datetime.now(timezone.utc)
+    start = now - timedelta(hours=24)
+    tf    = TimeFrame(5, TimeFrameUnit.Minute)
+
+    try:
+        client    = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
+        acct      = client.get_account()
+        cash      = float(acct.cash)
+        raw_pos   = client.get_all_positions()
+    except Exception as exc:
+        log.error("1D equity: failed to fetch account/positions: %s", exc)
+        return []
+
+    if not raw_pos:
+        log.info("1D equity: no positions, returning flat cash line")
+        pts, t = [], start
+        while t <= now:
+            pts.append({"time": t.isoformat(), "equity": cash, "pnl": 0.0})
+            t += timedelta(minutes=5)
         return pts
 
-    # ── Attempt chains per requested period ───────────────────────────────────
-    if period == "1D":
-        # Extended hours: full ~24 h window (pre-market through after-hours).
-        # Alpaca paper accounts sometimes return only a handful of non-null pts
-        # during extended hours for stock-only portfolios, so we require ≥30.
-        pts = _rest({"period": "1D", "timeframe": "5Min", "extended_hours": "true"})
-        if len(pts) >= 30:
-            log.info("1D extended_hours: %d pts", len(pts))
-            return pts
+    # Separate by asset class
+    stock_pos  = {}   # symbol → qty
+    crypto_pos = {}   # symbol (slash form) → qty
 
-        # Market-session bars only (9:30 AM – 4:00 PM ET, ≈78 pts on trading days)
-        pts = _rest({"period": "1D", "timeframe": "5Min"})
-        if len(pts) >= 2:
-            log.info("1D market-hours: %d pts", len(pts))
-            return pts
+    for p in raw_pos:
+        qty        = float(p.qty)
+        sym        = p.symbol
+        asset_cls  = str(getattr(p, "asset_class", "")).lower()
+        if "crypto" in asset_cls:
+            # Alpaca crypto symbols: "BTCUSD" → "BTC/USD"
+            slash = sym[:-3] + "/" + sym[-3:] if "/" not in sym else sym
+            crypto_pos[slash] = qty
+        else:
+            stock_pos[sym] = qty
 
-        # Widen to a week of daily bars so we always have something meaningful
-        pts = _rest({"period": "1W", "timeframe": "1D"})
-        if len(pts) >= 2:
-            log.info("1D→1W fallback: %d pts", len(pts))
-            return pts
+    log.info("1D equity: %d stock + %d crypto positions, cash=%.2f",
+             len(stock_pos), len(crypto_pos), cash)
 
-    elif period == "1M":
-        for p in ("1M", "3M"):
-            pts = _rest({"period": p, "timeframe": "1D"})
-            if len(pts) >= 2:
-                return pts
+    # price_series: {timestamp_utc: {symbol: close}}
+    price_series: dict = {}
 
-    elif period == "1Y":
-        for p in ("1A", "6M", "3M"):
-            pts = _rest({"period": p, "timeframe": "1D"})
-            if len(pts) >= 2:
-                return pts
+    data_client = StockHistoricalDataClient(cfg.alpaca_api_key, cfg.alpaca_secret_key)
 
-    # ── Last resort: 2-point account snapshot ────────────────────────────────
-    log.warning("history: all attempts <2 pts — using account snapshot")
-    try:
-        from datetime import timezone as _tz
-        client      = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
-        acct        = client.get_account()
-        equity      = float(acct.equity)
-        last_equity = float(acct.last_equity)
-        now         = datetime.now(_tz.utc)
-        day_start   = now.replace(hour=13, minute=30, second=0, microsecond=0)
-        if day_start > now:
-            day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        return [
-            {"time": day_start.isoformat(), "equity": last_equity, "pnl": 0.0},
-            {"time": now.isoformat(),        "equity": equity,      "pnl": equity - last_equity},
-        ]
-    except Exception as exc:
-        log.error("snapshot fallback failed: %s", exc)
+    # ── Stock bars (market hours) ─────────────────────────────────────────────
+    if stock_pos:
+        for feed in (DataFeed.SIP, DataFeed.IEX):
+            try:
+                req = StockBarsRequest(
+                    symbol_or_symbols=list(stock_pos.keys()),
+                    timeframe=tf, start=start, end=now, feed=feed,
+                )
+                df = data_client.get_stock_bars(req).df
+                if df.empty:
+                    continue
+                # MultiIndex: (symbol, timestamp)
+                if isinstance(df.index, pd.MultiIndex):
+                    for sym in stock_pos:
+                        if sym not in df.index.get_level_values(0):
+                            continue
+                        for ts, row in df.loc[sym].iterrows():
+                            t = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
+                            t = t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t
+                            price_series.setdefault(t, {})[sym] = float(row["close"])
+                else:
+                    sym = list(stock_pos.keys())[0]
+                    for ts, row in df.iterrows():
+                        t = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
+                        t = t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t
+                        price_series.setdefault(t, {})[sym] = float(row["close"])
+                log.info("1D equity: %s stock bars via %s feed", len(price_series), feed)
+                break
+            except Exception as exc:
+                log.warning("1D equity: stock bars %s failed: %s", feed, exc)
+
+    # ── Crypto bars (24/7 — fills overnight gaps) ────────────────────────────
+    if crypto_pos:
+        try:
+            from alpaca.data.historical import CryptoHistoricalDataClient
+            from alpaca.data.requests import CryptoBarsRequest
+            cc  = CryptoHistoricalDataClient(cfg.alpaca_api_key, cfg.alpaca_secret_key)
+            req = CryptoBarsRequest(
+                symbol_or_symbols=list(crypto_pos.keys()),
+                timeframe=tf, start=start, end=now,
+            )
+            df = cc.get_crypto_bars(req).df
+            if not df.empty:
+                if isinstance(df.index, pd.MultiIndex):
+                    for sym in crypto_pos:
+                        if sym not in df.index.get_level_values(0):
+                            continue
+                        for ts, row in df.loc[sym].iterrows():
+                            t = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
+                            t = t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t
+                            price_series.setdefault(t, {})[sym] = float(row["close"])
+                else:
+                    sym = list(crypto_pos.keys())[0]
+                    for ts, row in df.iterrows():
+                        t = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
+                        t = t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t
+                        price_series.setdefault(t, {})[sym] = float(row["close"])
+            log.info("1D equity: crypto bars added, total ts=%d", len(price_series))
+        except Exception as exc:
+            log.warning("1D equity: crypto bars failed: %s", exc)
+
+    if not price_series:
+        log.warning("1D equity: no price bars — returning empty")
         return []
+
+    # ── Build equity time series with price carry-forward ────────────────────
+    sorted_ts  = sorted(price_series.keys())
+    last_price: dict = {}
+    pts        = []
+
+    for t in sorted_ts:
+        last_price.update(price_series[t])
+        equity = cash
+        for sym, qty in stock_pos.items():
+            p = last_price.get(sym)
+            if p:
+                equity += qty * p
+        for sym, qty in crypto_pos.items():
+            p = last_price.get(sym)
+            if p:
+                equity += qty * p
+        pts.append({"time": t.isoformat(), "equity": equity, "pnl": 0.0})
+
+    log.info("1D equity: built %d points from %d positions", len(pts), len(raw_pos))
+    return pts
 
 
 @app.get("/portfolio/history/debug")
 def portfolio_history_debug():
-    """Raw Alpaca portfolio history via direct REST — shows total/non-null pts
-    and the first/last few equity values for each param combination."""
-    import httpx
+    """Diagnostic: shows how many price-bar points were retrieved per source."""
     from config import get_settings
     cfg = get_settings()
     if not cfg.alpaca_api_key:
         return {"error": "no ALPACA_API_KEY"}
-
-    base_url = cfg.alpaca_base_url.rstrip("/")
-    headers  = {
-        "APCA-API-KEY-ID":     cfg.alpaca_api_key,
-        "APCA-API-SECRET-KEY": cfg.alpaca_secret_key,
+    is_paper = "paper" in cfg.alpaca_base_url.lower()
+    pts = _build_1d_equity(cfg, is_paper)
+    return {
+        "points_returned": len(pts),
+        "first_2": pts[:2],
+        "last_2":  pts[-2:],
     }
-
-    combos = [
-        {"period": "1D", "timeframe": "5Min", "extended_hours": "true"},
-        {"period": "1D", "timeframe": "5Min"},
-        {"period": "1W", "timeframe": "1D"},
-        {"period": "1M", "timeframe": "1D"},
-    ]
-    results = {}
-    for params in combos:
-        key = str(params)
-        try:
-            r = httpx.get(
-                f"{base_url}/v2/account/portfolio/history",
-                headers=headers, params=params, timeout=15.0,
-            )
-            r.raise_for_status()
-            body       = r.json()
-            equities   = body.get("equity") or []
-            timestamps = body.get("timestamp") or []
-            non_null   = [e for e in equities if e is not None]
-            results[key] = {
-                "total_pts":    len(equities),
-                "non_null_pts": len(non_null),
-                "ts_first":     timestamps[:2],
-                "ts_last":      timestamps[-2:],
-                "eq_first":     equities[:2],
-                "eq_last":      equities[-2:],
-                "timeframe":    body.get("timeframe"),
-            }
-        except Exception as exc:
-            results[key] = {"error": str(exc)}
-
-    return results
 
 
 if __name__ == "__main__":
