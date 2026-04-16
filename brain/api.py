@@ -495,86 +495,79 @@ def get_portfolio():
 def get_portfolio_history(period: str = "1D"):
     """Return the equity curve for the requested period.
 
-    Calls the Alpaca REST API directly (not the SDK) so we control every
-    query parameter exactly, including extended_hours for intraday data.
+    Uses the same TradingClient that already works for /portfolio so
+    authentication and connection are proven.  For intraday (1D) we request
+    5-minute bars; for longer periods we use daily bars.
 
-    period (query param):
-        1D  → today, 5-min bars + extended hours  (matches Alpaca app 1D tab)
-        1M  → last month, daily bars
-        1Y  → last year, daily bars
+    period: 1D | 1M | 1Y
     """
-    import httpx
     from datetime import timezone
     from config import get_settings
-    cfg = get_settings()
+    from alpaca.trading.client import TradingClient
+    from alpaca.trading.requests import GetPortfolioHistoryRequest
 
+    cfg = get_settings()
     if not cfg.alpaca_api_key:
         log.warning("/portfolio/history: no ALPACA_API_KEY configured")
         return []
 
-    base_url = cfg.alpaca_base_url.rstrip("/")
-    headers  = {
-        "APCA-API-KEY-ID":     cfg.alpaca_api_key,
-        "APCA-API-SECRET-KEY": cfg.alpaca_secret_key,
-    }
+    is_paper = "paper" in cfg.alpaca_base_url.lower()
+    client   = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
 
-    # Each entry: (period, timeframe, extended_hours)
-    CHAINS: dict[str, list[tuple[str, str, bool]]] = {
-        "1D":  [("1D", "5Min", True),  ("1W", "1D", False), ("1M", "1D", False)],
-        "1M":  [("1M", "1D",   False), ("3M", "1D", False)],
-        "1Y":  [("1A", "1D",   False), ("6M", "1D", False), ("3M", "1D", False)],
-        "all": [("all","1D",   False), ("1A", "1D", False)],
+    # period → list of (alpaca_period, alpaca_timeframe) to try in order
+    CHAINS = {
+        "1D": [("1D", "5Min"), ("1W", "1D"), ("1M", "1D")],
+        "1M": [("1M", "1D"),   ("3M", "1D")],
+        "1Y": [("1A", "1D"),   ("6M", "1D"), ("3M", "1D")],
     }
     chain = CHAINS.get(period, CHAINS["1D"])
 
-    def _fetch(alp_period: str, alp_tf: str, ext_hours: bool) -> list:
-        params: dict = {"period": alp_period, "timeframe": alp_tf}
-        if ext_hours:
-            params["extended_hours"] = "true"
-        log.info("Portfolio history REST: %s", params)
-        try:
-            r = httpx.get(
-                f"{base_url}/v2/account/portfolio/history",
-                headers=headers,
-                params=params,
-                timeout=15.0,
-            )
-            r.raise_for_status()
-            body = r.json()
-        except Exception as exc:
-            log.warning("  REST call failed: %s", exc)
-            return []
+    def _sdk_fetch(alp_period: str, alp_tf: str) -> list:
+        """Fetch via SDK. Tries extended_hours for intraday; falls back without."""
+        intraday = alp_tf != "1D"
+        for ext in ([True, False] if intraday else [False]):
+            try:
+                kwargs: dict = {"period": alp_period, "timeframe": alp_tf}
+                if ext:
+                    kwargs["extended_hours"] = True
+                req  = GetPortfolioHistoryRequest(**kwargs)
+                hist = client.get_portfolio_history(filter=req)
+                pts  = _parse(hist)
+                log.info("SDK period=%s tf=%s ext=%s → %d pts", alp_period, alp_tf, ext, len(pts))
+                if pts:
+                    return pts
+            except Exception as exc:
+                log.warning("SDK period=%s tf=%s ext=%s failed: %s", alp_period, alp_tf, ext, exc)
+        return []
 
-        timestamps = body.get("timestamp") or []
-        equities   = body.get("equity")    or []
-        pnls       = body.get("profit_loss") or []
-        nulls = sum(1 for e in equities if e is None)
-        log.info("  raw: %d pts, %d null", len(equities), nulls)
-
+    def _parse(hist) -> list:
+        timestamps = list(getattr(hist, "timestamp",   None) or [])
+        equities   = list(getattr(hist, "equity",      None) or [])
+        profit     = list(getattr(hist, "profit_loss", None) or [None] * len(timestamps))
+        non_null = [(ts, eq, pnl) for ts, eq, pnl in zip(timestamps, equities, profit)
+                    if eq is not None]
+        log.info("  parse: %d raw, %d non-null", len(timestamps), len(non_null))
         return [
             {
                 "time":   datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
                 "equity": float(eq),
                 "pnl":    float(pnl) if pnl is not None else 0.0,
             }
-            for ts, eq, pnl in zip(timestamps, equities, pnls)
-            if eq is not None and float(eq) > 0
+            for ts, eq, pnl in non_null
         ]
 
-    for alp_period, alp_tf, ext_hours in chain:
-        pts = _fetch(alp_period, alp_tf, ext_hours)
+    for alp_period, alp_tf in chain:
+        pts = _sdk_fetch(alp_period, alp_tf)
         if len(pts) >= 2:
-            log.info("Portfolio history: returning %d pts for period=%s", len(pts), period)
+            log.info("Returning %d pts for ui_period=%s", len(pts), period)
             return pts
 
-    # Last resort: 2-point line from account snapshot
-    log.warning("Portfolio history: all REST attempts returned <2 pts — using account snapshot")
+    # Last resort: 2-point line from account snapshot (always works if credentials are valid)
+    log.warning("All history attempts <2 pts — falling back to account snapshot")
     try:
-        r    = httpx.get(f"{base_url}/v2/account", headers=headers, timeout=10.0)
-        r.raise_for_status()
-        acct        = r.json()
-        equity      = float(acct.get("equity", 0))
-        last_equity = float(acct.get("last_equity", equity))
+        acct        = client.get_account()
+        equity      = float(acct.equity)
+        last_equity = float(acct.last_equity)
         now         = datetime.now(timezone.utc)
         day_start   = now.replace(hour=13, minute=30, second=0, microsecond=0)
         if day_start > now:
