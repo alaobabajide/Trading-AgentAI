@@ -520,12 +520,11 @@ def get_portfolio_history(period: str = "1D"):
     if period == "1D":
         return _build_1d_equity(cfg, is_paper)
 
-    # ── 1M / 1Y: portfolio history REST API (daily bars) ─────────────────────
-    base_url = cfg.alpaca_base_url.rstrip("/")
-    headers  = {
-        "APCA-API-KEY-ID":     cfg.alpaca_api_key,
-        "APCA-API-SECRET-KEY": cfg.alpaca_secret_key,
-    }
+    # ── 1M / 1Y: TradingClient SDK (daily bars, no extended_hours needed) ───────
+    from alpaca.trading.requests import GetPortfolioHistoryRequest
+    from datetime import timezone
+
+    client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
 
     chains = {
         "1M": [("1M", "1D"), ("3M", "1D")],
@@ -533,20 +532,15 @@ def get_portfolio_history(period: str = "1D"):
     }
     for alp_period, alp_tf in chains.get(period, [("1M", "1D")]):
         try:
-            r = httpx.get(
-                f"{base_url}/v2/account/portfolio/history",
-                headers=headers,
-                params={"period": alp_period, "timeframe": alp_tf},
-                timeout=20.0,
-            )
-            r.raise_for_status()
-            body       = r.json()
-            timestamps = body.get("timestamp") or []
-            equities   = body.get("equity")    or []
-            profit_raw = body.get("profit_loss") or []
-            n   = min(len(timestamps), len(equities))
+            req  = GetPortfolioHistoryRequest(period=alp_period, timeframe=alp_tf)
+            hist = client.get_portfolio_history(filter=req)
+
+            timestamps = list(getattr(hist, "timestamp",   None) or [])
+            equities   = list(getattr(hist, "equity",      None) or [])
+            profit_raw = list(getattr(hist, "profit_loss", None) or [None] * len(timestamps))
+
             pts = []
-            for i in range(n):
+            for i in range(min(len(timestamps), len(equities))):
                 eq = equities[i]
                 if eq is None:
                     continue
@@ -556,11 +550,11 @@ def get_portfolio_history(period: str = "1D"):
                     "equity": float(eq),
                     "pnl":    float(pnl),
                 })
-            log.info("portfolio history %s/%s → %d pts", alp_period, alp_tf, len(pts))
+            log.info("portfolio history SDK %s/%s → %d pts", alp_period, alp_tf, len(pts))
             if len(pts) >= 2:
                 return pts
         except Exception as exc:
-            log.warning("portfolio history %s/%s failed: %s", alp_period, alp_tf, exc)
+            log.warning("portfolio history SDK %s/%s failed: %s", alp_period, alp_tf, exc)
 
     return []
 
