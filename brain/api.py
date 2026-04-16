@@ -310,116 +310,124 @@ class ExecuteRequest(BaseModel):
 
 @app.post("/execute")
 def execute_trade(req: ExecuteRequest):
-    """Place a market order on Alpaca (stocks) or Binance (crypto).
+    """Place a bracket order (entry + stop-loss + take-profit) via the execution engines.
 
-    Uses the cached signal's sizing if available; falls back to request params.
-    Returns order_id, status, notional, and exchange.
+    Routes to StockExecutionEngine (Alpaca bracket orders) or CryptoExecutionEngine
+    (Binance market + OCO), which enforce all risk controls:
+      • ATR-based position sizing capped at max_position_pct (5% NAV)
+      • Stop-loss and take-profit on every entry
+      • Circuit breaker (10% daily drawdown)
+      • Crypto cap (30% of portfolio)
+
+    Uses cached signal sizing if available; falls back to request params.
     """
     if req.action not in ("BUY", "SELL"):
         raise HTTPException(status_code=400, detail="action must be BUY or SELL")
 
     from config import get_settings
+    from brain.signal import TradingSignal
+
     cfg = get_settings()
 
     # Merge with cached signal sizing if present
-    cached = _signal_cache.get(req.symbol.upper(), {})
-    pos_pct  = cached.get("suggested_position_pct", req.suggested_position_pct)
-    sl_pct   = cached.get("stop_loss_pct",          req.stop_loss_pct)
-    tp_pct   = cached.get("take_profit_pct",         req.take_profit_pct)
+    cached   = _signal_cache.get(req.symbol.upper(), {})
+    pos_pct  = float(cached.get("suggested_position_pct", req.suggested_position_pct))
+    sl_pct   = float(cached.get("stop_loss_pct",          req.stop_loss_pct))
+    tp_pct   = float(cached.get("take_profit_pct",        req.take_profit_pct))
+
+    # Build a TradingSignal from the request so the execution engines can use it
+    signal = TradingSignal(
+        symbol=req.symbol.upper(),
+        asset_class=req.asset_class,  # type: ignore[arg-type]
+        action=req.action,            # type: ignore[arg-type]
+        confidence=1.0,
+        rationale=cached.get("rationale", "Manual execute via API"),
+        suggested_position_pct=pos_pct,
+        stop_loss_pct=sl_pct,
+        take_profit_pct=tp_pct,
+    )
 
     try:
         if req.asset_class == "stock":
-            from alpaca.trading.client import TradingClient
-            from alpaca.trading.requests import MarketOrderRequest
-            from alpaca.trading.enums import OrderSide, TimeInForce
+            from data.market_data import AlpacaMarketData
+            from execution.stock.engine import StockExecutionEngine
 
             is_paper = "paper" in cfg.alpaca_base_url.lower()
-            client   = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
-            side     = OrderSide.BUY if req.action == "BUY" else OrderSide.SELL
-            exchange = "alpaca_paper" if is_paper else "alpaca_live"
 
-            if req.qty > 0:
-                # Fixed share-count order
-                order = client.submit_order(MarketOrderRequest(
-                    symbol=req.symbol.upper(),
-                    qty=req.qty,
-                    side=side,
-                    time_in_force=TimeInForce.DAY,
-                ))
-                return {
-                    "order_id":   str(order.id),
-                    "status":     str(order.status),
-                    "symbol":     req.symbol.upper(),
-                    "action":     req.action,
-                    "qty":        req.qty,
-                    "exchange":   exchange,
-                    "stop_pct":   sl_pct,
-                    "target_pct": tp_pct,
-                }
-            else:
-                # Notional (equity × position %) order
-                acct     = client.get_account()
-                equity   = float(acct.equity)
-                notional = round(equity * pos_pct, 2)
-                if notional < 1:
-                    raise HTTPException(status_code=400, detail="Computed notional < $1 — check position sizing")
-                order = client.submit_order(MarketOrderRequest(
-                    symbol=req.symbol.upper(),
-                    notional=notional,
-                    side=side,
-                    time_in_force=TimeInForce.DAY,
-                ))
-                return {
-                    "order_id":   str(order.id),
-                    "status":     str(order.status),
-                    "symbol":     req.symbol.upper(),
-                    "action":     req.action,
-                    "notional":   notional,
-                    "exchange":   exchange,
-                    "stop_pct":   sl_pct,
-                    "target_pct": tp_pct,
-                }
+            # Fetch recent bars for ATR-based sizing (14-day minimum)
+            market = AlpacaMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)
+            bars   = market.get_bars(req.symbol.upper(), days=30)
+            bars_highs  = [b.high  for b in bars]
+            bars_lows   = [b.low   for b in bars]
+            bars_closes = [b.close for b in bars]
+
+            engine = StockExecutionEngine(
+                alpaca_api_key=cfg.alpaca_api_key,
+                alpaca_secret_key=cfg.alpaca_secret_key,
+                alpaca_base_url=cfg.alpaca_base_url,
+                max_position_pct=cfg.max_position_pct,
+                circuit_breaker_drawdown=cfg.circuit_breaker_drawdown,
+            )
+            result = engine.execute(signal, bars_highs, bars_lows, bars_closes)
+
+            if result is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Order blocked by risk controls (circuit breaker, sizing, or invalid price)",
+                )
+
+            exchange = "alpaca_paper" if is_paper else "alpaca_live"
+            return {
+                "order_id":        result.order_id,
+                "status":          "submitted",
+                "symbol":          result.symbol,
+                "action":          result.action,
+                "qty":             result.qty,
+                "submitted_price": result.submitted_price,
+                "stop_price":      result.stop_price,
+                "take_profit_price": result.take_profit_price,
+                "exchange":        exchange,
+                "stop_pct":        sl_pct,
+                "target_pct":      tp_pct,
+            }
 
         else:  # crypto — Binance
-            from binance.client import Client as BinanceClient
+            from alpaca.trading.client import TradingClient
+            from execution.crypto.engine import CryptoExecutionEngine
 
-            client = BinanceClient(
-                cfg.binance_api_key, cfg.binance_secret_key,
+            # Get portfolio equity from Alpaca so crypto cap is evaluated correctly
+            is_paper = "paper" in cfg.alpaca_base_url.lower()
+            trading_client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
+            acct           = trading_client.get_account()
+            portfolio_equity = float(acct.equity)
+
+            engine = CryptoExecutionEngine(
+                binance_api_key=cfg.binance_api_key,
+                binance_secret_key=cfg.binance_secret_key,
                 testnet=cfg.binance_testnet,
+                max_position_pct=cfg.max_position_pct,
+                max_crypto_allocation_pct=cfg.max_crypto_allocation_pct,
             )
-            ticker  = client.get_symbol_ticker(symbol=req.symbol.upper())
-            price   = float(ticker["price"])
+            result = engine.execute(signal, portfolio_equity=portfolio_equity)
 
-            # Approximate equity from USDT balance
-            balances  = client.get_account()["balances"]
-            usdt_free = next((float(b["free"]) for b in balances if b["asset"] == "USDT"), 1000.0)
-            notional  = min(usdt_free * pos_pct, usdt_free * 0.99)
-            qty       = round(notional / price, 6)
+            if result is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Order blocked by risk controls (crypto cap, sizing, or invalid price)",
+                )
 
-            if qty <= 0:
-                raise HTTPException(status_code=400, detail="Computed qty = 0")
-
-            if req.action == "BUY":
-                order = client.order_market_buy(symbol=req.symbol.upper(), quantity=qty)
-            else:
-                order = client.order_market_sell(symbol=req.symbol.upper(), quantity=qty)
-
-            fills   = order.get("fills", [])
-            avg_px  = (
-                sum(float(f["price"]) * float(f["qty"]) for f in fills)
-                / max(sum(float(f["qty"]) for f in fills), 1e-12)
-                if fills else price
-            )
             return {
-                "order_id":  str(order.get("orderId", "?")),
-                "status":    order.get("status", "FILLED"),
-                "symbol":    req.symbol.upper(),
-                "action":    req.action,
-                "qty":       qty,
-                "avg_price": avg_px,
-                "exchange":  "binance_testnet" if cfg.binance_testnet else "binance",
-                "stop_pct":  sl_pct,
-                "target_pct": tp_pct,
+                "order_id":          result.order_id,
+                "status":            "submitted",
+                "symbol":            result.symbol,
+                "action":            result.action,
+                "qty":               result.qty,
+                "avg_price":         result.submitted_price,
+                "stop_price":        result.stop_price,
+                "take_profit_price": result.take_profit_price,
+                "exchange":          result.exchange,
+                "stop_pct":          sl_pct,
+                "target_pct":        tp_pct,
             }
 
     except HTTPException:
