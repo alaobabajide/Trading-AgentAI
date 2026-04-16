@@ -495,16 +495,25 @@ def get_portfolio():
 def get_portfolio_history(period: str = "1D"):
     """Return the equity curve for the requested period.
 
-    Uses the same TradingClient that already works for /portfolio so
-    authentication and connection are proven.  For intraday (1D) we request
-    5-minute bars; for longer periods we use daily bars.
+    Calls the Alpaca REST API directly via httpx so every query parameter
+    is explicit and pydantic model validation cannot silently drop fields.
 
-    period: 1D | 1M | 1Y
+    period: 1D (5-min bars, full extended-hours day) | 1M | 1Y (daily bars)
+
+    1D strategy:
+      1. period=1D + timeframe=5Min + extended_hours=true  → up to ~288 pts
+         covering the full ~24 h window Alpaca shows in its own app.
+         Requires >=30 non-null points; if fewer (paper account null gaps),
+         fall through.
+      2. period=1D + timeframe=5Min (no extended hours) → market-session bars
+         (9:30 AM – 4:00 PM ET ≈ 78 pts on a trading day).
+      3. period=1W + timeframe=1D → 7 daily bars as last intraday fallback.
+      4. Account snapshot → 2-point line (always succeeds if credentials work).
     """
+    import httpx
     from datetime import timezone
     from config import get_settings
     from alpaca.trading.client import TradingClient
-    from alpaca.trading.requests import GetPortfolioHistoryRequest
 
     cfg = get_settings()
     if not cfg.alpaca_api_key:
@@ -512,63 +521,89 @@ def get_portfolio_history(period: str = "1D"):
         return []
 
     is_paper = "paper" in cfg.alpaca_base_url.lower()
-    client   = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
-
-    # period → list of (alpaca_period, alpaca_timeframe) to try in order
-    CHAINS = {
-        "1D": [("1D", "5Min"), ("1W", "1D"), ("1M", "1D")],
-        "1M": [("1M", "1D"),   ("3M", "1D")],
-        "1Y": [("1A", "1D"),   ("6M", "1D"), ("3M", "1D")],
+    base_url = cfg.alpaca_base_url.rstrip("/")
+    headers  = {
+        "APCA-API-KEY-ID":     cfg.alpaca_api_key,
+        "APCA-API-SECRET-KEY": cfg.alpaca_secret_key,
     }
-    chain = CHAINS.get(period, CHAINS["1D"])
 
-    def _sdk_fetch(alp_period: str, alp_tf: str) -> list:
-        """Fetch via SDK. Tries extended_hours for intraday; falls back without."""
-        intraday = alp_tf != "1D"
-        for ext in ([True, False] if intraday else [False]):
-            try:
-                kwargs: dict = {"period": alp_period, "timeframe": alp_tf}
-                if ext:
-                    kwargs["extended_hours"] = True
-                req  = GetPortfolioHistoryRequest(**kwargs)
-                hist = client.get_portfolio_history(filter=req)
-                pts  = _parse(hist)
-                log.info("SDK period=%s tf=%s ext=%s → %d pts", alp_period, alp_tf, ext, len(pts))
-                if pts:
-                    return pts
-            except Exception as exc:
-                log.warning("SDK period=%s tf=%s ext=%s failed: %s", alp_period, alp_tf, ext, exc)
-        return []
+    def _rest(params: dict) -> list:
+        """GET /v2/account/portfolio/history and return parsed non-null points."""
+        try:
+            r = httpx.get(
+                f"{base_url}/v2/account/portfolio/history",
+                headers=headers,
+                params=params,
+                timeout=20.0,
+            )
+            r.raise_for_status()
+            body = r.json()
+        except Exception as exc:
+            log.warning("history REST %s failed: %s", params, exc)
+            return []
 
-    def _parse(hist) -> list:
-        timestamps = list(getattr(hist, "timestamp",   None) or [])
-        equities   = list(getattr(hist, "equity",      None) or [])
-        profit     = list(getattr(hist, "profit_loss", None) or [None] * len(timestamps))
-        non_null = [(ts, eq, pnl) for ts, eq, pnl in zip(timestamps, equities, profit)
-                    if eq is not None]
-        log.info("  parse: %d raw, %d non-null", len(timestamps), len(non_null))
-        return [
-            {
-                "time":   datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
+        timestamps = body.get("timestamp") or []
+        equities   = body.get("equity")    or []
+        profit_raw = body.get("profit_loss") or []
+
+        n   = min(len(timestamps), len(equities))
+        pts = []
+        for i in range(n):
+            eq = equities[i]
+            if eq is None:
+                continue
+            pnl = profit_raw[i] if i < len(profit_raw) and profit_raw[i] is not None else 0.0
+            pts.append({
+                "time":   datetime.fromtimestamp(timestamps[i], tz=timezone.utc).isoformat(),
                 "equity": float(eq),
-                "pnl":    float(pnl) if pnl is not None else 0.0,
-            }
-            for ts, eq, pnl in non_null
-        ]
+                "pnl":    float(pnl),
+            })
+        log.info("history REST %s → %d/%d non-null pts", params, len(pts), n)
+        return pts
 
-    for alp_period, alp_tf in chain:
-        pts = _sdk_fetch(alp_period, alp_tf)
-        if len(pts) >= 2:
-            log.info("Returning %d pts for ui_period=%s", len(pts), period)
+    # ── Attempt chains per requested period ───────────────────────────────────
+    if period == "1D":
+        # Extended hours: full ~24 h window (pre-market through after-hours).
+        # Alpaca paper accounts sometimes return only a handful of non-null pts
+        # during extended hours for stock-only portfolios, so we require ≥30.
+        pts = _rest({"period": "1D", "timeframe": "5Min", "extended_hours": "true"})
+        if len(pts) >= 30:
+            log.info("1D extended_hours: %d pts", len(pts))
             return pts
 
-    # Last resort: 2-point line from account snapshot (always works if credentials are valid)
-    log.warning("All history attempts <2 pts — falling back to account snapshot")
+        # Market-session bars only (9:30 AM – 4:00 PM ET, ≈78 pts on trading days)
+        pts = _rest({"period": "1D", "timeframe": "5Min"})
+        if len(pts) >= 2:
+            log.info("1D market-hours: %d pts", len(pts))
+            return pts
+
+        # Widen to a week of daily bars so we always have something meaningful
+        pts = _rest({"period": "1W", "timeframe": "1D"})
+        if len(pts) >= 2:
+            log.info("1D→1W fallback: %d pts", len(pts))
+            return pts
+
+    elif period == "1M":
+        for p in ("1M", "3M"):
+            pts = _rest({"period": p, "timeframe": "1D"})
+            if len(pts) >= 2:
+                return pts
+
+    elif period == "1Y":
+        for p in ("1A", "6M", "3M"):
+            pts = _rest({"period": p, "timeframe": "1D"})
+            if len(pts) >= 2:
+                return pts
+
+    # ── Last resort: 2-point account snapshot ────────────────────────────────
+    log.warning("history: all attempts <2 pts — using account snapshot")
     try:
+        from datetime import timezone as _tz
+        client      = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
         acct        = client.get_account()
         equity      = float(acct.equity)
         last_equity = float(acct.last_equity)
-        now         = datetime.now(timezone.utc)
+        now         = datetime.now(_tz.utc)
         day_start   = now.replace(hour=13, minute=30, second=0, microsecond=0)
         if day_start > now:
             day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -577,41 +612,53 @@ def get_portfolio_history(period: str = "1D"):
             {"time": now.isoformat(),        "equity": equity,      "pnl": equity - last_equity},
         ]
     except Exception as exc:
-        log.error("Account snapshot fallback failed: %s", exc)
+        log.error("snapshot fallback failed: %s", exc)
         return []
 
 
 @app.get("/portfolio/history/debug")
 def portfolio_history_debug():
-    """Returns raw Alpaca portfolio history response for debugging.
-    Shows exactly what the SDK returns so we can diagnose null-value issues.
-    """
-    from datetime import timezone
+    """Raw Alpaca portfolio history via direct REST — shows total/non-null pts
+    and the first/last few equity values for each param combination."""
+    import httpx
     from config import get_settings
     cfg = get_settings()
     if not cfg.alpaca_api_key:
         return {"error": "no ALPACA_API_KEY"}
 
-    from alpaca.trading.client import TradingClient
-    is_paper = "paper" in cfg.alpaca_base_url.lower()
-    client   = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
+    base_url = cfg.alpaca_base_url.rstrip("/")
+    headers  = {
+        "APCA-API-KEY-ID":     cfg.alpaca_api_key,
+        "APCA-API-SECRET-KEY": cfg.alpaca_secret_key,
+    }
 
+    combos = [
+        {"period": "1D", "timeframe": "5Min", "extended_hours": "true"},
+        {"period": "1D", "timeframe": "5Min"},
+        {"period": "1W", "timeframe": "1D"},
+        {"period": "1M", "timeframe": "1D"},
+    ]
     results = {}
-    for period, timeframe in [("1D", "5Min"), ("1W", "1D"), ("1M", "1D")]:
-        key = f"{period}/{timeframe}"
+    for params in combos:
+        key = str(params)
         try:
-            from alpaca.trading.requests import GetPortfolioHistoryRequest
-            req  = GetPortfolioHistoryRequest(period=period, timeframe=timeframe)
-            hist = client.get_portfolio_history(filter=req)
-            equities = list(getattr(hist, "equity", None) or [])
-            non_null = [e for e in equities if e is not None]
+            r = httpx.get(
+                f"{base_url}/v2/account/portfolio/history",
+                headers=headers, params=params, timeout=15.0,
+            )
+            r.raise_for_status()
+            body       = r.json()
+            equities   = body.get("equity") or []
+            timestamps = body.get("timestamp") or []
+            non_null   = [e for e in equities if e is not None]
             results[key] = {
                 "total_pts":    len(equities),
                 "non_null_pts": len(non_null),
-                "first_3":      equities[:3],
-                "last_3":       equities[-3:],
-                "timeframe":    getattr(hist, "timeframe", None),
-                "base_value":   getattr(hist, "base_value", None),
+                "ts_first":     timestamps[:2],
+                "ts_last":      timestamps[-2:],
+                "eq_first":     equities[:2],
+                "eq_last":      equities[-2:],
+                "timeframe":    body.get("timeframe"),
             }
         except Exception as exc:
             results[key] = {"error": str(exc)}
