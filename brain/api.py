@@ -60,7 +60,7 @@ _signal_cache: dict[str, dict] = _load_cache()
 class SignalRequest(BaseModel):
     symbol: str = Field(..., description="Ticker, e.g. AAPL or BTCUSDT")
     asset_class: str = Field(..., description="'stock' or 'crypto'")
-    lookback_days: int = Field(60, ge=20, le=365)
+    lookback_days: int = Field(300, ge=61, le=400)
     paper_mode: bool = Field(True, description="True = rule-based analysis (no API credits); False = full LLM debate")
 
 

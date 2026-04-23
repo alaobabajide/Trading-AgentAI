@@ -995,7 +995,7 @@ def _compute_indicators(snapshot: MarketSnapshot) -> dict[str, Any]:
     Each paper-mode agent reads a distinct non-overlapping sub-set so votes are
     genuinely independent (asymmetric information lenses).
     """
-    if len(snapshot.bars) < 20:
+    if len(snapshot.bars) < 61:
         return {}
 
     closes  = pd.Series([b.close  for b in snapshot.bars], dtype=float)
@@ -1026,7 +1026,7 @@ def _compute_indicators(snapshot: MarketSnapshot) -> dict[str, Any]:
 
     # ── Rate of change ────────────────────────────────────────────────────────
     def _roc(n: int) -> float:
-        if len(closes) <= n:
+        if len(closes) < n + 1:
             return 0.0
         past = float(closes.iloc[-(n + 1)])
         return (price - past) / max(past, 1e-9) * 100
