@@ -21,7 +21,19 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+import time as _time
+
 log = logging.getLogger(__name__)
+
+# ── Kill switch ────────────────────────────────────────────────────────────────
+_TRADING_PAUSED: bool = False
+
+# ── Service singleton (rebuilt once per process, not per request) ─────────────
+_services_cache: Any = None
+
+# ── Bar data cache (5-min TTL — avoids re-fetching 300 days on every signal) ──
+_bar_cache: dict[str, tuple[Any, float]] = {}
+_BAR_CACHE_TTL = 300.0  # seconds
 
 # ── Persistent signal cache ────────────────────────────────────────────────────
 # Survives uvicorn/process restarts within the same container.
@@ -150,6 +162,29 @@ def _build_services(cfg):
     return alpaca, binance, sentiment, onchain, portfolio, orchestrator
 
 
+def _get_services(cfg):
+    """Return the service singleton, building it once per process."""
+    global _services_cache
+    if _services_cache is None:
+        log.info("Building service singleton (first request this process)")
+        _services_cache = _build_services(cfg)
+    return _services_cache
+
+
+def _get_market_snapshot(fetcher, symbol: str, days: int):
+    """Return a cached bar snapshot (TTL %ds) to avoid re-fetching on every signal."""
+    key = f"{symbol}:{days}"
+    now = _time.monotonic()
+    if key in _bar_cache:
+        snap, ts = _bar_cache[key]
+        if now - ts < _BAR_CACHE_TTL:
+            log.debug("Bar cache hit for %s (%ds)", symbol, days)
+            return snap
+    snap = fetcher.snapshot(symbol, days)
+    _bar_cache[key] = (snap, now)
+    return snap
+
+
 @app.get("/")
 def root():
     return {
@@ -164,6 +199,30 @@ def root():
             "GET /health": "Liveness check",
         },
     }
+
+@app.post("/kill")
+def kill_switch():
+    """Emergency halt — stops all new trade execution immediately."""
+    global _TRADING_PAUSED
+    _TRADING_PAUSED = True
+    log.critical("KILL SWITCH ACTIVATED — auto-trading paused")
+    return {"status": "paused", "message": "Auto-trading halted. POST /resume to restart."}
+
+
+@app.post("/resume")
+def resume_trading():
+    """Resume trading after a kill switch."""
+    global _TRADING_PAUSED
+    _TRADING_PAUSED = False
+    log.info("Auto-trading resumed via /resume")
+    return {"status": "active", "message": "Auto-trading resumed."}
+
+
+@app.get("/kill")
+def kill_status():
+    """Check whether trading is currently paused."""
+    return {"paused": _TRADING_PAUSED}
+
 
 @app.get("/health")
 def health():
@@ -200,19 +259,19 @@ def generate_signal(req: SignalRequest):
         )
     try:
         alpaca, binance, sentiment_fetcher, onchain_fetcher, portfolio_fetcher, orchestrator = (
-            _build_services(cfg)
+            _get_services(cfg)
         )
     except Exception as exc:
         log.error("Service initialisation failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Service init failed: {exc}")
 
-    # ── Fetch market data ───────────────────────────────────────────────────
+    # ── Fetch market data (bar cache reduces Alpaca round-trip to ~0 ms after first call) ──
     try:
         if req.asset_class == "stock":
-            market = alpaca.snapshot(req.symbol, req.lookback_days)
+            market = _get_market_snapshot(alpaca, req.symbol, req.lookback_days)
             onchain_snap = None
         else:
-            market = binance.snapshot(req.symbol, req.lookback_days)
+            market = _get_market_snapshot(binance, req.symbol, req.lookback_days)
             onchain_snap = onchain_fetcher.snapshot()
     except Exception as exc:
         log.error("Market data fetch failed: %s", exc, exc_info=True)
@@ -321,6 +380,8 @@ def execute_trade(req: ExecuteRequest):
 
     Uses cached signal sizing if available; falls back to request params.
     """
+    if _TRADING_PAUSED:
+        raise HTTPException(status_code=503, detail="Trading paused — POST /resume to restart")
     if req.action not in ("BUY", "SELL"):
         raise HTTPException(status_code=400, detail="action must be BUY or SELL")
 

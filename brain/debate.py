@@ -140,12 +140,16 @@ def _dominant_direction(tally: dict[str, int]) -> str:
 def _aggregate_dual_panel(
     panel_a: dict[str, str],
     panel_b: dict[str, str],
-) -> tuple[dict, dict, dict, bool, str]:
+) -> tuple[dict, dict, dict, bool, str, bool]:
     """
     Aggregate votes from both panels.
 
     Returns:
-        a_votes, b_votes, combined_votes, panels_conflict, conflict_note
+        a_votes, b_votes, combined_votes, panels_conflict, conflict_note, b_abstaining
+
+    panels_conflict: True when both panels are directional but in opposite directions.
+    b_abstaining:    True when Panel A is directional but ≥6/8 investors are neutral
+                     (investor panel refusing to confirm — downgrade to COLD).
     """
     a_votes = _count_votes(panel_a, _PANEL_A_VOTERS)
     b_votes = _count_votes(panel_b, _PANEL_B_VOTERS)
@@ -159,17 +163,26 @@ def _aggregate_dual_panel(
     a_dom = _dominant_direction(a_votes)
     b_dom = _dominant_direction(b_votes)
 
-    # Conflict = both panels have a directional view but they disagree
+    # Hard conflict: both panels directional but opposing
     panels_conflict = (
         a_dom != b_dom
         and a_dom != "NEUTRAL"
         and b_dom != "NEUTRAL"
     )
-    conflict_note = (
-        f"Panel conflict: analysts={a_dom}, investors={b_dom} — standing aside"
-        if panels_conflict else ""
-    )
-    return a_votes, b_votes, combined, panels_conflict, conflict_note
+    # Soft conflict: analysts directional but investor panel abstaining (≥6/8 neutral)
+    b_abstaining = b_votes["neutral"] >= 6 and a_dom != "NEUTRAL"
+
+    if panels_conflict:
+        conflict_note = f"Panel conflict: analysts={a_dom}, investors={b_dom} — standing aside"
+    elif b_abstaining:
+        conflict_note = (
+            f"Investor panel abstaining ({b_votes['neutral']}/8 neutral) "
+            f"while analysts={a_dom} — downgraded to COLD"
+        )
+    else:
+        conflict_note = ""
+
+    return a_votes, b_votes, combined, panels_conflict, conflict_note, b_abstaining
 
 
 def _action_from_votes(
@@ -201,13 +214,15 @@ def _compute_tier(
     regime_label: str,
     indicators: dict[str, Any],
     panels_conflict: bool = False,
+    b_abstaining: bool = False,
 ) -> Literal["HOT", "WARM", "COLD"]:
     """
     Deterministic tier from combined 15-agent vote count + regime.
 
-    HOT  = 10+ of 15 aligned AND no strong conflict AND regime is TRENDING
-    WARM = 6–9 of 15 aligned AND no strong conflict AND regime allows trading
-    COLD = < 6 aligned  OR  strong panel conflict  OR  HIGH_VOLATILITY  OR  RANGING  OR  HOLD
+    HOT  = 10+ of 15 aligned AND no conflict AND regime is TRENDING
+    WARM = 6–9 of 15 aligned AND no conflict AND regime allows trading
+    COLD = < 6 aligned  OR  strong panel conflict  OR  investor abstention
+           OR  HIGH_VOLATILITY  OR  RANGING  OR  HOLD
     """
     aligned  = tally["bullish"] if action == "BUY" else tally["bearish"] if action == "SELL" else 0
     high_vol = (
@@ -215,7 +230,7 @@ def _compute_tier(
         or (indicators.get("atr_14", 0) / max(indicators.get("price", 1), 1)) > 0.04
     )
     strong_conflict = panels_conflict and tally.get("bullish", 0) >= 3 and tally.get("bearish", 0) >= 3
-    blocked = high_vol or "RANGING" in regime_label or action == "HOLD" or strong_conflict
+    blocked = high_vol or "RANGING" in regime_label or action == "HOLD" or strong_conflict or b_abstaining
 
     if blocked or aligned < 6:
         return "COLD"
@@ -1300,7 +1315,7 @@ class DebateOrchestrator:
             log.info("%s: %s", role.title(), view[:80])
 
         # ── Dual-panel vote aggregation ───────────────────────────────────────
-        panel_a_tally, panel_b_tally, combined_tally, panels_conflict, conflict_note = (
+        panel_a_tally, panel_b_tally, combined_tally, panels_conflict, conflict_note, b_abstaining = (
             _aggregate_dual_panel(analyst_views, investor_views)
         )
         action           = _action_from_votes(combined_tally, panels_conflict=panels_conflict, threshold=6)
@@ -1396,10 +1411,21 @@ class DebateOrchestrator:
 
         strategy_fit = _parse_strategy_fit(strategy_view)
 
+        # ── Risk manager veto: if risk says HOLD, honour it ──────────────────
+        risk_action = parsed.get("action", action)
+        if risk_action == "HOLD" and action in ("BUY", "SELL"):
+            log.warning(
+                "Risk manager vetoed %s for %s → HOLD: %s",
+                action, symbol, parsed.get("rationale", ""),
+            )
+            action = "HOLD"
+            votes_for_action = 0
+
         # ── Tier — deterministic from combined 15-agent votes + regime ────────
         tier = _compute_tier(
             combined_tally, action, regime_label, indicators,
             panels_conflict=panels_conflict,
+            b_abstaining=b_abstaining,
         )
 
         signal = TradingSignal(
