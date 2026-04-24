@@ -172,7 +172,7 @@ function StrategyFitBadge({ signal }: { signal: Signal }) {
 // ── Execute button — all modes, any non-HOLD signal ──────────────────────────
 
 function ExecuteButton({ signal, compact = false }: { signal: Signal; compact?: boolean }) {
-  const { profile, receiveSignal, executeSignal, executing } = useHITLContext();
+  const { profile, receiveSignal, executeSignal, executing, executeErrorRef } = useHITLContext();
   const [result, setResult] = useState<string | null>(null);
   const [error,  setError]  = useState<string | null>(null);
   const mode = profile.mode;
@@ -197,7 +197,7 @@ function ExecuteButton({ signal, compact = false }: { signal: Signal; compact?: 
     // Manual or Auto (manual override): fire directly to Alpaca
     const res = await executeSignal(signal);
     if (res) setResult(`Order ${res.order_id} · ${res.status} · ${res.exchange}`);
-    else     setError("Execution failed — check credentials in Settings");
+    else     setError(executeErrorRef.current ?? "Execution failed — check credentials in Settings");
   };
 
   return (

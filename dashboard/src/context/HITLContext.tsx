@@ -1,20 +1,21 @@
-import { createContext, useContext, useCallback, ReactNode } from "react";
+import { createContext, useContext, useCallback, ReactNode, RefObject } from "react";
 import { useHITL } from "../hooks/useHITL";
 import { useExecute, ExecuteResult } from "../hooks/useExecute";
 import type { Signal } from "../lib/types";
 
 type HITLContextValue = ReturnType<typeof useHITL> & {
-  executeSignal:  (signal: Signal) => Promise<ExecuteResult | null>;
-  executing:      boolean;
-  executeError:   string | null;
-  clearExecError: () => void;
+  executeSignal:    (signal: Signal) => Promise<ExecuteResult | null>;
+  executing:        boolean;
+  executeError:     string | null;
+  executeErrorRef:  RefObject<string | null>;
+  clearExecError:   () => void;
 };
 
 const HITLContext = createContext<HITLContextValue | null>(null);
 
 export function HITLProvider({ children }: { children: ReactNode }) {
   const hitl = useHITL();
-  const { execute, executing, error: executeError, clearError: clearExecError } = useExecute();
+  const { execute, executing, error: executeError, clearError: clearExecError, lastErrorRef: executeErrorRef } = useExecute();
 
   const executeSignal = useCallback(
     (signal: Signal) => {
@@ -35,7 +36,7 @@ export function HITLProvider({ children }: { children: ReactNode }) {
   );
 
   return (
-    <HITLContext.Provider value={{ ...hitl, executeSignal, executing, executeError, clearExecError }}>
+    <HITLContext.Provider value={{ ...hitl, executeSignal, executing, executeError, executeErrorRef, clearExecError }}>
       {children}
     </HITLContext.Provider>
   );

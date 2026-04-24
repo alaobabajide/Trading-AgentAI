@@ -410,10 +410,24 @@ def execute_trade(req: ExecuteRequest):
 
     try:
         if req.asset_class == "stock":
+            from alpaca.trading.client import TradingClient as _TC
             from data.market_data import AlpacaMarketData
             from execution.stock.engine import StockExecutionEngine
 
             is_paper = "paper" in cfg.alpaca_base_url.lower()
+
+            # Pre-flight: check buying power before fetching bars or building engine
+            if req.action == "BUY":
+                _acct = _TC(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper).get_account()
+                _bp   = float(_acct.buying_power or _acct.cash or 0)
+                if _bp < 1:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"Insufficient buying power (${_bp:,.2f}). "
+                            "Close or take profit on existing positions to free capital."
+                        ),
+                    )
 
             # Fetch recent bars for ATR-based sizing (14-day minimum)
             market = AlpacaMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)

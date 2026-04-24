@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 
 export interface ExecuteParams {
   symbol: string;
@@ -27,10 +27,14 @@ export function useExecute() {
   const [executing, setExecuting] = useState(false);
   const [error, setError]         = useState<string | null>(null);
   const [lastResult, setResult]   = useState<ExecuteResult | null>(null);
+  // Ref updated synchronously so callers read the real error immediately
+  // after awaiting execute(), without waiting for a React re-render.
+  const lastErrorRef = useRef<string | null>(null);
 
   const execute = useCallback(async (params: ExecuteParams): Promise<ExecuteResult | null> => {
     setExecuting(true);
     setError(null);
+    lastErrorRef.current = null;
     try {
       const resp = await fetch("/api/execute", {
         method:  "POST",
@@ -45,14 +49,19 @@ export function useExecute() {
       setResult(result);
       return result;
     } catch (e) {
-      setError((e as Error).message);
+      const msg = (e as Error).message;
+      lastErrorRef.current = msg;
+      setError(msg);
       return null;
     } finally {
       setExecuting(false);
     }
   }, []);
 
-  const clearError = useCallback(() => setError(null), []);
+  const clearError = useCallback(() => {
+    setError(null);
+    lastErrorRef.current = null;
+  }, []);
 
-  return { execute, executing, error, lastResult, clearError };
+  return { execute, executing, error, lastResult, clearError, lastErrorRef };
 }
