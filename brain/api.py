@@ -429,12 +429,27 @@ def execute_trade(req: ExecuteRequest):
                         ),
                     )
 
-            # Fetch recent bars for ATR-based sizing (14-day minimum)
+            # Fetch recent bars for ATR-based sizing; fall back to latest quote
+            # if the bar fetch returns empty (e.g. data feed permission gap).
             market = AlpacaMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)
             bars   = market.get_bars(req.symbol.upper(), days=30)
             bars_highs  = [b.high  for b in bars]
             bars_lows   = [b.low   for b in bars]
             bars_closes = [b.close for b in bars]
+
+            if not bars_closes:
+                # No historical bars — use latest quote for current price.
+                # ATR sizing will fall back to fixed stop_loss_pct (correct behaviour).
+                quote = market.get_latest_quote(req.symbol.upper())
+                if quote and quote.mid > 0:
+                    bars_closes = [quote.mid]
+                    bars_highs  = [quote.ask or quote.mid]
+                    bars_lows   = [quote.bid or quote.mid]
+                else:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Could not fetch market price for {req.symbol.upper()} — data feed unavailable",
+                    )
 
             engine = StockExecutionEngine(
                 alpaca_api_key=cfg.alpaca_api_key,
