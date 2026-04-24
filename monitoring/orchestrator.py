@@ -112,18 +112,44 @@ class Orchestrator:
 
     # ── Signal + execution ────────────────────────────────────────────────────
 
+    def _is_trading_paused(self) -> bool:
+        """Check the brain API kill switch before executing any order."""
+        try:
+            r = httpx.get(f"{self._brain_url}/kill", timeout=3)
+            return r.json().get("paused", False)
+        except Exception:
+            return False  # if we can't reach the kill switch, proceed
+
+    def _has_open_position(self, symbol: str, asset_class: str) -> bool:
+        """Return True if an open position for this symbol already exists."""
+        try:
+            from alpaca.trading.client import TradingClient
+            cfg = self._cfg
+            is_paper = "paper" in cfg.alpaca_base_url.lower()
+            client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
+            positions = client.get_all_positions()
+            return any(p.symbol == symbol for p in positions)
+        except Exception as exc:
+            log.warning("Could not check open positions for %s: %s", symbol, exc)
+            return False  # assume no position if check fails
+
     def _process_symbol(self, symbol: str, asset_class: str, portfolio: PortfolioState) -> None:
-        # Skip if circuit breaker is active
+        # ── Gate 1: circuit breaker ───────────────────────────────────────────
         if self._peak_equity > 0:
             drawdown = (self._peak_equity - portfolio.equity) / self._peak_equity
             if drawdown >= self._cfg.circuit_breaker_drawdown:
                 log.info("SKIP %s — circuit breaker active (drawdown=%.1f%%)", symbol, drawdown * 100)
                 return
 
+        # ── Gate 2: kill switch ───────────────────────────────────────────────
+        if self._is_trading_paused():
+            log.info("SKIP %s — kill switch active (trading paused)", symbol)
+            return
+
         payload = {
             "symbol":        symbol,
             "asset_class":   asset_class,
-            "lookback_days": 60,
+            "lookback_days": 300,   # 300 cal days ≈ 210 trading days — enough for SMA200 + ROC60
             "paper_mode":    self._paper_mode,
         }
         start = time.monotonic()
@@ -152,11 +178,17 @@ class Orchestrator:
             symbol, action, confidence, tier, votes_for, conflict,
         )
 
-        if action == "HOLD":
-            log.info("  → HOLD for %s — no order submitted", symbol)
+        # ── Gate 3: only act on WARM or HOT signals ───────────────────────────
+        if action == "HOLD" or tier == "COLD":
+            log.info("  → %s for %s (tier=%s) — no order submitted", action, symbol, tier)
             return
 
-        log.info("  → Submitting %s %s order via /execute …", action, symbol)
+        # ── Gate 4: don't add to a position that already exists ───────────────
+        if action == "BUY" and self._has_open_position(symbol, asset_class):
+            log.info("  → BUY skipped for %s — position already open", symbol)
+            return
+
+        log.info("  → Submitting %s %s order (tier=%s) via /execute …", action, symbol, tier)
 
         try:
             exec_resp = httpx.post(
@@ -174,11 +206,12 @@ class Orchestrator:
             exec_resp.raise_for_status()
             result = exec_resp.json()
             log.info(
-                "  ✓ ORDER PLACED — %s %s  id=%s  status=%s  notional=%s",
+                "  ✓ ORDER PLACED — %s %s  id=%s  status=%s  stop=%.2f%%  tp=%.2f%%",
                 action, symbol,
                 result.get("order_id", "?"),
                 result.get("status", "?"),
-                result.get("notional", result.get("qty", "?")),
+                result.get("stop_pct", 0) * 100,
+                result.get("target_pct", 0) * 100,
             )
             status = "submitted"
         except httpx.HTTPStatusError as exc:

@@ -179,6 +179,35 @@ function ExecuteButton({ signal, compact = false }: { signal: Signal; compact?: 
 
   if (signal.action === "HOLD") return null;
 
+  // Auto mode: orchestrator handles execution — show status pill, not a button.
+  // A "Manual override" link is still available for emergencies.
+  if (mode === "auto") {
+    return (
+      <div className="mt-1 space-y-1.5">
+        <div className="flex items-center gap-2 text-[11px] font-mono text-slate-500">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+          Auto mode — orchestrator executes every 15 min
+          <button
+            className="ml-auto text-slate-600 hover:text-slate-400 underline underline-offset-2 transition-colors"
+            onClick={async (e) => {
+              e.stopPropagation();
+              setResult(null);
+              setError(null);
+              const res = await executeSignal(signal);
+              if (res) setResult(`Override order ${res.order_id} · ${res.status}`);
+              else     setError(executeErrorRef.current ?? "Execution failed");
+            }}
+            disabled={executing}
+          >
+            {executing ? "…" : "Override"}
+          </button>
+        </div>
+        {result && <div className="text-[11px] font-mono text-emerald-400">{result}</div>}
+        {error   && <div className="text-[11px] font-mono text-red-400">{error}</div>}
+      </div>
+    );
+  }
+
   const isAssisted = mode === "assisted";
   const label      = isAssisted ? `Queue ${signal.action}` : `Execute ${signal.action}`;
   const colorClass = signal.action === "BUY"
@@ -186,7 +215,7 @@ function ExecuteButton({ signal, compact = false }: { signal: Signal; compact?: 
     : "bg-red-500/20 text-red-300 hover:bg-red-500/30 border-red-500/30";
 
   const handleClick = async (e: React.MouseEvent) => {
-    e.stopPropagation(); // don't toggle card expand
+    e.stopPropagation();
     setResult(null);
     setError(null);
     if (isAssisted) {
@@ -194,7 +223,6 @@ function ExecuteButton({ signal, compact = false }: { signal: Signal; compact?: 
       setResult("Queued for approval — check the banner above");
       return;
     }
-    // Manual or Auto (manual override): fire directly to Alpaca
     const res = await executeSignal(signal);
     if (res) setResult(`Order ${res.order_id} · ${res.status} · ${res.exchange}`);
     else     setError(executeErrorRef.current ?? "Execution failed — check credentials in Settings");
