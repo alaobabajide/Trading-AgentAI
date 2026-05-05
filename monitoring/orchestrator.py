@@ -60,7 +60,9 @@ class Orchestrator:
     def __init__(self) -> None:
         cfg = get_settings()
         self._cfg = cfg
-        self._brain_url = f"http://localhost:{cfg.brain_port}"
+        # Always talk to uvicorn directly on 8000 — cfg.brain_port resolves to
+        # Railway's $PORT (nginx's public port) which returns 405 for POST requests.
+        self._brain_url = "http://127.0.0.1:8000"
         # Use LLM debate when Anthropic key is configured, rule-based otherwise
         self._paper_mode = not bool(cfg.anthropic_api_key)
         mode_label = "rule-based (paper)" if self._paper_mode else "LLM debate (live)"
@@ -135,10 +137,14 @@ class Orchestrator:
             log.warning("Could not check market clock: %s — assuming open", exc)
             return True  # fail-open: don't suppress orders if clock check fails
 
+    def _brain_headers(self) -> dict:
+        key = self._cfg.brain_api_key
+        return {"X-Api-Key": key} if key else {}
+
     def _is_trading_paused(self) -> bool:
         """Check the brain API kill switch before executing any order."""
         try:
-            r = httpx.get(f"{self._brain_url}/kill", timeout=3)
+            r = httpx.get(f"{self._brain_url}/kill", timeout=3, headers=self._brain_headers())
             return r.json().get("paused", False)
         except Exception:
             return False  # if we can't reach the kill switch, proceed
@@ -182,7 +188,7 @@ class Orchestrator:
         }
         start = time.monotonic()
         try:
-            resp = httpx.post(f"{self._brain_url}/signal", json=payload, timeout=180)
+            resp = httpx.post(f"{self._brain_url}/signal", json=payload, timeout=180, headers=self._brain_headers())
             resp.raise_for_status()
             sig = resp.json()
         except Exception as exc:
@@ -235,6 +241,7 @@ class Orchestrator:
                     "take_profit_pct":        sig.get("take_profit_pct",        self._cfg.take_profit_pct),
                 },
                 timeout=30,
+                headers=self._brain_headers(),
             )
             exec_resp.raise_for_status()
             result = exec_resp.json()
@@ -265,7 +272,7 @@ class Orchestrator:
     def _refresh_risk_config(self) -> None:
         """Pull effective risk config from brain API so UI changes take effect immediately."""
         try:
-            r = httpx.get(f"{self._brain_url}/config", timeout=3)
+            r = httpx.get(f"{self._brain_url}/config", timeout=3, headers=self._brain_headers())
             if r.status_code == 200:
                 data = r.json()
                 self._stop_loss_pct   = float(data.get("stop_loss_pct",   self._stop_loss_pct))
