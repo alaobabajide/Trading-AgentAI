@@ -39,9 +39,14 @@ class Settings(BaseSettings):
     stop_loss_pct: float = Field(0.02, env="STOP_LOSS_PCT")
     take_profit_pct: float = Field(0.05, env="TAKE_PROFIT_PCT")
 
+    # Security
+    brain_api_key: str = Field("", env="BRAIN_API_KEY")  # required — set in Railway
+    allowed_origins: str = Field("", env="ALLOWED_ORIGINS")  # comma-separated CORS origins
+
     # Telegram
     telegram_bot_token: str = Field("", env="TELEGRAM_BOT_TOKEN")
     telegram_allowed_ids: str = Field("", env="TELEGRAM_ALLOWED_IDS")  # comma-separated chat IDs
+    max_telegram_order_usd: float = Field(1000.0, env="MAX_TELEGRAM_ORDER_USD")
 
     # Monitoring
     prometheus_port: int = Field(9090, env="PROMETHEUS_PORT")

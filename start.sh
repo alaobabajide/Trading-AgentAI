@@ -1,9 +1,18 @@
 #!/bin/sh
 # No set -e — nginx must always start even if uvicorn or the bot fail
 
-# ── 0. Expand $PORT in nginx template ────────────────────────────────────────
-envsubst '${PORT}' < /tmp/nginx.conf.template > /etc/nginx/conf.d/default.conf
+# ── 0. Expand env vars in nginx template ─────────────────────────────────────
+envsubst '${PORT} ${BRAIN_API_KEY}' < /tmp/nginx.conf.template > /etc/nginx/conf.d/default.conf
 rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+
+# Warn loudly if BRAIN_API_KEY is not set — API will be unauthenticated
+if [ -z "$BRAIN_API_KEY" ]; then
+    echo "[start] WARNING: BRAIN_API_KEY is not set. All /api/* routes are UNAUTHENTICATED. Set it in Railway env vars."
+fi
+
+# ── 0b. Inject runtime config for the dashboard (API key delivered at startup) ─
+printf 'window.__TA_CONFIG__ = { apiKey: "%s" };\n' "$BRAIN_API_KEY" \
+    > /usr/share/nginx/html/runtime-config.js
 
 # ── 1. Start brain API (uvicorn) on 127.0.0.1:8000 in the background ─────────
 echo "[start] Launching uvicorn on 127.0.0.1:8000…"

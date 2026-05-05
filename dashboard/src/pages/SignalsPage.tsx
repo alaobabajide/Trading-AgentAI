@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Loader2, RefreshCw, Search, Send, X, Zap } from "lucide-react";
 import clsx from "clsx";
 import { SignalCard } from "../components/SignalCard";
-import { useSignals } from "../lib/api";
+import { useSignals, apiHeaders } from "../lib/api";
 import {
   STOCK_LIST, ETF_LIST, CRYPTO_LIST, FOREX_LIST, NGX_LIST,
 } from "../lib/marketMock";
@@ -83,7 +83,7 @@ function QuickRunPanel({ onGenerated }: QuickRunProps) {
     try {
       const resp = await fetch("/api/signal", {
         method:  "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: apiHeaders({ "Content-Type": "application/json" }),
         body:    JSON.stringify({ symbol, asset_class: tab.id, paper_mode: true }),
       });
       if (!resp.ok) {

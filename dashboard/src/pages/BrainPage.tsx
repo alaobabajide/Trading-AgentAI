@@ -5,6 +5,7 @@ import { SignalCard } from "../components/SignalCard";
 import type { Signal } from "../lib/types";
 import { mockSignals } from "../lib/mock";
 import { useHITLContext } from "../context/HITLContext";
+import { apiHeaders } from "../lib/api";
 
 /** Build a plausible mock signal for any symbol when the backend is offline. */
 function mockSignalFor(sym: string, cls: "stock" | "crypto"): Signal {
@@ -47,7 +48,7 @@ export function BrainPage({ paperMode = true }: BrainPageProps) {
     try {
       const resp = await fetch("/api/signal", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: apiHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ symbol: symbol.toUpperCase(), asset_class: assetClass, paper_mode: paperMode }),
       });
       if (!resp.ok) {

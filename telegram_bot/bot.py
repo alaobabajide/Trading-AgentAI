@@ -36,6 +36,12 @@ log = logging.getLogger(__name__)
 # Internal FastAPI URL — uvicorn binds here inside the combined container
 _BRAIN = "http://127.0.0.1:8000"
 
+
+def _brain_headers() -> dict[str, str]:
+    """Include the API key for all internal brain requests."""
+    cfg = get_settings()
+    return {"X-Api-Key": cfg.brain_api_key} if cfg.brain_api_key else {}
+
 _TIER_EMOJI   = {"HOT": "🔥", "WARM": "🌤", "COLD": "🔵"}
 _ACTION_EMOJI = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}
 _FIT_EMOJI    = {"ALIGNED": "✅", "PARTIAL": "⚠️", "MISALIGNED": "❌"}
@@ -57,7 +63,8 @@ _VIEW_ICON    = {
 def _allowed(update: Update) -> bool:
     cfg = get_settings()
     if not cfg.telegram_allowed_ids:
-        return True  # open when no whitelist configured
+        log.warning("TELEGRAM_ALLOWED_IDS is not set — all Telegram commands denied. Set it in Railway.")
+        return False  # deny all when no whitelist — fail closed
     chat_id = str(update.effective_chat.id)
     return chat_id in [s.strip() for s in cfg.telegram_allowed_ids.split(",")]
 
@@ -246,6 +253,7 @@ async def cmd_signal(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             resp = await client.post(
                 f"{_BRAIN}/signal",
                 json={"symbol": symbol, "asset_class": asset_class},
+                headers=_brain_headers(),
             )
         if resp.status_code != 200:
             raise ValueError(f"API {resp.status_code}: {resp.text[:200]}")
@@ -334,7 +342,7 @@ async def cmd_positions(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     msg = await update.message.reply_text("📊 Fetching portfolio…")
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(f"{_BRAIN}/portfolio")
+            resp = await client.get(f"{_BRAIN}/portfolio", headers=_brain_headers())
         if resp.status_code != 200:
             raise ValueError(f"HTTP {resp.status_code}")
         text = _fmt_portfolio(resp.json())
@@ -349,7 +357,7 @@ async def cmd_health(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{_BRAIN}/health")
+            resp = await client.get(f"{_BRAIN}/health", headers=_brain_headers())
         d  = resp.json()
         ts = d.get("timestamp", "?")
         await update.message.reply_html(
@@ -399,7 +407,11 @@ def _signal_from_cache(symbol: str) -> dict | None:
     """Fetch the last cached signal from the brain API (synchronous)."""
     import urllib.request, json as _json
     try:
-        with urllib.request.urlopen(f"{_BRAIN}/signal/{symbol}/latest", timeout=10) as r:
+        rq = urllib.request.Request(
+            f"{_BRAIN}/signal/{symbol}/latest",
+            headers=_brain_headers(),
+        )
+        with urllib.request.urlopen(rq, timeout=10) as r:
             return _json.loads(r.read())
     except Exception:
         return None
@@ -506,66 +518,69 @@ def _sync_exec_signal(symbol: str, asset_class: str, action: str) -> str:
 def _sync_exec_direct(
     symbol: str, asset_class: str, side: str, amount_usd: float
 ) -> str:
-    """Direct market order for a given USD notional (runs in thread pool)."""
+    """Direct order routed through the full execution engine (inherits all risk controls)."""
     try:
         cfg = get_settings()
 
-        if asset_class == "stock":
-            from alpaca.trading.client import TradingClient
-            from alpaca.trading.requests import MarketOrderRequest
-            from alpaca.trading.enums import OrderSide, TimeInForce
-
-            is_paper = "paper" in cfg.alpaca_base_url.lower()
-            client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
-            req = MarketOrderRequest(
-                symbol=symbol,
-                notional=round(amount_usd, 2),
-                side=OrderSide.BUY if side == "BUY" else OrderSide.SELL,
-                time_in_force=TimeInForce.DAY,
-            )
-            order = client.submit_order(req)
-            # Alpaca notional orders don't have a fixed price until filled
+        if amount_usd <= 0:
+            return "❌ Amount must be positive."
+        if amount_usd > cfg.max_telegram_order_usd:
             return (
-                f"{'🟢' if side == 'BUY' else '🔴'} <b>Order Submitted</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                f"Symbol:   <b>{symbol}</b>\n"
-                f"Action:   <b>{side}</b>\n"
-                f"Notional: <b>${amount_usd:,.2f}</b>\n"
-                f"Order ID: <code>{order.id}</code>\n"
-                f"Status:   <code>{order.status}</code>"
+                f"❌ Order rejected — ${amount_usd:,.2f} exceeds the "
+                f"MAX_TELEGRAM_ORDER_USD cap of ${cfg.max_telegram_order_usd:,.2f}."
             )
+
+        from brain.signal import TradingSignal
+        from alpaca.trading.client import TradingClient
+
+        is_paper = "paper" in cfg.alpaca_base_url.lower()
+        trading_client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
+        acct = trading_client.get_account()
+        equity = float(acct.equity)
+
+        # Convert USD notional to position_pct, capped at max_position_pct
+        position_pct = min(amount_usd / max(equity, 1.0), cfg.max_position_pct)
+
+        signal = TradingSignal(
+            symbol=symbol,
+            asset_class=asset_class,  # type: ignore[arg-type]
+            action=side,              # type: ignore[arg-type]
+            confidence=1.0,
+            rationale=f"Telegram direct order ${amount_usd:,.2f}",
+            suggested_position_pct=position_pct,
+            stop_loss_pct=cfg.stop_loss_pct,
+            take_profit_pct=cfg.take_profit_pct,
+        )
+
+        if asset_class == "stock":
+            from execution.stock.engine import StockExecutionEngine
+            from data.market_data import AlpacaMarketData
+
+            md = AlpacaMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)
+            bars = md.get_bars(symbol, days=30)
+            bars_highs  = [b.high  for b in bars]
+            bars_lows   = [b.low   for b in bars]
+            bars_closes = [b.close for b in bars]
+
+            engine = StockExecutionEngine(
+                cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,
+                cfg.max_position_pct, cfg.circuit_breaker_drawdown,
+            )
+            result = engine.execute(signal, bars_highs, bars_lows, bars_closes)
 
         else:  # crypto
-            from binance.client import Client as BinanceClient
-            client = BinanceClient(
-                cfg.binance_api_key, cfg.binance_secret_key,
-                testnet=cfg.binance_testnet,
-            )
-            ticker  = client.get_symbol_ticker(symbol=symbol)
-            price   = float(ticker["price"])
-            qty     = round(amount_usd / price, 6)
+            from execution.crypto.engine import CryptoExecutionEngine
 
-            if side == "BUY":
-                order = client.order_market_buy(symbol=symbol, quantity=qty)
-            else:
-                order = client.order_market_sell(symbol=symbol, quantity=qty)
+            engine = CryptoExecutionEngine(
+                cfg.binance_api_key, cfg.binance_secret_key, cfg.binance_testnet,
+                cfg.max_position_pct, cfg.max_crypto_allocation_pct,
+            )
+            result = engine.execute(signal, portfolio_equity=equity)
 
-            order_id = str(order.get("orderId", "?"))
-            fills    = order.get("fills", [])
-            avg_px   = (
-                sum(float(f["price"]) * float(f["qty"]) for f in fills)
-                / max(sum(float(f["qty"]) for f in fills), 1e-12)
-                if fills else price
-            )
-            return (
-                f"{'🟢' if side == 'BUY' else '🔴'} <b>Order Filled</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                f"Symbol:   <b>{symbol}</b>\n"
-                f"Action:   <b>{side}</b>\n"
-                f"Qty:      <b>{qty:.6f}</b>\n"
-                f"Avg px:   <b>${avg_px:,.4f}</b>\n"
-                f"Order ID: <code>{order_id}</code>"
-            )
+        if result is None:
+            return "⚠️ Order blocked by risk controls (circuit breaker, sizing, or market hours)."
+
+        return _fmt_order(result)
 
     except Exception as exc:
         log.error("Direct execution failed: %s", exc, exc_info=True)

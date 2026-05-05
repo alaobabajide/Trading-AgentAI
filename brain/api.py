@@ -13,15 +13,18 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import time as _time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-
-import time as _time
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +38,66 @@ _services_cache: Any = None
 _bar_cache: dict[str, tuple[Any, float]] = {}
 _BAR_CACHE_TTL = 300.0  # seconds
 
+# ── Security helpers ───────────────────────────────────────────────────────────
+
+_SYMBOL_RE = re.compile(r"^[A-Z0-9]{1,20}$")
+
+
+def _validate_symbol(symbol: str) -> str:
+    upper = symbol.strip().upper()
+    if not _SYMBOL_RE.match(upper):
+        raise HTTPException(400, "Invalid symbol — uppercase alphanumeric, 1-20 characters")
+    return upper
+
+
+# Simple in-process rate limiter (per IP, sliding window)
+class _RateLimiter:
+    def __init__(self) -> None:
+        self._windows: dict[str, list[float]] = defaultdict(list)
+
+    def is_allowed(self, key: str, max_requests: int, window_seconds: int) -> bool:
+        now = _time.monotonic()
+        cutoff = now - window_seconds
+        hits = [t for t in self._windows[key] if t > cutoff]
+        self._windows[key] = hits
+        if len(hits) >= max_requests:
+            return False
+        self._windows[key].append(now)
+        return True
+
+
+_rate_limiter = _RateLimiter()
+
+# Audit log — append-only JSONL, one entry per order
+_AUDIT_LOG = os.environ.get("AUDIT_LOG_FILE", "/tmp/ta_audit.log")
+
+
+def _write_audit(
+    symbol: str, action: str, qty: float, notional: float,
+    source: str, order_id: str = "",
+) -> None:
+    entry = {
+        "ts": datetime.utcnow().isoformat() + "Z",
+        "symbol": symbol, "action": action,
+        "qty": qty, "notional": round(notional, 2),
+        "source": source, "order_id": order_id,
+    }
+    try:
+        with open(_AUDIT_LOG, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as exc:
+        log.warning("Audit log write failed: %s", exc)
+
+
+# Hard bounds for risk config — enforced on both load and PATCH
+_CONFIG_BOUNDS: dict[str, tuple[float, float]] = {
+    "stop_loss_pct":            (0.005, 0.20),
+    "take_profit_pct":          (0.01,  0.50),
+    "max_position_pct":         (0.005, 0.10),
+    "circuit_breaker_drawdown": (0.01,  0.20),
+    "max_crypto_allocation_pct":(0.0,   0.50),
+}
+
 # ── Dynamic risk config (frontend-editable, persisted to file) ────────────────
 # Overrides env-var defaults without a redeploy.
 # Shape: {stop_loss_pct, take_profit_pct, max_position_pct, circuit_breaker_drawdown}
@@ -45,7 +108,21 @@ _dynamic_config: dict = {}
 def _load_dynamic_config() -> dict:
     try:
         with open(_CONFIG_FILE) as f:
-            return json.load(f)
+            raw = json.load(f)
+        if not isinstance(raw, dict):
+            return {}
+        validated: dict = {}
+        for key, (lo, hi) in _CONFIG_BOUNDS.items():
+            if key in raw:
+                try:
+                    val = float(raw[key])
+                except (TypeError, ValueError):
+                    continue
+                if lo <= val <= hi:
+                    validated[key] = val
+                else:
+                    log.warning("Dynamic config %s=%.4f out of bounds [%.4f, %.4f] — rejected", key, val, lo, hi)
+        return validated
     except FileNotFoundError:
         return {}
     except Exception as exc:
@@ -57,6 +134,7 @@ def _save_dynamic_config(data: dict) -> None:
     try:
         with open(_CONFIG_FILE, "w") as f:
             json.dump(data, f)
+        os.chmod(_CONFIG_FILE, 0o600)
     except Exception as exc:
         log.warning("Could not persist dynamic config: %s", exc)
 
@@ -159,18 +237,69 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ── CORS: restrict to configured origins (no wildcard by default) ─────────────
+_raw_origins = os.environ.get("ALLOWED_ORIGINS", "")
+_allowed_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=bool(_allowed_origins),
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["X-Api-Key", "Content-Type"],
+)
 
+# ── Rate limiting (outermost — runs first, cheapest check) ────────────────────
+_RATE_LIMITS: dict[str, tuple[int, int]] = {
+    "/execute": (5,  60),
+    "/signal":  (10, 60),
+    "/kill":    (5,  60),
+    "/resume":  (5,  60),
+    "/config":  (20, 60),
+}
+_DEFAULT_RATE = (120, 60)
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    client_ip = (request.client.host if request.client else "unknown")
+    max_req, window = _RATE_LIMITS.get(request.url.path, _DEFAULT_RATE)
+    if not _rate_limiter.is_allowed(client_ip, max_req, window):
+        return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded — slow down"})
+    return await call_next(request)
+
+
+# ── Body size guard (64 KB max) ───────────────────────────────────────────────
+@app.middleware("http")
+async def body_size_limit(request: Request, call_next):
+    cl = request.headers.get("content-length")
+    if cl and int(cl) > 65_536:
+        return JSONResponse(status_code=413, content={"detail": "Request body too large"})
+    return await call_next(request)
+
+
+# ── API key authentication (all routes except /health and /) ─────────────────
+_PUBLIC_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc"}
+
+
+@app.middleware("http")
+async def api_key_middleware(request: Request, call_next):
+    if request.url.path in _PUBLIC_PATHS:
+        return await call_next(request)
+    from config import get_settings
+    cfg = get_settings()
+    if not cfg.brain_api_key:
+        log.critical("BRAIN_API_KEY is not set — API is UNAUTHENTICATED. Set it in Railway env vars.")
+        return await call_next(request)   # fail-open during initial setup only
+    if request.headers.get("X-Api-Key", "") != cfg.brain_api_key:
+        return JSONResponse(status_code=403, content={"detail": "Forbidden — invalid or missing API key"})
+    return await call_next(request)
+
+
+# ── Safe exception handler — never expose stack traces externally ─────────────
 @app.exception_handler(Exception)
-async def unhandled_exception_handler(request, exc: Exception):
-    """Return the actual error message instead of a blank 500."""
-    import traceback
-    from fastapi.responses import JSONResponse
+async def unhandled_exception_handler(request: Request, exc: Exception):
     log.error("Unhandled exception on %s: %s", request.url.path, exc, exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={"detail": f"{type(exc).__name__}: {exc}",
-                 "traceback": traceback.format_exc()[-2000:]},
-    )
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 def _build_services(cfg):
@@ -274,11 +403,11 @@ def health():
 # ── Dynamic risk config endpoints ─────────────────────────────────────────────
 
 class RiskConfigUpdate(BaseModel):
-    stop_loss_pct:            float | None = Field(None, ge=0.005, le=0.20)
-    take_profit_pct:          float | None = Field(None, ge=0.01,  le=0.50)
-    max_position_pct:         float | None = Field(None, ge=0.01,  le=0.20)
-    circuit_breaker_drawdown: float | None = Field(None, ge=0.05,  le=0.50)
-    max_crypto_allocation_pct: float | None = Field(None, ge=0.0,  le=1.0)
+    stop_loss_pct:             float | None = Field(None, ge=0.005, le=0.20)
+    take_profit_pct:           float | None = Field(None, ge=0.01,  le=0.50)
+    max_position_pct:          float | None = Field(None, ge=0.005, le=0.10)   # hard cap: 10% NAV
+    circuit_breaker_drawdown:  float | None = Field(None, ge=0.01,  le=0.20)   # hard cap: 20% drawdown
+    max_crypto_allocation_pct: float | None = Field(None, ge=0.0,   le=0.50)   # hard cap: 50% crypto
 
 
 @app.get("/config")
@@ -313,6 +442,11 @@ def update_risk_config(body: RiskConfigUpdate):
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No fields provided to update")
+    # Enforce hard server-side bounds regardless of Pydantic validation
+    for key, val in list(updates.items()):
+        if key in _CONFIG_BOUNDS:
+            lo, hi = _CONFIG_BOUNDS[key]
+            updates[key] = max(lo, min(hi, float(val)))
     _dynamic_config.update(updates)
     _save_dynamic_config(_dynamic_config)
     # Invalidate service singleton so DebateOrchestrator rebuilds with new values
@@ -355,6 +489,9 @@ def config_status():
 
 @app.post("/signal", response_model=SignalResponse)
 def generate_signal(req: SignalRequest):
+    req.symbol = _validate_symbol(req.symbol)
+    if req.asset_class not in ("stock", "crypto"):
+        raise HTTPException(400, "asset_class must be 'stock' or 'crypto'")
     from config import get_settings
     cfg = get_settings()
     if not cfg.anthropic_api_key:
@@ -474,21 +611,14 @@ class ExecuteRequest(BaseModel):
 
 @app.post("/execute")
 def execute_trade(req: ExecuteRequest):
-    """Place a bracket order (entry + stop-loss + take-profit) via the execution engines.
-
-    Routes to StockExecutionEngine (Alpaca bracket orders) or CryptoExecutionEngine
-    (Binance market + OCO), which enforce all risk controls:
-      • ATR-based position sizing capped at max_position_pct (5% NAV)
-      • Stop-loss and take-profit on every entry
-      • Circuit breaker (10% daily drawdown)
-      • Crypto cap (30% of portfolio)
-
-    Uses cached signal sizing if available; falls back to request params.
-    """
-    if _TRADING_PAUSED:
-        raise HTTPException(status_code=503, detail="Trading paused — POST /resume to restart")
+    """Place a bracket order (entry + stop-loss + take-profit) via the execution engines."""
+    req.symbol = _validate_symbol(req.symbol)
+    if req.asset_class not in ("stock", "crypto"):
+        raise HTTPException(400, "asset_class must be 'stock' or 'crypto'")
     if req.action not in ("BUY", "SELL"):
         raise HTTPException(status_code=400, detail="action must be BUY or SELL")
+    if _TRADING_PAUSED:
+        raise HTTPException(status_code=503, detail="Trading paused — POST /resume to restart")
 
     from config import get_settings
     from brain.signal import TradingSignal
@@ -573,6 +703,8 @@ def execute_trade(req: ExecuteRequest):
                 )
 
             exchange = "alpaca_paper" if is_paper else "alpaca_live"
+            _write_audit(result.symbol, result.action, result.qty,
+                         result.qty * result.submitted_price, "api", result.order_id)
             return {
                 "order_id":        result.order_id,
                 "status":          "submitted",
@@ -613,6 +745,8 @@ def execute_trade(req: ExecuteRequest):
                     detail="Order blocked by risk controls (crypto cap, sizing, or invalid price)",
                 )
 
+            _write_audit(result.symbol, result.action, result.qty,
+                         result.qty * result.submitted_price, "api", result.order_id)
             return {
                 "order_id":          result.order_id,
                 "status":            "submitted",
@@ -882,6 +1016,20 @@ def portfolio_history_debug():
         pts = _build_equity(cfg, is_paper, lookback_days=days, use_daily=daily)
         out[period] = {"pts": len(pts), "first": pts[:1], "last": pts[-1:]}
     return out
+
+
+@app.get("/audit")
+def get_audit_log(limit: int = 50):
+    """Return the last N trade audit log entries (newest first)."""
+    if limit < 1 or limit > 1000:
+        raise HTTPException(400, "limit must be 1–1000")
+    try:
+        with open(_AUDIT_LOG) as f:
+            lines = [l.strip() for l in f if l.strip()]
+        entries = [json.loads(l) for l in lines]
+        return list(reversed(entries[-limit:]))
+    except FileNotFoundError:
+        return []
 
 
 if __name__ == "__main__":

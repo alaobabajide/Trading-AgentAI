@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from "react";
+import { apiHeaders } from "../lib/api";
 
 export interface ExecuteParams {
   symbol: string;
@@ -38,7 +39,7 @@ export function useExecute() {
     try {
       const resp = await fetch("/api/execute", {
         method:  "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: apiHeaders({ "Content-Type": "application/json" }),
         body:    JSON.stringify(params),
       });
       const data = await resp.json().catch(() => ({}));

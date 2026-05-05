@@ -25,3 +25,6 @@ python-telegram-bot[job-queue]>=21.0
 # Monitoring
 prometheus-client>=0.21.0
 schedule>=1.2.0
+
+# Security
+slowapi>=0.1.9

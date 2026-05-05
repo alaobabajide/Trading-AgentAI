@@ -9,6 +9,20 @@ import { mockPortfolio, mockSignals } from "./mock";
 
 const BASE = "/api";
 
+// Read the API key injected by start.sh into /runtime-config.js at container startup.
+// Falls back to empty string if not set (unauthenticated dev mode).
+function _apiKey(): string {
+  return (
+    (window as unknown as { __TA_CONFIG__?: { apiKey?: string } }).__TA_CONFIG__
+      ?.apiKey ?? ""
+  );
+}
+
+export function apiHeaders(extra?: Record<string, string>): Record<string, string> {
+  const key = _apiKey();
+  return key ? { "X-Api-Key": key, ...extra } : { ...extra };
+}
+
 async function safeJson<T>(res: Response): Promise<T> {
   const text = await res.text();
   if (!text) throw new Error(`Empty response (HTTP ${res.status})`);
@@ -18,7 +32,10 @@ async function safeJson<T>(res: Response): Promise<T> {
 // ── Raw fetchers ──────────────────────────────────────────────────────────────
 
 export async function fetchHealth(): Promise<{ status: string }> {
-  const res = await fetch(`${BASE}/health`, { signal: AbortSignal.timeout(5000) });
+  const res = await fetch(`${BASE}/health`, {
+    signal: AbortSignal.timeout(5000),
+    headers: apiHeaders(),
+  });
   return safeJson(res);
 }
 
@@ -35,7 +52,10 @@ export interface ConfigStatus {
 }
 
 export async function fetchConfigStatus(): Promise<ConfigStatus> {
-  const res = await fetch(`${BASE}/config-status`, { signal: AbortSignal.timeout(5000) });
+  const res = await fetch(`${BASE}/config-status`, {
+    signal: AbortSignal.timeout(5000),
+    headers: apiHeaders(),
+  });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return safeJson(res);
 }
@@ -61,13 +81,19 @@ export function useConfigStatus() {
 }
 
 export async function fetchPortfolio(): Promise<PortfolioSnapshot> {
-  const res = await fetch(`${BASE}/portfolio`, { signal: AbortSignal.timeout(15000) });
+  const res = await fetch(`${BASE}/portfolio`, {
+    signal: AbortSignal.timeout(15000),
+    headers: apiHeaders(),
+  });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return safeJson(res);
 }
 
 export async function fetchCachedSignals(): Promise<Signal[]> {
-  const res = await fetch(`${BASE}/signals/cached`, { signal: AbortSignal.timeout(10000) });
+  const res = await fetch(`${BASE}/signals/cached`, {
+    signal: AbortSignal.timeout(10000),
+    headers: apiHeaders(),
+  });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return safeJson(res);
 }
@@ -219,6 +245,7 @@ export function useEquitySeries(period: "1D" | "1M" | "1Y" = "1D") {
       try {
         const res = await fetch(`${BASE}/portfolio/history?period=${period}`, {
           signal: AbortSignal.timeout(15_000),
+          headers: apiHeaders(),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await safeJson<EquityPoint[]>(res);
@@ -253,7 +280,10 @@ export interface RiskConfig {
 }
 
 export async function fetchRiskConfig(): Promise<RiskConfig> {
-  const res = await fetch(`${BASE}/config`, { signal: AbortSignal.timeout(5000) });
+  const res = await fetch(`${BASE}/config`, {
+    signal: AbortSignal.timeout(5000),
+    headers: apiHeaders(),
+  });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return safeJson(res);
 }
@@ -261,7 +291,7 @@ export async function fetchRiskConfig(): Promise<RiskConfig> {
 export async function patchRiskConfig(updates: Partial<Omit<RiskConfig, "source" | "overrides" | "defaults">>): Promise<{ updated: object; current: object }> {
   const res = await fetch(`${BASE}/config`, {
     method:  "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders({ "Content-Type": "application/json" }),
     body:    JSON.stringify(updates),
     signal:  AbortSignal.timeout(8000),
   });
@@ -273,7 +303,11 @@ export async function patchRiskConfig(updates: Partial<Omit<RiskConfig, "source"
 }
 
 export async function resetRiskConfig(): Promise<{ reset: boolean; current: object }> {
-  const res = await fetch(`${BASE}/config`, { method: "DELETE", signal: AbortSignal.timeout(5000) });
+  const res = await fetch(`${BASE}/config`, {
+    method: "DELETE",
+    signal: AbortSignal.timeout(5000),
+    headers: apiHeaders(),
+  });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return safeJson(res);
 }
