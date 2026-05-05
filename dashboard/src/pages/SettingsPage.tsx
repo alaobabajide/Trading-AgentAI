@@ -1,10 +1,10 @@
 import clsx from "clsx";
-import { Brain, Package, Shield, Timer, TrendingUp, Zap } from "lucide-react";
+import { Brain, Package, RefreshCw, Shield, Timer, TrendingUp, Zap } from "lucide-react";
 import {
   HITLMode, UserProfile, DEFAULT_PROFILE,
   MODE_CONFIG, loadProfile, saveProfile,
 } from "../lib/hitl";
-import { useConfigStatus } from "../lib/api";
+import { useConfigStatus, useRiskConfig } from "../lib/api";
 import { useState } from "react";
 
 function Section({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
@@ -114,6 +114,129 @@ function SecondSlider({
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+type RiskLocal = {
+  stop_loss_pct: number;
+  take_profit_pct: number;
+  max_position_pct: number;
+  circuit_breaker_drawdown: number;
+};
+
+function RiskRow({
+  label, value, options, onChange, valueColor,
+}: {
+  label: string; value: number; options: number[];
+  onChange: (v: number) => void;
+  valueColor: string;
+  suffix?: string;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex justify-between text-xs">
+        <span className="text-slate-300 font-medium">{label}</span>
+        <span className={clsx("font-mono font-semibold", valueColor)}>{(value * 100).toFixed(1)}%</span>
+      </div>
+      <div className="flex gap-1.5">
+        {options.map((o) => (
+          <button key={o}
+            onClick={() => onChange(o / 100)}
+            className={clsx(
+              "flex-1 py-1.5 rounded-lg text-xs font-mono font-medium transition-all border",
+              Math.abs(value - o / 100) < 0.001
+                ? clsx(
+                    valueColor === "text-red-400"     ? "bg-red-500/20 border-red-500/40 text-red-300"     :
+                    valueColor === "text-emerald-400" ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-300" :
+                    valueColor === "text-amber-400"   ? "bg-amber-500/20 border-amber-500/40 text-amber-300"   :
+                    "bg-orange-500/20 border-orange-500/40 text-orange-300"
+                  )
+                : "border-white/5 text-slate-500 hover:text-slate-300",
+            )}
+          >{o}%</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RiskConfigPanel() {
+  const riskCfg = useRiskConfig();
+  const [local, setLocal] = useState<RiskLocal | null>(null);
+
+  // Seed local state from fetched config (once)
+  if (riskCfg.config && local === null) {
+    // intentionally not in useEffect — we want synchronous first-render seeding
+  }
+
+  const c = riskCfg.config;
+  const vals: RiskLocal = local ?? (c ? {
+    stop_loss_pct:            c.stop_loss_pct,
+    take_profit_pct:          c.take_profit_pct,
+    max_position_pct:         c.max_position_pct,
+    circuit_breaker_drawdown: c.circuit_breaker_drawdown,
+  } : { stop_loss_pct: 0.02, take_profit_pct: 0.05, max_position_pct: 0.05, circuit_breaker_drawdown: 0.10 });
+
+  function set(key: keyof RiskLocal) {
+    return (v: number) => setLocal((p) => ({ ...vals, ...p, [key]: v }));
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="text-[11px] text-slate-400 font-mono bg-surface-700 rounded-xl px-3 py-2 leading-relaxed">
+        These thresholds control the background orchestrator — positions are closed automatically
+        when unrealized P&amp;L hits the stop-loss or take-profit level.
+        Changes apply on the next monitor tick (≤1 min) without a redeploy.
+        {c && (
+          <span className={clsx(
+            "ml-1.5 px-1.5 py-0.5 rounded text-[10px] font-semibold",
+            c.source === "dynamic"
+              ? "bg-brand-500/20 text-brand-300"
+              : "bg-slate-500/20 text-slate-400",
+          )}>
+            {c.source === "dynamic" ? "custom values active" : "using Railway defaults"}
+          </span>
+        )}
+      </div>
+
+      {c === null ? (
+        <div className="text-xs text-slate-500 font-mono animate-pulse">Loading engine config…</div>
+      ) : (
+        <>
+          <RiskRow label="Stop loss"       value={vals.stop_loss_pct}            options={[1, 2, 3, 5]}        onChange={set("stop_loss_pct")}            valueColor="text-red-400"     />
+          <RiskRow label="Take profit"     value={vals.take_profit_pct}          options={[3, 5, 8, 10, 15]}   onChange={set("take_profit_pct")}          valueColor="text-emerald-400" />
+          <RiskRow label="Max position"    value={vals.max_position_pct}         options={[3, 5, 10, 15]}      onChange={set("max_position_pct")}         valueColor="text-amber-400"   />
+          <RiskRow label="Circuit breaker" value={vals.circuit_breaker_drawdown} options={[5, 10, 15, 20]}     onChange={set("circuit_breaker_drawdown")} valueColor="text-orange-400"  />
+
+          {riskCfg.error && <p className="text-xs text-red-400 font-mono">{riskCfg.error}</p>}
+
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={() => riskCfg.save(vals)}
+              disabled={riskCfg.saving}
+              className="flex-1 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-xs font-medium transition-colors"
+            >
+              {riskCfg.saving ? "Saving…" : riskCfg.saved ? "Saved ✓" : "Push to engine"}
+            </button>
+            <button
+              onClick={() => { riskCfg.reset(); setLocal(null); }}
+              disabled={riskCfg.saving}
+              title="Reset to Railway env var defaults"
+              className="px-3 py-2 rounded-xl border border-white/10 text-slate-400 hover:text-slate-200 hover:border-white/20 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {c.source === "dynamic" && (
+            <p className="text-[10px] text-slate-500 font-mono">
+              Railway defaults: SL {(c.defaults.stop_loss_pct * 100).toFixed(1)}% · TP {(c.defaults.take_profit_pct * 100).toFixed(1)}% · max pos {(c.defaults.max_position_pct * 100).toFixed(0)}%
+              &nbsp;— ↺ to revert.
+            </p>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -252,6 +375,11 @@ export function SettingsPage() {
         </div>
       </Section>
 
+      {/* Auto-Trade Risk Controls */}
+      <Section icon={<Shield className="w-4 h-4" />} title="Auto-Trade Risk Controls">
+        <RiskConfigPanel />
+      </Section>
+
       {/* Order Quantity */}
       <Section icon={<Package className="w-4 h-4" />} title="Order Quantity">
         <div className="text-[11px] text-slate-500 font-mono bg-surface-700 rounded-xl px-3 py-2">
@@ -377,24 +505,6 @@ export function SettingsPage() {
         />
         <div className="text-[11px] text-slate-500 font-mono bg-surface-700 rounded-xl px-3 py-2">
           Cool-off activates when a manual trade exceeds your position size limit. It doesn't block — it inconveniences the impulse.
-        </div>
-      </Section>
-
-      {/* Risk Controls */}
-      <Section icon={<Shield className="w-4 h-4" />} title="Hardcoded Risk Controls">
-        <div className="space-y-2 text-xs text-slate-400 font-mono">
-          {[
-            ["Circuit breaker",      "10% daily drawdown halt"],
-            ["Crypto cap",           "30% of portfolio NAV"],
-            ["Max position (hard)",  "5% NAV per signal"],
-            ["Vote gate",             "≥ 4/7 analysts to execute"],
-            ["Regime weight purge",  "Auto when ATR shifts >20%"],
-          ].map(([k, v]) => (
-            <div key={k} className="flex justify-between py-1.5 border-b border-white/[0.04] last:border-0">
-              <span>{k}</span>
-              <span className="text-slate-300">{v}</span>
-            </div>
-          ))}
         </div>
       </Section>
 

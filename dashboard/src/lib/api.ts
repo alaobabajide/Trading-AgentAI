@@ -239,6 +239,94 @@ export function useEquitySeries(period: "1D" | "1M" | "1Y" = "1D") {
   return { series, isLive };
 }
 
+// ── Dynamic risk config ───────────────────────────────────────────────────────
+
+export interface RiskConfig {
+  stop_loss_pct:             number;
+  take_profit_pct:           number;
+  max_position_pct:          number;
+  circuit_breaker_drawdown:  number;
+  max_crypto_allocation_pct: number;
+  source:    "dynamic" | "env";
+  overrides: Partial<Omit<RiskConfig, "source" | "overrides" | "defaults">>;
+  defaults:  Omit<RiskConfig, "source" | "overrides" | "defaults">;
+}
+
+export async function fetchRiskConfig(): Promise<RiskConfig> {
+  const res = await fetch(`${BASE}/config`, { signal: AbortSignal.timeout(5000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export async function patchRiskConfig(updates: Partial<Omit<RiskConfig, "source" | "overrides" | "defaults">>): Promise<{ updated: object; current: object }> {
+  const res = await fetch(`${BASE}/config`, {
+    method:  "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify(updates),
+    signal:  AbortSignal.timeout(8000),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  return safeJson(res);
+}
+
+export async function resetRiskConfig(): Promise<{ reset: boolean; current: object }> {
+  const res = await fetch(`${BASE}/config`, { method: "DELETE", signal: AbortSignal.timeout(5000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export function useRiskConfig() {
+  const [config, setConfig]   = useState<RiskConfig | null>(null);
+  const [saving,  setSaving]  = useState(false);
+  const [error,   setError]   = useState<string | null>(null);
+  const [saved,   setSaved]   = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchRiskConfig()
+      .then((c) => { if (!cancelled) setConfig(c); })
+      .catch(() => { /* backend may not be up yet */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function save(updates: Partial<Omit<RiskConfig, "source" | "overrides" | "defaults">>) {
+    setSaving(true);
+    setError(null);
+    try {
+      await patchRiskConfig(updates);
+      const fresh = await fetchRiskConfig();
+      setConfig(fresh);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function reset() {
+    setSaving(true);
+    setError(null);
+    try {
+      await resetRiskConfig();
+      const fresh = await fetchRiskConfig();
+      setConfig(fresh);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return { config, saving, saved, error, save, reset };
+}
+
 /**
  * Polls /api/health every 30s to drive the "Brain live" indicator.
  */

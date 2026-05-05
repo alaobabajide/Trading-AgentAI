@@ -35,6 +35,45 @@ _services_cache: Any = None
 _bar_cache: dict[str, tuple[Any, float]] = {}
 _BAR_CACHE_TTL = 300.0  # seconds
 
+# ── Dynamic risk config (frontend-editable, persisted to file) ────────────────
+# Overrides env-var defaults without a redeploy.
+# Shape: {stop_loss_pct, take_profit_pct, max_position_pct, circuit_breaker_drawdown}
+_CONFIG_FILE = os.environ.get("DYNAMIC_CONFIG_FILE", "/tmp/ta_dynamic_config.json")
+_dynamic_config: dict = {}
+
+
+def _load_dynamic_config() -> dict:
+    try:
+        with open(_CONFIG_FILE) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        log.warning("Could not load dynamic config from %s: %s", _CONFIG_FILE, exc)
+        return {}
+
+
+def _save_dynamic_config(data: dict) -> None:
+    try:
+        with open(_CONFIG_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as exc:
+        log.warning("Could not persist dynamic config: %s", exc)
+
+
+def _effective_config(cfg) -> dict:
+    """Merge env-var defaults with any dynamic overrides."""
+    return {
+        "stop_loss_pct":            _dynamic_config.get("stop_loss_pct",            cfg.stop_loss_pct),
+        "take_profit_pct":          _dynamic_config.get("take_profit_pct",          cfg.take_profit_pct),
+        "max_position_pct":         _dynamic_config.get("max_position_pct",         cfg.max_position_pct),
+        "circuit_breaker_drawdown": _dynamic_config.get("circuit_breaker_drawdown", cfg.circuit_breaker_drawdown),
+        "max_crypto_allocation_pct": _dynamic_config.get("max_crypto_allocation_pct", cfg.max_crypto_allocation_pct),
+    }
+
+
+_dynamic_config = _load_dynamic_config()
+
 # ── Persistent signal cache ────────────────────────────────────────────────────
 # Survives uvicorn/process restarts within the same container.
 # Falls back silently if the filesystem is read-only.
@@ -152,14 +191,15 @@ def _build_services(cfg):
         cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,
         cfg.binance_api_key, cfg.binance_secret_key, cfg.binance_testnet,
     )
+    eff = _effective_config(cfg)
     orchestrator = DebateOrchestrator(
         anthropic_api_key=cfg.anthropic_api_key,
         confidence_threshold=cfg.signal_confidence_threshold,
-        max_position_pct=cfg.max_position_pct,
-        max_crypto_pct=cfg.max_crypto_allocation_pct,
-        circuit_breaker_drawdown=cfg.circuit_breaker_drawdown,
-        stop_loss_pct=cfg.stop_loss_pct,
-        take_profit_pct=cfg.take_profit_pct,
+        max_position_pct=eff["max_position_pct"],
+        max_crypto_pct=eff["max_crypto_allocation_pct"],
+        circuit_breaker_drawdown=eff["circuit_breaker_drawdown"],
+        stop_loss_pct=eff["stop_loss_pct"],
+        take_profit_pct=eff["take_profit_pct"],
     )
     return alpaca, binance, sentiment, onchain, portfolio, orchestrator
 
@@ -229,6 +269,69 @@ def kill_status():
 @app.get("/health")
 def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+
+
+# ── Dynamic risk config endpoints ─────────────────────────────────────────────
+
+class RiskConfigUpdate(BaseModel):
+    stop_loss_pct:            float | None = Field(None, ge=0.005, le=0.20)
+    take_profit_pct:          float | None = Field(None, ge=0.01,  le=0.50)
+    max_position_pct:         float | None = Field(None, ge=0.01,  le=0.20)
+    circuit_breaker_drawdown: float | None = Field(None, ge=0.05,  le=0.50)
+    max_crypto_allocation_pct: float | None = Field(None, ge=0.0,  le=1.0)
+
+
+@app.get("/config")
+def get_risk_config():
+    """Return current effective risk config (env defaults merged with dynamic overrides)."""
+    from config import get_settings
+    cfg = get_settings()
+    eff = _effective_config(cfg)
+    return {
+        **eff,
+        "source": "dynamic" if _dynamic_config else "env",
+        "overrides": dict(_dynamic_config),
+        "defaults": {
+            "stop_loss_pct":            cfg.stop_loss_pct,
+            "take_profit_pct":          cfg.take_profit_pct,
+            "max_position_pct":         cfg.max_position_pct,
+            "circuit_breaker_drawdown": cfg.circuit_breaker_drawdown,
+            "max_crypto_allocation_pct": cfg.max_crypto_allocation_pct,
+        },
+    }
+
+
+@app.patch("/config")
+def update_risk_config(body: RiskConfigUpdate):
+    """Update risk config dynamically — no redeploy needed.
+
+    Changes take effect on the next signal/monitor cycle.
+    Values persist to disk and survive process restarts within the same container.
+    On a full redeploy, Railway env vars re-seed the defaults.
+    """
+    global _dynamic_config, _services_cache
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields provided to update")
+    _dynamic_config.update(updates)
+    _save_dynamic_config(_dynamic_config)
+    # Invalidate service singleton so DebateOrchestrator rebuilds with new values
+    _services_cache = None
+    log.info("Dynamic risk config updated: %s", updates)
+    from config import get_settings
+    return {"updated": updates, "current": _effective_config(get_settings())}
+
+
+@app.delete("/config")
+def reset_risk_config():
+    """Reset all dynamic overrides — reverts to Railway env var defaults."""
+    global _dynamic_config, _services_cache
+    _dynamic_config = {}
+    _save_dynamic_config({})
+    _services_cache = None
+    log.info("Dynamic risk config reset to env var defaults")
+    from config import get_settings
+    return {"reset": True, "current": _effective_config(get_settings())}
 
 
 @app.get("/config-status")

@@ -74,6 +74,9 @@ class Orchestrator:
         self._peak_equity: float = 0.0
         # Per-symbol thresholds stored from last signal (keyed by symbol)
         self._pos_thresholds: dict[str, tuple[float, float]] = {}  # symbol → (sl_pct, tp_pct)
+        # Live risk config — refreshed from brain API before every monitor run
+        self._stop_loss_pct  = cfg.stop_loss_pct
+        self._take_profit_pct = cfg.take_profit_pct
 
     # ── Portfolio refresh ──────────────────────────────────────────────────────
 
@@ -234,6 +237,24 @@ class Orchestrator:
         exchange = "alpaca" if asset_class == "stock" else "binance"
         order_counter.labels(symbol=symbol, action=action, exchange=exchange, status=status).inc()
 
+    # ── Live config sync ──────────────────────────────────────────────────────
+
+    def _refresh_risk_config(self) -> None:
+        """Pull effective risk config from brain API so UI changes take effect immediately."""
+        try:
+            r = httpx.get(f"{self._brain_url}/config", timeout=3)
+            if r.status_code == 200:
+                data = r.json()
+                self._stop_loss_pct   = float(data.get("stop_loss_pct",   self._stop_loss_pct))
+                self._take_profit_pct = float(data.get("take_profit_pct", self._take_profit_pct))
+                log.debug(
+                    "Risk config refreshed: sl=%.1f%%  tp=%.1f%%  source=%s",
+                    self._stop_loss_pct * 100, self._take_profit_pct * 100,
+                    data.get("source", "?"),
+                )
+        except Exception as exc:
+            log.debug("Could not refresh risk config from brain API: %s", exc)
+
     # ── Position P&L monitor ──────────────────────────────────────────────────
 
     def _monitor_positions(self) -> None:
@@ -245,6 +266,8 @@ class Orchestrator:
         For positions with active bracket orders, Alpaca fires first; this loop
         is a second line of defence.
         """
+        self._refresh_risk_config()   # pull latest thresholds before every check
+
         if not self._cfg.alpaca_api_key:
             return
         try:
@@ -266,7 +289,7 @@ class Orchestrator:
 
             sl_pct, tp_pct = self._pos_thresholds.get(
                 symbol,
-                (cfg.stop_loss_pct, cfg.take_profit_pct),
+                (self._stop_loss_pct, self._take_profit_pct),
             )
 
             reason = None
