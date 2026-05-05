@@ -117,6 +117,24 @@ class Orchestrator:
 
     # ── Signal + execution ────────────────────────────────────────────────────
 
+    def _is_market_open(self) -> bool:
+        """Return True only during regular US market hours (9:30–16:00 ET, Mon–Fri).
+
+        Bracket orders with TimeInForce.DAY are rejected by Alpaca outside these
+        hours, so we skip execution cycles entirely rather than burning API calls.
+        Signal generation still runs (results are cached for the next open).
+        """
+        try:
+            from alpaca.trading.client import TradingClient
+            cfg = self._cfg
+            is_paper = "paper" in cfg.alpaca_base_url.lower()
+            client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
+            clock = client.get_clock()
+            return bool(clock.is_open)
+        except Exception as exc:
+            log.warning("Could not check market clock: %s — assuming open", exc)
+            return True  # fail-open: don't suppress orders if clock check fails
+
     def _is_trading_paused(self) -> bool:
         """Check the brain API kill switch before executing any order."""
         try:
@@ -149,6 +167,11 @@ class Orchestrator:
         # ── Gate 2: kill switch ───────────────────────────────────────────────
         if self._is_trading_paused():
             log.info("SKIP %s — kill switch active (trading paused)", symbol)
+            return
+
+        # ── Gate 3: market hours (stocks only — crypto trades 24/7) ──────────
+        if asset_class == "stock" and not self._is_market_open():
+            log.debug("SKIP %s — market closed (signal cached, will execute at open)", symbol)
             return
 
         payload = {
@@ -188,12 +211,12 @@ class Orchestrator:
         tp_pct = sig.get("take_profit_pct", self._cfg.take_profit_pct)
         self._pos_thresholds[symbol] = (sl_pct, tp_pct)
 
-        # ── Gate 3: only act on WARM or HOT signals ───────────────────────────
+        # ── Gate 4: only act on WARM or HOT signals ───────────────────────────
         if action == "HOLD" or tier == "COLD":
             log.info("  → %s for %s (tier=%s) — no order submitted", action, symbol, tier)
             return
 
-        # ── Gate 4: don't add to a position that already exists ───────────────
+        # ── Gate 5: don't add to a position that already exists ───────────────
         if action == "BUY" and self._has_open_position(symbol, asset_class):
             log.info("  → BUY skipped for %s — position already open", symbol)
             return

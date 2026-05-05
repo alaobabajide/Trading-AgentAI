@@ -39,7 +39,7 @@ class RiskControls:
 
     def check_circuit_breaker(self, daily_pnl_pct: float) -> bool:
         """Returns True if the breaker is now tripped."""
-        drawdown = abs(daily_pnl_pct) / 100.0
+        drawdown = -daily_pnl_pct / 100.0  # positive when losing money; gains never trip the breaker
         if drawdown >= self.circuit_breaker_drawdown:
             if not self._triggered:
                 log.critical(

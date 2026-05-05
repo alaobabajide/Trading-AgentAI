@@ -556,12 +556,13 @@ def execute_trade(req: ExecuteRequest):
                         detail=f"Could not fetch market price for {req.symbol.upper()} — data feed unavailable",
                     )
 
+            eff = _effective_config(cfg)
             engine = StockExecutionEngine(
                 alpaca_api_key=cfg.alpaca_api_key,
                 alpaca_secret_key=cfg.alpaca_secret_key,
                 alpaca_base_url=cfg.alpaca_base_url,
-                max_position_pct=cfg.max_position_pct,
-                circuit_breaker_drawdown=cfg.circuit_breaker_drawdown,
+                max_position_pct=eff["max_position_pct"],
+                circuit_breaker_drawdown=eff["circuit_breaker_drawdown"],
             )
             result = engine.execute(signal, bars_highs, bars_lows, bars_closes)
 
@@ -596,12 +597,13 @@ def execute_trade(req: ExecuteRequest):
             acct           = trading_client.get_account()
             portfolio_equity = float(acct.equity)
 
+            eff = _effective_config(cfg)
             engine = CryptoExecutionEngine(
                 binance_api_key=cfg.binance_api_key,
                 binance_secret_key=cfg.binance_secret_key,
                 testnet=cfg.binance_testnet,
-                max_position_pct=cfg.max_position_pct,
-                max_crypto_allocation_pct=cfg.max_crypto_allocation_pct,
+                max_position_pct=eff["max_position_pct"],
+                max_crypto_allocation_pct=eff["max_crypto_allocation_pct"],
             )
             result = engine.execute(signal, portfolio_equity=portfolio_equity)
 
