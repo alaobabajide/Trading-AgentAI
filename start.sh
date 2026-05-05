@@ -2,7 +2,7 @@
 # No set -e — nginx must always start even if uvicorn or the bot fail
 
 # ── 0. Expand env vars in nginx template ─────────────────────────────────────
-envsubst '${PORT} ${BRAIN_API_KEY}' < /tmp/nginx.conf.template > /etc/nginx/conf.d/default.conf
+envsubst '${PORT}' < /tmp/nginx.conf.template > /etc/nginx/conf.d/default.conf
 rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 
 # Warn loudly if BRAIN_API_KEY is not set — API will be unauthenticated
