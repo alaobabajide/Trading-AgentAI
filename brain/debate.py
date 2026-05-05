@@ -935,6 +935,8 @@ def _paper_risk_manager(
     max_pos: float,
     max_crypto: float,
     asset_class: str,
+    stop_loss_pct: float = 0.02,
+    take_profit_pct: float = 0.05,
 ) -> str:
     """Rule-based risk assessment using portfolio values — no LLM needed."""
     equity  = max(portfolio.equity, 1.0)
@@ -983,8 +985,8 @@ def _paper_risk_manager(
         "confidence":             round(votes / 15.0, 2),
         "rationale":              rationale,
         "suggested_position_pct": pos_pct,
-        "stop_loss_pct":          0.02,
-        "take_profit_pct":        0.05,
+        "stop_loss_pct":          stop_loss_pct,
+        "take_profit_pct":        take_profit_pct,
         "devil_advocate_score":   0,
         "devil_advocate_case":    "",
     })
@@ -1125,6 +1127,8 @@ class DebateOrchestrator:
         max_position_pct: float = 0.05,
         max_crypto_pct: float = 0.30,
         circuit_breaker_drawdown: float = 0.10,
+        stop_loss_pct: float = 0.02,
+        take_profit_pct: float = 0.05,
     ) -> None:
         client = anthropic.Anthropic(api_key=anthropic_api_key)
 
@@ -1151,10 +1155,12 @@ class DebateOrchestrator:
         self._strategy = StrategyCoach(client)
         self._risk     = RiskManager(client)
 
-        self._threshold   = confidence_threshold
-        self._max_pos     = max_position_pct
-        self._max_crypto  = max_crypto_pct
-        self._cb_drawdown = circuit_breaker_drawdown
+        self._threshold      = confidence_threshold
+        self._max_pos        = max_position_pct
+        self._max_crypto     = max_crypto_pct
+        self._cb_drawdown    = circuit_breaker_drawdown
+        self._stop_loss_pct  = stop_loss_pct
+        self._take_profit_pct = take_profit_pct
 
     def run(
         self,
@@ -1339,6 +1345,8 @@ class DebateOrchestrator:
             risk_raw      = _paper_risk_manager(
                 action, combined_tally, portfolio,
                 self._max_pos, self._max_crypto, asset_class,
+                stop_loss_pct=self._stop_loss_pct,
+                take_profit_pct=self._take_profit_pct,
             )
             strategy_view = (
                 "ALIGNED\nREASONING: Paper mode — strategy assessment uses rule-based "
@@ -1390,8 +1398,9 @@ class DebateOrchestrator:
                     risk_raw = json.dumps({
                         "action": action, "confidence": 0.0,
                         "rationale": f"Risk manager error: {exc}",
-                        "suggested_position_pct": 0.02,
-                        "stop_loss_pct": 0.02, "take_profit_pct": 0.05,
+                        "suggested_position_pct": self._max_pos,
+                        "stop_loss_pct": self._stop_loss_pct,
+                        "take_profit_pct": self._take_profit_pct,
                         "devil_advocate_score": 0, "devil_advocate_case": "",
                     })
                 try:

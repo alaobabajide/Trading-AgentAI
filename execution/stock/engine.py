@@ -77,10 +77,14 @@ class StockExecutionEngine:
             log.warning("Circuit breaker active — refusing to execute %s", signal.symbol)
             return None
 
+        # ── SELL: close the existing long position at market ──────────────────
+        if signal.action == "SELL":
+            return self._close_position(signal.symbol)
+
+        # ── BUY: bracket order (entry + stop-loss + take-profit) ─────────────
         from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
 
-        # Current price comes from the last bar close passed in by the caller
         current_price = bars_closes[-1] if bars_closes else 0.0
         if current_price <= 0:
             log.error("Cannot execute: invalid current price for %s", signal.symbol)
@@ -101,12 +105,10 @@ class StockExecutionEngine:
             log.warning("Sizing resulted in 0 shares for %s", signal.symbol)
             return None
 
-        side = OrderSide.BUY if signal.action == "BUY" else OrderSide.SELL
-
         order_req = MarketOrderRequest(
             symbol=signal.symbol,
             qty=sizing.shares,
-            side=side,
+            side=OrderSide.BUY,
             time_in_force=TimeInForce.DAY,
             order_class="bracket",
             stop_loss=StopLossRequest(stop_price=sizing.stop_price),
@@ -115,12 +117,11 @@ class StockExecutionEngine:
 
         try:
             order = self._trading.submit_order(order_req)
-            if signal.action == "BUY":
-                self._trailing.register(signal.symbol, current_price)
+            self._trailing.register(signal.symbol, current_price)
 
             log.info(
-                "Order submitted: %s %d %s @ market stop=%.2f tp=%.2f id=%s",
-                side.value, sizing.shares, signal.symbol,
+                "BUY bracket submitted: %d %s @ market stop=%.2f tp=%.2f id=%s",
+                sizing.shares, signal.symbol,
                 sizing.stop_price, sizing.take_profit_price, order.id,
             )
             return OrderResult(
@@ -136,6 +137,29 @@ class StockExecutionEngine:
             )
         except Exception as exc:
             log.error("Order submission failed for %s: %s", signal.symbol, exc)
+            return None
+
+    def _close_position(self, symbol: str) -> OrderResult | None:
+        """Close an existing long position at market (cancels any bracket child orders)."""
+        try:
+            order = self._trading.close_position(symbol)
+            qty = int(float(getattr(order, "qty", 0) or 0))
+            price = float(getattr(order, "filled_avg_price", 0) or 0)
+            self._trailing.remove(symbol)
+            log.info("SELL close_position submitted: %s id=%s", symbol, order.id)
+            return OrderResult(
+                symbol=symbol,
+                order_id=str(order.id),
+                action="SELL",
+                qty=qty,
+                submitted_price=price,
+                stop_price=0.0,
+                take_profit_price=0.0,
+                timestamp=datetime.now(timezone.utc),
+                raw=order,
+            )
+        except Exception as exc:
+            log.error("close_position failed for %s: %s", symbol, exc)
             return None
 
     def update_trailing_stops(self, symbol: str, current_price: float) -> None:

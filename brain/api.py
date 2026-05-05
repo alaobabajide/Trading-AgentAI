@@ -158,6 +158,8 @@ def _build_services(cfg):
         max_position_pct=cfg.max_position_pct,
         max_crypto_pct=cfg.max_crypto_allocation_pct,
         circuit_breaker_drawdown=cfg.circuit_breaker_drawdown,
+        stop_loss_pct=cfg.stop_loss_pct,
+        take_profit_pct=cfg.take_profit_pct,
     )
     return alpaca, binance, sentiment, onchain, portfolio, orchestrator
 

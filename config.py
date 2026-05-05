@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     max_position_pct: float = Field(0.05, env="MAX_POSITION_PCT")
     max_crypto_allocation_pct: float = Field(0.30, env="MAX_CRYPTO_ALLOCATION_PCT")
     circuit_breaker_drawdown: float = Field(0.10, env="CIRCUIT_BREAKER_DRAWDOWN")
+    stop_loss_pct: float = Field(0.02, env="STOP_LOSS_PCT")
+    take_profit_pct: float = Field(0.05, env="TAKE_PROFIT_PCT")
 
     # Telegram
     telegram_bot_token: str = Field("", env="TELEGRAM_BOT_TOKEN")

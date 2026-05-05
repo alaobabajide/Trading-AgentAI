@@ -72,6 +72,8 @@ class Orchestrator:
         )
 
         self._peak_equity: float = 0.0
+        # Per-symbol thresholds stored from last signal (keyed by symbol)
+        self._pos_thresholds: dict[str, tuple[float, float]] = {}  # symbol → (sl_pct, tp_pct)
 
     # ── Portfolio refresh ──────────────────────────────────────────────────────
 
@@ -178,6 +180,11 @@ class Orchestrator:
             symbol, action, confidence, tier, votes_for, conflict,
         )
 
+        # Always cache latest thresholds from the signal (used by position monitor)
+        sl_pct = sig.get("stop_loss_pct",  self._cfg.stop_loss_pct)
+        tp_pct = sig.get("take_profit_pct", self._cfg.take_profit_pct)
+        self._pos_thresholds[symbol] = (sl_pct, tp_pct)
+
         # ── Gate 3: only act on WARM or HOT signals ───────────────────────────
         if action == "HOLD" or tier == "COLD":
             log.info("  → %s for %s (tier=%s) — no order submitted", action, symbol, tier)
@@ -197,9 +204,9 @@ class Orchestrator:
                     "symbol":                 symbol,
                     "asset_class":            asset_class,
                     "action":                 action,
-                    "suggested_position_pct": sig.get("suggested_position_pct", 0.02),
-                    "stop_loss_pct":          sig.get("stop_loss_pct",          0.02),
-                    "take_profit_pct":        sig.get("take_profit_pct",        0.05),
+                    "suggested_position_pct": sig.get("suggested_position_pct", self._cfg.max_position_pct),
+                    "stop_loss_pct":          sig.get("stop_loss_pct",          self._cfg.stop_loss_pct),
+                    "take_profit_pct":        sig.get("take_profit_pct",        self._cfg.take_profit_pct),
                 },
                 timeout=30,
             )
@@ -226,6 +233,64 @@ class Orchestrator:
 
         exchange = "alpaca" if asset_class == "stock" else "binance"
         order_counter.labels(symbol=symbol, action=action, exchange=exchange, status=status).inc()
+
+    # ── Position P&L monitor ──────────────────────────────────────────────────
+
+    def _monitor_positions(self) -> None:
+        """Close positions that hit take-profit or stop-loss thresholds.
+
+        Runs every minute as a safety net for:
+          • Positions opened before bracket orders were introduced (no child orders).
+          • Cases where Alpaca's bracket child order was cancelled or expired.
+        For positions with active bracket orders, Alpaca fires first; this loop
+        is a second line of defence.
+        """
+        if not self._cfg.alpaca_api_key:
+            return
+        try:
+            from alpaca.trading.client import TradingClient
+            cfg = self._cfg
+            is_paper = "paper" in cfg.alpaca_base_url.lower()
+            client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
+            positions = client.get_all_positions()
+        except Exception as exc:
+            log.warning("Position monitor: could not fetch positions: %s", exc)
+            return
+
+        for pos in positions:
+            symbol = pos.symbol
+            try:
+                plpc = float(pos.unrealized_plpc or 0)  # fraction: 0.05 = +5%
+            except (TypeError, ValueError):
+                continue
+
+            sl_pct, tp_pct = self._pos_thresholds.get(
+                symbol,
+                (cfg.stop_loss_pct, cfg.take_profit_pct),
+            )
+
+            reason = None
+            if plpc >= tp_pct:
+                reason = f"TAKE PROFIT (up {plpc*100:.2f}% >= {tp_pct*100:.1f}%)"
+            elif plpc <= -sl_pct:
+                reason = f"STOP LOSS (down {plpc*100:.2f}% <= -{sl_pct*100:.1f}%)"
+
+            if reason:
+                log.info("Closing %s — %s", symbol, reason)
+                try:
+                    order = client.close_position(symbol)
+                    order_counter.labels(
+                        symbol=symbol, action="SELL", exchange="alpaca", status="submitted",
+                    ).inc()
+                    log.info("  ✓ Position closed: %s id=%s", symbol, order.id)
+                    self._pos_thresholds.pop(symbol, None)
+                except Exception as exc:
+                    log.error("  ✗ Failed to close %s: %s", symbol, exc)
+            else:
+                log.debug(
+                    "Position monitor: %s plpc=%.2f%% (sl=%.1f%% tp=%.1f%%)",
+                    symbol, plpc * 100, sl_pct * 100, tp_pct * 100,
+                )
 
     # ── Retrain trigger ───────────────────────────────────────────────────────
 
@@ -285,13 +350,16 @@ class Orchestrator:
 
         schedule.every(15).minutes.do(self._run_cycle)
         schedule.every(1).minutes.do(self._refresh_portfolio_metrics)
+        schedule.every(1).minutes.do(self._monitor_positions)
 
         log.info(
-            "Orchestrator ready — scanning %d symbols every 15 min  mode=%s",
+            "Orchestrator ready — scanning %d symbols every 15 min, "
+            "position P&L monitor every 1 min  mode=%s",
             len(STOCK_WATCHLIST) + len(ETF_WATCHLIST) + len(CRYPTO_WATCHLIST),
             "rule-based" if self._paper_mode else "LLM",
         )
-        self._run_cycle()   # run immediately on start
+        self._monitor_positions()  # check existing positions before first cycle
+        self._run_cycle()          # run immediately on start
 
         while True:
             schedule.run_pending()
