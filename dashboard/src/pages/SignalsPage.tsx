@@ -4,7 +4,7 @@ import clsx from "clsx";
 import { SignalCard } from "../components/SignalCard";
 import { useSignals, apiHeaders } from "../lib/api";
 import {
-  STOCK_LIST, ETF_LIST, CRYPTO_LIST, FOREX_LIST, NGX_LIST,
+  STOCK_LIST, ETF_LIST, INDEX_LIST, CRYPTO_LIST, FOREX_LIST, NGX_LIST,
 } from "../lib/marketMock";
 import type { Signal, SignalAction, SignalTier } from "../lib/types";
 
@@ -23,21 +23,23 @@ interface QTab {
 }
 
 // Combine all US stocks + ETFs under their own tabs, sorted A-Z within each
-const SORTED_STOCKS = [...STOCK_LIST].sort();
-const SORTED_ETFS   = [...ETF_LIST].sort();
-const SORTED_CRYPTO = [...CRYPTO_LIST].sort();
-const SORTED_FOREX  = [...FOREX_LIST].sort();
-const SORTED_NGX    = [...NGX_LIST].sort();
+const SORTED_STOCKS  = [...STOCK_LIST].sort();
+const SORTED_ETFS    = [...ETF_LIST].sort();
+const SORTED_INDICES = [...INDEX_LIST].sort();
+const SORTED_CRYPTO  = [...CRYPTO_LIST].sort();
+const SORTED_FOREX   = [...FOREX_LIST].sort();
+const SORTED_NGX     = [...NGX_LIST].sort();
 
 const Q_TABS: QTab[] = [
-  { id: "stock",  label: "US Stocks", symbols: SORTED_STOCKS, color: "text-blue-400 border-blue-500/30 bg-blue-500/10" },
-  { id: "stock",  label: "ETFs",      symbols: SORTED_ETFS,   color: "text-violet-400 border-violet-500/30 bg-violet-500/10" },
-  { id: "crypto", label: "Crypto",    symbols: SORTED_CRYPTO, color: "text-orange-400 border-orange-500/30 bg-orange-500/10" },
-  { id: "forex",  label: "Forex",     symbols: SORTED_FOREX,  badge: "FX",  color: "text-sky-400 border-sky-500/30 bg-sky-500/10",   pending: true, note: "Forex data provider coming soon" },
-  { id: "ngx",    label: "NGX",       symbols: SORTED_NGX,    badge: "NGX", color: "text-green-400 border-green-500/30 bg-green-500/10", pending: true, note: "Requires NGX data provider" },
+  { id: "stock",  label: "US Stocks", symbols: SORTED_STOCKS,  color: "text-blue-400 border-blue-500/30 bg-blue-500/10" },
+  { id: "stock",  label: "ETFs",      symbols: SORTED_ETFS,    color: "text-violet-400 border-violet-500/30 bg-violet-500/10" },
+  { id: "stock",  label: "Indices",   symbols: SORTED_INDICES, badge: "IDX", color: "text-amber-400 border-amber-500/30 bg-amber-500/10" },
+  { id: "crypto", label: "Crypto",    symbols: SORTED_CRYPTO,  color: "text-orange-400 border-orange-500/30 bg-orange-500/10" },
+  { id: "forex",  label: "Forex",     symbols: SORTED_FOREX,   badge: "FX",  color: "text-sky-400 border-sky-500/30 bg-sky-500/10",   pending: true, note: "Forex data provider coming soon" },
+  { id: "ngx",    label: "NGX",       symbols: SORTED_NGX,     badge: "NGX", color: "text-green-400 border-green-500/30 bg-green-500/10", pending: true, note: "Requires NGX data provider" },
 ];
 
-const TOTAL_SYMBOLS = [...STOCK_LIST, ...ETF_LIST, ...CRYPTO_LIST, ...FOREX_LIST, ...NGX_LIST].length;
+const TOTAL_SYMBOLS = [...STOCK_LIST, ...ETF_LIST, ...INDEX_LIST, ...CRYPTO_LIST, ...FOREX_LIST, ...NGX_LIST].length;
 
 /** All unique leading letters present in a sorted symbol list */
 function uniqueLetters(symbols: string[]): string[] {
@@ -136,7 +138,7 @@ function QuickRunPanel({ onGenerated }: QuickRunProps) {
           <Send className="w-4 h-4 text-brand-400" />
           <span className="text-sm font-semibold">Quick Generate</span>
           <span className="text-[11px] text-slate-500 font-mono">
-            {TOTAL_SYMBOLS} symbols — US Stocks, ETFs, Crypto, Forex, NGX
+            {TOTAL_SYMBOLS} symbols — US Stocks, ETFs, Indices, Crypto, Forex, NGX
           </span>
         </div>
         <span className="text-xs text-slate-500">{open ? "▲" : "▼"}</span>

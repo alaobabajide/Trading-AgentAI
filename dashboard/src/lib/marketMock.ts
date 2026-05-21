@@ -671,4 +671,161 @@ export const NGX_LIST: string[] = [
   "TRANSCOHOT","CILEASING",
 ];
 
-export const SYMBOLS = [...STOCK_LIST, ...ETF_LIST, ...CRYPTO_LIST, ...FOREX_LIST, ...NGX_LIST];
+// ── Index ETFs — comprehensive list of all major index trackers on Alpaca ────
+// Alpaca supports all US-listed ETFs. These are index-tracking or index-related
+// products. Use asset_class='stock' when calling POST /signal for any of these.
+export const INDEX_LIST: string[] = [
+  // ── US Broad Market ───────────────────────────────────────────────────────────
+  "SPY","IVV","VOO","SPLG",                          // S&P 500
+  "QQQ","QQQM","ONEQ",                               // NASDAQ 100 / Composite
+  "DIA",                                             // Dow Jones Industrial Average
+  "VTI","ITOT","SCHB","SPTM",                        // Total US Market
+  "IWM","VTWO",                                      // Russell 2000 (Small Cap)
+  "IWF","IWD",                                       // Russell 1000 Growth/Value
+  "IWB","IWL",                                       // Russell 1000 / Top 200
+  "MDY","IJH","SPMD",                                // S&P MidCap 400
+  "IJR","IWC","SPSM",                                // S&P SmallCap 600 / Micro
+  "RSP","EWSC",                                      // S&P 500 Equal Weight
+  "VXF",                                             // Extended Market (ex-S&P 500)
+  "URTH",                                            // MSCI World
+
+  // ── US Sectors — SPDR Select ──────────────────────────────────────────────────
+  "XLK","XLF","XLE","XLV","XLU","XLI","XLRE","XLB","XLC","XLP","XLY",
+
+  // ── US Sectors — Vanguard ─────────────────────────────────────────────────────
+  "VGT","VFH","VDE","VHT","VPU","VIS","VNQ","VAW","VOX","VCR","VDC",
+
+  // ── US Sub-Sector ─────────────────────────────────────────────────────────────
+  "SOXX","SMH",                                      // Semiconductors
+  "IBB","XBI",                                       // Biotech / Life Sciences
+  "IGV",                                             // Software
+  "XOP","FTXN",                                      // Oil & Gas E&P
+  "KRE","IAT",                                       // Regional Banks / Insurance
+  "ITB","XHB",                                       // Homebuilders
+  "JETS",                                            // Airlines
+  "XRT","RETL",                                      // Retail
+  "XME","PICK",                                      // Metals & Mining
+  "MOO",                                             // Agribusiness
+
+  // ── Volatility ────────────────────────────────────────────────────────────────
+  "UVXY","VIXY","VXX",                               // Long VIX (fear plays)
+  "SVXY",                                            // Short VIX (calm plays)
+  "VIXM",                                            // Mid-Term VIX Futures
+
+  // ── International — Developed ─────────────────────────────────────────────────
+  "EFA","VEA","SPDW","IDEV",                         // Broad Developed Markets
+  "EWJ","DXJ",                                       // Japan / Japan Currency-Hedged
+  "EWG","HEWG",                                      // Germany / Hedged
+  "EWU",                                             // United Kingdom
+  "EWC",                                             // Canada
+  "EWA",                                             // Australia
+  "EWL",                                             // Switzerland
+  "EWQ",                                             // France
+  "EWD",                                             // Sweden
+  "EWN",                                             // Netherlands
+  "EWP",                                             // Spain
+  "EWI",                                             // Italy
+  "EWO",                                             // Austria
+
+  // ── International — Emerging ──────────────────────────────────────────────────
+  "EEM","VWO","SPEM","IEMG",                         // Broad Emerging Markets
+  "FXI","MCHI","KWEB",                               // China (Large Cap / Internet)
+  "INDA","SMIN",                                     // India Large / Small Cap
+  "EWZ",                                             // Brazil
+  "EWT",                                             // Taiwan
+  "EWY",                                             // South Korea
+  "EWH",                                             // Hong Kong
+  "EWS",                                             // Singapore
+  "EWM",                                             // Malaysia
+  "EWW",                                             // Mexico
+  "ECH",                                             // Chile
+  "THD",                                             // Thailand
+  "EPOL",                                            // Poland
+  "RSX",                                             // Russia (suspended — historical)
+
+  // ── Fixed Income — Government ─────────────────────────────────────────────────
+  "TLT","VGLT","EDV","ZROZ",                         // Long-Term Treasury (20–30 yr)
+  "IEF","VGIT","IEI",                                // Intermediate Treasury (7–10 yr)
+  "SHY","VGSH","BIL","SGOV",                         // Short-Term Treasury (1–3 yr)
+  "TBT","TMV","TBF",                                 // Inverse Treasury
+
+  // ── Fixed Income — Aggregate ──────────────────────────────────────────────────
+  "AGG","BND","BNDX",                                // US / Global Aggregate Bond
+  "BSV","BIV","BLV",                                 // Vanguard Short/Int/Long Bond
+
+  // ── Fixed Income — Credit ─────────────────────────────────────────────────────
+  "LQD","VCLT","IGIB",                               // Investment-Grade Corp
+  "HYG","JNK","USHY",                                // High Yield (Junk)
+  "BKLN","SRLN",                                     // Bank Loans (Floating Rate)
+  "EMB","PCY","VWOB",                                // Emerging Market Bonds
+
+  // ── Fixed Income — Inflation / Municipal ─────────────────────────────────────
+  "TIP","VTIP","SCHP","STIP",                        // TIPS (Inflation-Protected)
+  "MUB","VTEB","HYD",                                // Municipal Bonds
+
+  // ── Commodities — Precious Metals ────────────────────────────────────────────
+  "GLD","IAU","SGOL","GLDM","OUNZ",                  // Gold
+  "SLV","SIVR",                                      // Silver
+  "PPLT",                                            // Platinum
+
+  // ── Commodities — Energy ──────────────────────────────────────────────────────
+  "USO","DBO","OILK",                                // Crude Oil (WTI)
+  "UNG","BOIL","KOLD",                               // Natural Gas
+
+  // ── Commodities — Broad & Other ───────────────────────────────────────────────
+  "PDBC","DJP","GSG","COMB","COMT",                  // Broad Commodity Baskets
+  "CPER",                                            // Copper
+  "DBA","CORN","WEAT","SOYB","TAGS",                 // Agriculture
+  "URA","URNM","NLR",                                // Uranium / Nuclear
+
+  // ── Factor / Smart Beta ──────────────────────────────────────────────────────
+  "MTUM","QMOM",                                     // Momentum
+  "VLUE","RPV",                                      // Value
+  "QUAL","DGRW",                                     // Quality
+  "USMV","SPLV","EFAV",                              // Min Volatility
+  "NOBL","REGL","WDIV",                              // Dividend Aristocrats
+  "SCHD","VIG","VYM","HDV","DVY","DGRO",             // Dividend Income / Growth
+  "SPHD","SPYD",                                     // High Dividend Yield
+  "COWZ","CALF",                                     // Free Cash Flow
+
+  // ── Leveraged — Long ─────────────────────────────────────────────────────────
+  "SSO","SPXL","UPRO",                               // 2x / 3x S&P 500
+  "QLD","TQQQ",                                      // 2x / 3x NASDAQ 100
+  "TNA","URTY",                                      // 3x Russell 2000
+  "TMF","UBT","TTT",                                 // 3x / 2x Long Bond
+  "LABU",                                            // 3x Biotech
+  "SOXL",                                            // 3x Semiconductors
+  "FAS",                                             // 3x Financials
+
+  // ── Leveraged — Inverse ───────────────────────────────────────────────────────
+  "SDS","SPXU","SPXS",                               // 2x / 3x Inverse S&P
+  "QID","SQQQ",                                      // 2x / 3x Inverse NASDAQ
+  "TZA","SRTY",                                      // 3x Inverse Russell
+  "PFIX",                                            // Interest Rate Hedge
+  "LABD",                                            // 3x Inverse Biotech
+  "SOXS",                                            // 3x Inverse Semiconductors
+  "FAZ",                                             // 3x Inverse Financials
+  "DUST","JDST",                                     // 3x Inverse Gold Miners
+
+  // ── Bitcoin / Crypto ETFs ─────────────────────────────────────────────────────
+  "IBIT","FBTC","BITB","ARKB","HODL","BTCO",         // Spot Bitcoin ETFs
+  "GBTC","ETHE",                                     // Grayscale Bitcoin / Ethereum
+  "BITO","BTF","XBTF",                               // Bitcoin Futures
+  "BITX","BITU",                                     // Leveraged Bitcoin
+  "ETHU",                                            // Leveraged Ethereum
+
+  // ── Thematic ─────────────────────────────────────────────────────────────────
+  "ICLN","FAN","QCLN","ACES",                        // Clean / Renewable Energy
+  "LIT","BATT","DRIV",                               // Lithium / EV / Battery
+  "BOTZ","ROBO","AIQ","CHAT","TPVG",                 // AI / Robotics / Tech
+  "CIBR","HACK","BUG",                               // Cybersecurity
+  "ARKK","ARKG","ARKQ","ARKF","ARKW","ARKVX",        // ARK Innovation
+  "UFO","ROKT",                                      // Space / Aerospace
+  "BLOK","LEGR",                                     // Blockchain / FinTech
+  "PAVE","IFRA","NFRA",                              // Infrastructure
+  "HERO","ESPO","NERD",                              // Gaming / Esports
+  "MSOS","YOLO","MJ",                                // Cannabis
+  "AWAY","GAMR",                                     // Travel / Leisure
+];
+
+export const SYMBOLS = [...STOCK_LIST, ...ETF_LIST, ...INDEX_LIST, ...CRYPTO_LIST, ...FOREX_LIST, ...NGX_LIST];
