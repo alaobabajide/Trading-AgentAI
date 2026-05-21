@@ -1018,6 +1018,77 @@ def portfolio_history_debug():
     return out
 
 
+@app.get("/indices")
+def get_indices():
+    """Return market indices and their tradable ETF proxies.
+
+    Indices themselves are not directly tradable via Alpaca.
+    Their ETF proxies are fully supported by Alpaca's market data and trading APIs.
+    Use POST /signal with the etf_proxy symbol and asset_class='stock' to analyse any index.
+    """
+    return {
+        "us_broad": [
+            {"name": "S&P 500",           "tv_symbol": "TVC:SPX",    "etf_proxy": "SPY",  "description": "500 largest US companies by market cap"},
+            {"name": "NASDAQ 100",        "tv_symbol": "TVC:NDX",    "etf_proxy": "QQQ",  "description": "100 largest non-financial NASDAQ companies"},
+            {"name": "Dow Jones",         "tv_symbol": "TVC:DJI",    "etf_proxy": "DIA",  "description": "30 blue-chip US industrial companies"},
+            {"name": "Russell 2000",      "tv_symbol": "TVC:RUT",    "etf_proxy": "IWM",  "description": "2000 small-cap US companies"},
+            {"name": "S&P 500 Eq Weight", "tv_symbol": "TVC:SPX",    "etf_proxy": "RSP",  "description": "Equal-weighted S&P 500 (less mega-cap bias)"},
+            {"name": "Total US Market",   "tv_symbol": "TVC:WILLR",  "etf_proxy": "VTI",  "description": "Entire US stock market — ~4000 companies"},
+            {"name": "S&P MidCap 400",    "tv_symbol": "TVC:SPX",    "etf_proxy": "MDY",  "description": "Mid-cap US companies ($2B–$10B market cap)"},
+            {"name": "S&P SmallCap 600",  "tv_symbol": "TVC:RUT",    "etf_proxy": "IJR",  "description": "Small-cap US companies with quality screen"},
+        ],
+        "volatility": [
+            {"name": "VIX (Fear Index)",   "tv_symbol": "CBOE:VIX",   "etf_proxy": "UVXY", "description": "CBOE Volatility Index — 30-day implied vol on S&P 500"},
+            {"name": "VIX Short-Term",     "tv_symbol": "CBOE:VIX",   "etf_proxy": "VIXY", "description": "Short-term VIX futures — pure volatility exposure"},
+            {"name": "NASDAQ Volatility",  "tv_symbol": "CBOE:VXN",   "etf_proxy": "QQQ",  "description": "NASDAQ 100 implied volatility index"},
+            {"name": "Inv. VIX (calm)",    "tv_symbol": "CBOE:VIX",   "etf_proxy": "SVXY", "description": "Short VIX — profits when markets are calm"},
+        ],
+        "macro": [
+            {"name": "US 10-Year Yield",   "tv_symbol": "TVC:US10Y",  "etf_proxy": "TLT",  "description": "10-yr US Treasury yield — long bond benchmark"},
+            {"name": "US 2-Year Yield",    "tv_symbol": "TVC:US02Y",  "etf_proxy": "SHY",  "description": "2-yr US Treasury yield — Fed policy sensitive"},
+            {"name": "US 7-10 Year",       "tv_symbol": "TVC:US10Y",  "etf_proxy": "IEF",  "description": "Intermediate Treasury ETF — yield curve proxy"},
+            {"name": "US Dollar Index",    "tv_symbol": "TVC:DXY",    "etf_proxy": "UUP",  "description": "USD strength vs EUR, JPY, GBP, CAD, SEK, CHF"},
+            {"name": "Agg Bond Market",    "tv_symbol": "TVC:US10Y",  "etf_proxy": "AGG",  "description": "US investment-grade bond market aggregate"},
+            {"name": "High Yield Bonds",   "tv_symbol": "TVC:US10Y",  "etf_proxy": "HYG",  "description": "High-yield (junk) bonds — credit risk barometer"},
+            {"name": "TIPS (Inflation)",   "tv_symbol": "TVC:US10Y",  "etf_proxy": "TIP",  "description": "Treasury inflation-protected securities"},
+        ],
+        "us_sector": [
+            {"name": "Technology",         "tv_symbol": "AMEX:XLK",   "etf_proxy": "XLK",  "description": "S&P Technology sector"},
+            {"name": "Financials",         "tv_symbol": "AMEX:XLF",   "etf_proxy": "XLF",  "description": "S&P Financials sector"},
+            {"name": "Healthcare",         "tv_symbol": "AMEX:XLV",   "etf_proxy": "XLV",  "description": "S&P Healthcare sector"},
+            {"name": "Energy",             "tv_symbol": "AMEX:XLE",   "etf_proxy": "XLE",  "description": "S&P Energy sector"},
+            {"name": "Industrials",        "tv_symbol": "AMEX:XLI",   "etf_proxy": "XLI",  "description": "S&P Industrials sector"},
+            {"name": "Consumer Discr.",    "tv_symbol": "AMEX:XLY",   "etf_proxy": "XLY",  "description": "S&P Consumer Discretionary sector"},
+            {"name": "Consumer Staples",   "tv_symbol": "AMEX:XLP",   "etf_proxy": "XLP",  "description": "S&P Consumer Staples sector"},
+            {"name": "Utilities",          "tv_symbol": "AMEX:XLU",   "etf_proxy": "XLU",  "description": "S&P Utilities sector"},
+            {"name": "Real Estate",        "tv_symbol": "AMEX:XLRE",  "etf_proxy": "XLRE", "description": "S&P Real Estate sector (REITs)"},
+            {"name": "Materials",          "tv_symbol": "AMEX:XLB",   "etf_proxy": "XLB",  "description": "S&P Materials sector"},
+            {"name": "Comm Services",      "tv_symbol": "AMEX:XLC",   "etf_proxy": "XLC",  "description": "S&P Communication Services sector"},
+            {"name": "Semiconductors",     "tv_symbol": "NASDAQ:SOXX","etf_proxy": "SOXX", "description": "Philadelphia Semiconductor Index ETF"},
+        ],
+        "international": [
+            {"name": "FTSE 100",           "tv_symbol": "TVC:UKX",    "etf_proxy": "EWU",  "description": "UK top 100 large-cap companies"},
+            {"name": "DAX 40",             "tv_symbol": "TVC:DAX",    "etf_proxy": "EWG",  "description": "German top 40 companies"},
+            {"name": "Nikkei 225",         "tv_symbol": "TVC:NI225",  "etf_proxy": "EWJ",  "description": "Japan top 225 blue-chip companies"},
+            {"name": "Hang Seng",          "tv_symbol": "TVC:HSI",    "etf_proxy": "EWH",  "description": "Hong Kong top companies"},
+            {"name": "CAC 40",             "tv_symbol": "TVC:CAC40",  "etf_proxy": "EWQ",  "description": "French top 40 companies"},
+            {"name": "Euro Stoxx 50",      "tv_symbol": "TVC:SX5E",   "etf_proxy": "FEZ",  "description": "50 largest Eurozone blue-chips"},
+            {"name": "Dev. Markets ex-US", "tv_symbol": "NASDAQ:VEA", "etf_proxy": "VEA",  "description": "Developed markets — Europe, Asia-Pacific, Canada"},
+            {"name": "Emerging Markets",   "tv_symbol": "AMEX:EEM",   "etf_proxy": "EEM",  "description": "Emerging markets — China, India, Brazil, etc."},
+            {"name": "China Large Cap",    "tv_symbol": "AMEX:MCHI",  "etf_proxy": "MCHI", "description": "iShares MSCI China ETF"},
+            {"name": "India (Nifty 50)",   "tv_symbol": "NSE:NIFTY",  "etf_proxy": "INDA", "description": "iShares MSCI India ETF"},
+        ],
+        "commodities": [
+            {"name": "Gold",               "tv_symbol": "TVC:GOLD",   "etf_proxy": "GLD",  "description": "Gold spot price (SPDR Gold Shares)"},
+            {"name": "Silver",             "tv_symbol": "TVC:SILVER", "etf_proxy": "SLV",  "description": "Silver spot price (iShares Silver Trust)"},
+            {"name": "Crude Oil (WTI)",    "tv_symbol": "NYMEX:CL1!", "etf_proxy": "USO",  "description": "West Texas Intermediate crude oil futures"},
+            {"name": "Natural Gas",        "tv_symbol": "NYMEX:NG1!", "etf_proxy": "UNG",  "description": "Henry Hub natural gas futures"},
+            {"name": "Broad Commodities",  "tv_symbol": "TVC:BCOM",   "etf_proxy": "PDBC", "description": "Bloomberg Commodity Index — diversified exposure"},
+            {"name": "Copper",             "tv_symbol": "COMEX:HG1!", "etf_proxy": "CPER", "description": "Copper — leading economic indicator"},
+        ],
+    }
+
+
 @app.get("/audit")
 def get_audit_log(limit: int = 50):
     """Return the last N trade audit log entries (newest first)."""

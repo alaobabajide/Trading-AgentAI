@@ -16,19 +16,21 @@ const INTERVALS: { label: string; value: string }[] = [
   { label: "1W",  value: "W"   },
 ];
 
-const GROUPS: TvGroup[] = ["Stocks", "ETFs", "Crypto", "Forex", "NGX"];
+const GROUPS: TvGroup[] = ["Stocks", "ETFs", "Indices", "Crypto", "Forex", "NGX"];
 
 const GROUP_COLORS: Record<TvGroup, string> = {
-  Stocks: "text-blue-400 bg-blue-500/10 border-blue-500/20",
-  ETFs:   "text-violet-400 bg-violet-500/10 border-violet-500/20",
-  Crypto: "text-orange-400 bg-orange-500/10 border-orange-500/20",
-  Forex:  "text-sky-400 bg-sky-500/10 border-sky-500/20",
-  NGX:    "text-green-400 bg-green-500/10 border-green-500/20",
+  Stocks:  "text-blue-400 bg-blue-500/10 border-blue-500/20",
+  ETFs:    "text-violet-400 bg-violet-500/10 border-violet-500/20",
+  Indices: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+  Crypto:  "text-orange-400 bg-orange-500/10 border-orange-500/20",
+  Forex:   "text-sky-400 bg-sky-500/10 border-sky-500/20",
+  NGX:     "text-green-400 bg-green-500/10 border-green-500/20",
 };
 
 const GROUP_BADGE: Partial<Record<TvGroup, string>> = {
-  Forex: "FX",
-  NGX:   "NGX",
+  Indices: "IDX",
+  Forex:   "FX",
+  NGX:     "NGX",
 };
 
 export function ChartsPage() {

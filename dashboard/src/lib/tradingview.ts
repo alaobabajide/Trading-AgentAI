@@ -1,6 +1,6 @@
 /** TradingView symbol mapping and widget helpers. */
 
-export type TvGroup = "Stocks" | "ETFs" | "Crypto" | "Forex" | "NGX";
+export type TvGroup = "Stocks" | "ETFs" | "Indices" | "Crypto" | "Forex" | "NGX";
 
 export type TvSymbol = {
   tv:          string;    // exchange:symbol used by TradingView widget
@@ -187,6 +187,46 @@ export const TV_SYMBOLS: TvSymbol[] = [
   { tv: "TVC:GOLD",   label: "XAU/USD", group: "Forex", description: "Gold / US Dollar" },
   { tv: "TVC:SILVER", label: "XAG/USD", group: "Forex", description: "Silver / US Dollar" },
   { tv: "TVC:PLATINUM", label: "XPT/USD", group: "Forex", description: "Platinum / US Dollar" },
+
+  // ── Market Indices ────────────────────────────────────────────────────────────
+  // US Broad
+  { tv: "TVC:SPX",    label: "S&P 500",    group: "Indices", description: "S&P 500 — 500 largest US companies" },
+  { tv: "TVC:NDX",    label: "NASDAQ 100", group: "Indices", description: "NASDAQ 100 — top 100 non-financial NASDAQ companies" },
+  { tv: "TVC:DJI",    label: "Dow Jones",  group: "Indices", description: "DJIA — 30 large US blue-chip companies" },
+  { tv: "TVC:RUT",    label: "Russell 2000", group: "Indices", description: "Russell 2000 — 2000 small-cap US companies" },
+  { tv: "TVC:WILLR",  label: "Wilshire 5000", group: "Indices", description: "Wilshire 5000 — total US stock market" },
+  // Volatility & Fear
+  { tv: "CBOE:VIX",   label: "VIX",        group: "Indices", description: "CBOE Volatility Index — 30-day S&P 500 implied volatility" },
+  { tv: "CBOE:VXN",   label: "VXN",        group: "Indices", description: "NASDAQ Volatility Index — NASDAQ 100 implied volatility" },
+  { tv: "CBOE:VVIX",  label: "VVIX",       group: "Indices", description: "VIX of VIX — volatility of volatility index" },
+  // Macro / Rates
+  { tv: "TVC:US10Y",  label: "US 10Y",     group: "Indices", description: "10-Year US Treasury Yield" },
+  { tv: "TVC:US02Y",  label: "US 2Y",      group: "Indices", description: "2-Year US Treasury Yield" },
+  { tv: "TVC:US30Y",  label: "US 30Y",     group: "Indices", description: "30-Year US Treasury Yield" },
+  { tv: "TVC:DXY",    label: "DXY",        group: "Indices", description: "US Dollar Index — USD vs basket of 6 currencies" },
+  { tv: "TVC:SPREAD", label: "Yield Spread", group: "Indices", description: "10Y-2Y Treasury yield spread" },
+  // International
+  { tv: "TVC:UKX",    label: "FTSE 100",   group: "Indices", description: "UK FTSE 100 — top 100 London-listed companies" },
+  { tv: "TVC:DAX",    label: "DAX 40",     group: "Indices", description: "German DAX — top 40 Frankfurt-listed companies" },
+  { tv: "TVC:NI225",  label: "Nikkei 225", group: "Indices", description: "Japan Nikkei 225 — major Tokyo Stock Exchange index" },
+  { tv: "TVC:HSI",    label: "Hang Seng",  group: "Indices", description: "Hong Kong Hang Seng Index" },
+  { tv: "TVC:CAC40",  label: "CAC 40",     group: "Indices", description: "French CAC 40 — top 40 Euronext Paris companies" },
+  { tv: "TVC:SX5E",   label: "Euro Stoxx 50", group: "Indices", description: "Eurozone top 50 blue-chip companies" },
+  { tv: "TVC:ASX200", label: "ASX 200",    group: "Indices", description: "Australian ASX 200 — top 200 ASX-listed companies" },
+  { tv: "TVC:SENSEX", label: "BSE Sensex", group: "Indices", description: "Indian BSE Sensex — 30 large Bombay-listed companies" },
+  // Sectors (US) — represented by ETF charts on TradingView
+  { tv: "AMEX:XLK",   label: "Tech Sector",   group: "Indices", description: "S&P 500 Technology sector (XLK)" },
+  { tv: "AMEX:XLF",   label: "Financials",    group: "Indices", description: "S&P 500 Financials sector (XLF)" },
+  { tv: "AMEX:XLV",   label: "Healthcare",    group: "Indices", description: "S&P 500 Healthcare sector (XLV)" },
+  { tv: "AMEX:XLE",   label: "Energy Sector", group: "Indices", description: "S&P 500 Energy sector (XLE)" },
+  { tv: "AMEX:XLI",   label: "Industrials",   group: "Indices", description: "S&P 500 Industrials sector (XLI)" },
+  { tv: "AMEX:XLRE",  label: "Real Estate",   group: "Indices", description: "S&P 500 Real Estate sector (XLRE)" },
+  // Commodities
+  { tv: "TVC:GOLD",   label: "Gold",       group: "Indices", description: "Gold spot price (XAU/USD)" },
+  { tv: "TVC:SILVER", label: "Silver",     group: "Indices", description: "Silver spot price (XAG/USD)" },
+  { tv: "NYMEX:CL1!", label: "Crude Oil",  group: "Indices", description: "WTI Crude Oil front-month futures" },
+  { tv: "NYMEX:NG1!", label: "Nat. Gas",   group: "Indices", description: "Henry Hub Natural Gas front-month futures" },
+  { tv: "TVC:BCOM",   label: "Bloomberg Cmdty", group: "Indices", description: "Bloomberg Commodity Index — diversified basket" },
 
   // ── NGX — Nigerian Exchange ───────────────────────────────────────────────────
   { tv: "NGXGROUP:DANGCEM",    label: "DANGCEM",    group: "NGX", description: "Dangote Cement" },

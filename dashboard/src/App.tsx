@@ -9,18 +9,20 @@ import { BrainPage } from "./pages/BrainPage";
 import { TechnicalPage } from "./pages/TechnicalPage";
 import { FundamentalPage } from "./pages/FundamentalPage";
 import { ChartsPage } from "./pages/ChartsPage";
+import { IndicesPage } from "./pages/IndicesPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { HITLProvider, useHITLContext } from "./context/HITLContext";
 import { SetupBanner } from "./components/SetupBanner";
 import { MODE_CONFIG } from "./lib/hitl";
 
-type Page = "dashboard" | "signals" | "positions" | "technical" | "fundamental" | "charts" | "brain" | "settings";
+type Page = "dashboard" | "signals" | "positions" | "technical" | "fundamental" | "charts" | "indices" | "brain" | "settings";
 type TradingEnv = "paper" | "live";
 
 const PAGE_TITLE: Partial<Record<Page, string>> = {
   fundamental: "Fundamental Analysis",
   technical:   "Technical Analysis",
   charts:      "TradingView Charts",
+  indices:     "Market Indices",
   settings:    "Settings",
 };
 
@@ -127,6 +129,7 @@ function AppInner() {
           {page === "technical"   && <TechnicalPage />}
           {page === "fundamental" && <FundamentalPage />}
           {page === "charts"      && <ChartsPage />}
+          {page === "indices"     && <IndicesPage paperMode={isPaper} />}
           {page === "brain"       && <BrainPage paperMode={isPaper} />}
           {page === "settings"    && <SettingsPage />}
         </div>
