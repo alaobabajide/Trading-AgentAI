@@ -830,24 +830,61 @@ def get_portfolio():
     }
 
 
+def _alpaca_portfolio_history(cfg, is_paper: bool, period: str, timeframe: str) -> list:
+    """Fetch equity curve from Alpaca's native portfolio history endpoint.
+
+    This is the authoritative source — it captures realized P&L from closed
+    trades, whereas the reconstruction approach can only see currently-open
+    positions and produces a flat line when all trades are closed.
+
+    Null equity values (pre-market / post-market gaps) are forward-filled
+    so the chart never shows gaps.
+    """
+    from datetime import timezone
+    from alpaca.trading.client import TradingClient
+    from alpaca.trading.requests import GetPortfolioHistoryRequest
+
+    client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
+    hist = client.get_portfolio_history(
+        GetPortfolioHistoryRequest(period=period, timeframe=timeframe)
+    )
+
+    timestamps: list = hist.timestamp or []
+    equities:   list = hist.equity   or []
+
+    if not timestamps or not equities or len(timestamps) != len(equities):
+        return []
+
+    pts: list = []
+    last_equity: float | None = None
+    for ts, eq in zip(timestamps, equities):
+        if eq is not None:
+            last_equity = float(eq)
+        if last_equity is None:
+            continue  # skip leading nulls before first real data point
+        dt = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+        pts.append({"time": dt.isoformat(), "equity": last_equity, "pnl": 0.0})
+
+    return pts
+
+
 @app.get("/portfolio/history")
 def get_portfolio_history(period: str = "1D"):
     """Return the equity curve for the requested period.
 
-    All periods use the same approach: reconstruct equity from live
-    positions + historical price bars via Alpaca's market data API.
+    Primary: Alpaca's native portfolio history API — captures realized P&L
+    from closed trades, so the curve reflects what Alpaca actually shows.
 
-        equity[t] = cash + Σ(qty_i × close_price_i[t])
+    Fallback: position-reconstruction (cash + Σ qty×price) — used only if
+    the Alpaca API fails or returns fewer than 2 points.
 
-    1D  → 5-minute bars, last 24 h  (up to 288 pts)
-    1M  → daily bars,    last 30 d  (up to 30 pts)
-    1Y  → daily bars,    last 365 d (up to 365 pts)
-
-    This is reliable for all periods because it uses the market data API
-    (StockHistoricalDataClient / CryptoHistoricalDataClient) which always
-    has data, unlike the portfolio history API which returns null-heavy
-    results for paper accounts outside market hours.
+    1D  → 5-min bars during market hours (up to ~78 pts)
+    1M  → daily bars, last 30 calendar days
+    1Y  → daily bars, last 365 calendar days
     """
+    if period not in ("1D", "1M", "1Y"):
+        raise HTTPException(400, "period must be 1D, 1M, or 1Y")
+
     from config import get_settings
     cfg = get_settings()
     if not cfg.alpaca_api_key:
@@ -855,9 +892,33 @@ def get_portfolio_history(period: str = "1D"):
 
     is_paper = "paper" in cfg.alpaca_base_url.lower()
 
-    lookback = {"1D": 1, "1M": 30, "1Y": 365}.get(period, 1)
+    # Alpaca API period/timeframe map
+    alpaca_params = {
+        "1D": ("1D",  "5Min"),
+        "1M": ("1M",  "1D"),
+        "1Y": ("1A",  "1D"),
+    }
+    alpaca_period, alpaca_tf = alpaca_params[period]
+
+    # ── Try native Alpaca portfolio history first ──────────────────────────────
+    try:
+        pts = _alpaca_portfolio_history(cfg, is_paper, alpaca_period, alpaca_tf)
+        if len(pts) >= 2:
+            log.info("portfolio/history(%s): %d pts from Alpaca native API", period, len(pts))
+            return pts
+        log.warning(
+            "portfolio/history(%s): Alpaca native returned %d pts — falling back to reconstruction",
+            period, len(pts),
+        )
+    except Exception as exc:
+        log.warning("portfolio/history(%s): Alpaca native API failed (%s) — falling back", period, exc)
+
+    # ── Fallback: reconstruct from live positions + price bars ─────────────────
+    lookback = {"1D": 1, "1M": 30, "1Y": 365}[period]
     daily    = period != "1D"
-    return _build_equity(cfg, is_paper, lookback_days=lookback, use_daily=daily)
+    pts = _build_equity(cfg, is_paper, lookback_days=lookback, use_daily=daily)
+    log.info("portfolio/history(%s): fallback reconstruction returned %d pts", period, len(pts))
+    return pts
 
 
 def _build_1d_equity(cfg, is_paper: bool) -> list:

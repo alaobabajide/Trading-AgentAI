@@ -44,6 +44,12 @@ export function EquityChart({ data, period = "1D" }: Props) {
     label: format(new Date(d.time), labelFmt),
   }));
 
+  // Limit x-axis ticks so labels never overlap regardless of data density.
+  // 1D: ~78 pts (5-min market bars) → show every 12th = ~6 labels (1 per hour)
+  // 1M: ~30 pts (daily)             → show every 5th  = ~6 labels
+  // 1Y: ~365 pts (daily)            → show every 60th = ~6 labels
+  const tickInterval = period === "1D" ? 12 : period === "1M" ? 4 : 60;
+
   // Zoom Y-axis into the actual data range (same as Alpaca's own chart).
   // For 1D: a $1k move on a $100k account would look flat if axis started at $0.
   // For 1M/1Y: account may genuinely start near $0 — don't let padding go negative.
@@ -73,7 +79,7 @@ export function EquityChart({ data, period = "1D" }: Props) {
           tick={{ fill: "#64748b", fontSize: 11, fontFamily: "JetBrains Mono" }}
           tickLine={false}
           axisLine={false}
-          interval="preserveStartEnd"
+          interval={tickInterval}
         />
         <YAxis
           domain={[yMin, yMax]}
