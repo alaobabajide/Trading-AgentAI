@@ -68,6 +68,65 @@ const SEED: Record<string, { base: number; vol: number }> = {
   PLD:   { base: 115.0, vol: 0.012 }, PM:    { base: 100.0, vol: 0.010 },
   ABT:   { base: 108.0, vol: 0.011 }, MDLZ:  { base:  68.0, vol: 0.009 },
   MO:    { base:  43.0, vol: 0.009 }, ADI:   { base: 220.0, vol: 0.015 },
+  // ── Additional US Stocks ──────────────────────────────────────────────────────
+  QCOM:  { base: 165.0, vol: 0.014 }, MU:    { base: 105.0, vol: 0.022 },
+  LRCX:  { base: 780.0, vol: 0.018 }, AMAT:  { base: 185.0, vol: 0.016 },
+  KLAC:  { base: 640.0, vol: 0.016 }, MRVL:  { base:  75.0, vol: 0.020 },
+  ANET:  { base: 285.0, vol: 0.016 }, NET:   { base:  90.0, vol: 0.020 },
+  CRWD:  { base: 350.0, vol: 0.022 }, ZS:    { base: 185.0, vol: 0.020 },
+  DDOG:  { base: 115.0, vol: 0.022 }, MDB:   { base: 285.0, vol: 0.022 },
+  WDAY:  { base: 245.0, vol: 0.016 }, TTD:   { base:  72.0, vol: 0.025 },
+  TWLO:  { base:  62.0, vol: 0.025 }, DELL:  { base: 145.0, vol: 0.016 },
+  HPQ:   { base:  35.0, vol: 0.014 }, MSTR:  { base:1500.0, vol: 0.050 },
+  APP:   { base: 350.0, vol: 0.030 }, DUOL:  { base: 280.0, vol: 0.025 },
+  NKE:   { base:  72.0, vol: 0.014 }, LOW:   { base: 220.0, vol: 0.011 },
+  TGT:   { base: 140.0, vol: 0.014 }, F:     { base:  12.0, vol: 0.016 },
+  GM:    { base:  48.0, vol: 0.016 }, LULU:  { base: 320.0, vol: 0.018 },
+  ONON:  { base:  55.0, vol: 0.020 }, LYFT:  { base:  14.0, vol: 0.030 },
+  RIVN:  { base:  12.0, vol: 0.035 }, CELH:  { base:  25.0, vol: 0.030 },
+  PFE:   { base:  28.0, vol: 0.012 }, BMY:   { base:  44.0, vol: 0.011 },
+  CVS:   { base:  55.0, vol: 0.013 }, MDT:   { base:  85.0, vol: 0.011 },
+  BSX:   { base:  90.0, vol: 0.013 }, ZTS:   { base: 175.0, vol: 0.012 },
+  DXCM:  { base:  72.0, vol: 0.020 }, MRNA:  { base:  55.0, vol: 0.025 },
+  CI:    { base: 330.0, vol: 0.013 }, EW:    { base:  88.0, vol: 0.015 },
+  WFC:   { base:  60.0, vol: 0.014 }, USB:   { base:  42.0, vol: 0.013 },
+  COF:   { base: 175.0, vol: 0.015 }, SCHW:  { base:  72.0, vol: 0.015 },
+  CME:   { base: 240.0, vol: 0.011 }, MCO:   { base: 440.0, vol: 0.012 },
+  FIS:   { base:  88.0, vol: 0.015 }, FISV:  { base: 210.0, vol: 0.012 },
+  PNC:   { base: 165.0, vol: 0.013 }, TFC:   { base:  42.0, vol: 0.015 },
+  SLB:   { base:  45.0, vol: 0.015 }, COP:   { base: 115.0, vol: 0.014 },
+  EOG:   { base: 130.0, vol: 0.014 }, DVN:   { base:  42.0, vol: 0.016 },
+  MPC:   { base: 165.0, vol: 0.015 }, VLO:   { base: 155.0, vol: 0.015 },
+  PSX:   { base: 125.0, vol: 0.014 }, FCX:   { base:  42.0, vol: 0.018 },
+  NEM:   { base:  48.0, vol: 0.015 }, HAL:   { base:  35.0, vol: 0.016 },
+  UPS:   { base: 125.0, vol: 0.012 }, FDX:   { base: 230.0, vol: 0.013 },
+  WM:    { base: 210.0, vol: 0.010 }, UNP:   { base: 240.0, vol: 0.011 },
+  MMM:   { base: 135.0, vol: 0.014 }, EMR:   { base: 120.0, vol: 0.012 },
+  ITW:   { base: 255.0, vol: 0.012 }, AXON:  { base: 380.0, vol: 0.022 },
+  ROK:   { base: 265.0, vol: 0.013 }, GNRC:  { base: 135.0, vol: 0.018 },
+  AMT:   { base: 220.0, vol: 0.012 }, EQIX:  { base: 800.0, vol: 0.012 },
+  CCI:   { base: 105.0, vol: 0.012 }, SPG:   { base: 180.0, vol: 0.013 },
+  O:     { base:  55.0, vol: 0.010 }, PSA:   { base: 295.0, vol: 0.011 },
+  DUK:   { base: 105.0, vol: 0.009 }, SO:    { base:  88.0, vol: 0.009 },
+  DLR:   { base: 165.0, vol: 0.013 }, AEP:   { base:  98.0, vol: 0.009 },
+  SPOT:  { base: 295.0, vol: 0.022 }, PATH:  { base:  14.0, vol: 0.025 },
+  JOBY:  { base:   7.0, vol: 0.035 }, ACHR:  { base:  15.0, vol: 0.035 },
+  ROKU:  { base:  62.0, vol: 0.028 }, PINS:  { base:  32.0, vol: 0.025 },
+  ZM:    { base:  60.0, vol: 0.020 }, WBD:   { base:  10.0, vol: 0.020 },
+  WYNN:  { base: 120.0, vol: 0.020 }, LVS:   { base:  52.0, vol: 0.018 },
+  EBAY:  { base:  52.0, vol: 0.014 }, NCLH:  { base:  20.0, vol: 0.022 },
+  // ── International / ADRs ─────────────────────────────────────────────────────
+  TSM:   { base: 175.0, vol: 0.016 }, ASML:  { base: 690.0, vol: 0.016 },
+  SAP:   { base: 220.0, vol: 0.013 }, TM:    { base: 170.0, vol: 0.012 },
+  AZN:   { base:  78.0, vol: 0.012 }, NVS:   { base: 118.0, vol: 0.011 },
+  SHEL:  { base:  68.0, vol: 0.012 }, BHP:   { base:  58.0, vol: 0.014 },
+  SNY:   { base:  45.0, vol: 0.011 }, RIO:   { base:  65.0, vol: 0.014 },
+  BP:    { base:  35.0, vol: 0.013 }, TTE:   { base:  62.0, vol: 0.012 },
+  HSBC:  { base:  47.0, vol: 0.012 }, NVO:   { base: 105.0, vol: 0.016 },
+  DEO:   { base: 130.0, vol: 0.011 }, BTI:   { base:  35.0, vol: 0.011 },
+  UL:    { base:  56.0, vol: 0.010 }, SE:    { base:  88.0, vol: 0.022 },
+  PBR:   { base:  14.0, vol: 0.018 }, VALE:  { base:  12.0, vol: 0.018 },
+  ERIC:  { base:   6.0, vol: 0.015 }, NOK:   { base:   4.0, vol: 0.018 },
   // ── ETFs ─────────────────────────────────────────────────────────────────────
   SPY:   { base: 579.4, vol: 0.008 }, QQQ:   { base: 484.2, vol: 0.011 },
   IWM:   { base: 215.6, vol: 0.013 }, GLD:   { base: 235.8, vol: 0.007 },
@@ -92,6 +151,117 @@ const SEED: Record<string, { base: number; vol: number }> = {
   AGG:   { base:  97.0, vol: 0.005 }, BND:   { base:  73.0, vol: 0.005 },
   IEF:   { base:  96.0, vol: 0.007 }, SHY:   { base:  83.0, vol: 0.003 },
   TIP:   { base: 108.0, vol: 0.006 },
+  // ── Additional ETFs ───────────────────────────────────────────────────────────
+  VOO:   { base: 530.0, vol: 0.008 }, SPLG:  { base:  60.0, vol: 0.008 },
+  QQQM:  { base: 195.0, vol: 0.011 }, ONEQ:  { base: 375.0, vol: 0.011 },
+  ITOT:  { base: 115.0, vol: 0.008 }, SPTM:  { base:  48.0, vol: 0.008 },
+  VTWO:  { base: 150.0, vol: 0.013 }, IWF:   { base: 380.0, vol: 0.010 },
+  IWD:   { base: 180.0, vol: 0.009 }, IWB:   { base: 275.0, vol: 0.009 },
+  MDY:   { base: 540.0, vol: 0.010 }, IJH:   { base: 300.0, vol: 0.010 },
+  SPMD:  { base:  43.0, vol: 0.010 }, IJR:   { base: 105.0, vol: 0.012 },
+  SPSM:  { base:  44.0, vol: 0.012 }, EWSC:  { base:  28.0, vol: 0.013 },
+  VXF:   { base: 158.0, vol: 0.013 }, XLY:   { base: 182.0, vol: 0.012 },
+  VGT:   { base: 560.0, vol: 0.012 }, VFH:   { base: 100.0, vol: 0.012 },
+  VDE:   { base: 130.0, vol: 0.013 }, VHT:   { base: 268.0, vol: 0.009 },
+  VPU:   { base: 153.0, vol: 0.009 }, VIS:   { base: 258.0, vol: 0.011 },
+  VAW:   { base: 220.0, vol: 0.011 }, VOX:   { base: 102.0, vol: 0.012 },
+  VCR:   { base: 310.0, vol: 0.012 }, VDC:   { base: 210.0, vol: 0.008 },
+  SMH:   { base: 248.0, vol: 0.018 }, IBB:   { base: 130.0, vol: 0.015 },
+  XBI:   { base:  88.0, vol: 0.018 }, IGV:   { base: 390.0, vol: 0.014 },
+  XOP:   { base: 130.0, vol: 0.018 }, FTXN:  { base:  25.0, vol: 0.018 },
+  KRE:   { base:  56.0, vol: 0.015 }, IAT:   { base:  46.0, vol: 0.014 },
+  ITB:   { base:  90.0, vol: 0.015 }, XHB:   { base: 108.0, vol: 0.014 },
+  JETS:  { base:  20.0, vol: 0.016 }, XRT:   { base:  72.0, vol: 0.014 },
+  RETL:  { base:  22.0, vol: 0.020 }, XME:   { base:  60.0, vol: 0.016 },
+  PICK:  { base:  48.0, vol: 0.016 }, MOO:   { base:  92.0, vol: 0.013 },
+  FINX:  { base:  40.0, vol: 0.016 }, EFA:   { base:  79.0, vol: 0.010 },
+  IDEV:  { base:  59.0, vol: 0.010 }, EWJ:   { base:  67.0, vol: 0.010 },
+  DXJ:   { base:  72.0, vol: 0.012 }, EWG:   { base:  33.0, vol: 0.012 },
+  HEWG:  { base:  35.0, vol: 0.012 }, EWU:   { base:  35.0, vol: 0.011 },
+  EWC:   { base:  37.0, vol: 0.011 }, EWA:   { base:  28.0, vol: 0.011 },
+  EWL:   { base:  55.0, vol: 0.010 }, EWQ:   { base:  32.0, vol: 0.012 },
+  EWD:   { base:  42.0, vol: 0.011 }, EWN:   { base:  40.0, vol: 0.011 },
+  EWP:   { base:  28.0, vol: 0.013 }, EWI:   { base:  35.0, vol: 0.013 },
+  VWO:   { base:  43.0, vol: 0.013 }, IEMG:  { base:  55.0, vol: 0.013 },
+  FXI:   { base:  28.0, vol: 0.016 }, MCHI:  { base:  48.0, vol: 0.018 },
+  KWEB:  { base:  30.0, vol: 0.022 }, INDA:  { base:  52.0, vol: 0.012 },
+  SMIN:  { base:  42.0, vol: 0.015 }, EWZ:   { base:  30.0, vol: 0.018 },
+  EWT:   { base:  45.0, vol: 0.014 }, EWY:   { base:  62.0, vol: 0.014 },
+  EWH:   { base:  24.0, vol: 0.014 }, EWS:   { base:  22.0, vol: 0.013 },
+  EWM:   { base:  22.0, vol: 0.014 }, EWW:   { base:  62.0, vol: 0.014 },
+  ECH:   { base:  32.0, vol: 0.016 }, EPOL:  { base:  26.0, vol: 0.015 },
+  VGLT:  { base:  56.0, vol: 0.010 }, EDV:   { base:  52.0, vol: 0.014 },
+  ZROZ:  { base:  75.0, vol: 0.016 }, VGIT:  { base:  60.0, vol: 0.006 },
+  IEI:   { base:  99.0, vol: 0.005 }, VGSH:  { base:  58.0, vol: 0.003 },
+  BIL:   { base:  91.5, vol: 0.001 }, SGOV:  { base: 100.4, vol: 0.001 },
+  TBT:   { base:  18.0, vol: 0.018 }, TBF:   { base:  14.0, vol: 0.009 },
+  BNDX:  { base:  48.0, vol: 0.005 }, BSV:   { base:  76.0, vol: 0.003 },
+  BIV:   { base:  74.0, vol: 0.005 }, BLV:   { base:  72.0, vol: 0.008 },
+  VCLT:  { base:  82.0, vol: 0.009 }, IGIB:  { base:  51.0, vol: 0.007 },
+  JNK:   { base:  97.0, vol: 0.008 }, USHY:  { base:  38.0, vol: 0.008 },
+  BKLN:  { base:  22.0, vol: 0.006 }, SRLN:  { base:  30.0, vol: 0.006 },
+  EMB:   { base:  88.0, vol: 0.010 }, PCY:   { base:  18.0, vol: 0.012 },
+  VWOB:  { base:  65.0, vol: 0.010 }, SCHP:  { base:  52.0, vol: 0.006 },
+  STIP:  { base:  99.0, vol: 0.004 }, MUB:   { base: 104.0, vol: 0.004 },
+  VTEB:  { base:  51.0, vol: 0.004 }, HYD:   { base:  26.0, vol: 0.007 },
+  IAU:   { base:  43.0, vol: 0.007 }, GLDM:  { base:  47.0, vol: 0.007 },
+  SGOL:  { base:  28.0, vol: 0.007 }, OUNZ:  { base:  26.0, vol: 0.007 },
+  SIVR:  { base:  28.0, vol: 0.020 }, PPLT:  { base:  87.0, vol: 0.015 },
+  USO:   { base:  78.0, vol: 0.020 }, DBO:   { base:  22.0, vol: 0.020 },
+  OILK:  { base:  30.0, vol: 0.020 }, UNG:   { base:  18.0, vol: 0.028 },
+  BOIL:  { base:  12.0, vol: 0.050 }, KOLD:  { base:  40.0, vol: 0.050 },
+  PDBC:  { base:  15.0, vol: 0.014 }, DJP:   { base:  24.0, vol: 0.013 },
+  GSG:   { base:  20.0, vol: 0.014 }, COMB:  { base:  27.0, vol: 0.013 },
+  COMT:  { base:  28.0, vol: 0.013 }, CPER:  { base:  28.0, vol: 0.016 },
+  DBA:   { base:  21.0, vol: 0.012 }, CORN:  { base:  22.0, vol: 0.016 },
+  WEAT:  { base:  15.0, vol: 0.018 }, SOYB:  { base:  24.0, vol: 0.015 },
+  URA:   { base:  32.0, vol: 0.022 }, URNM:  { base:  56.0, vol: 0.024 },
+  VIG:   { base: 188.0, vol: 0.009 }, VYM:   { base: 120.0, vol: 0.009 },
+  HDV:   { base: 104.0, vol: 0.009 }, DVY:   { base: 120.0, vol: 0.010 },
+  DGRO:  { base:  58.0, vol: 0.009 }, SPHD:  { base:  35.0, vol: 0.010 },
+  SPYD:  { base:  42.0, vol: 0.010 }, NOBL:  { base:  88.0, vol: 0.009 },
+  REGL:  { base: 120.0, vol: 0.010 }, WDIV:  { base:  30.0, vol: 0.010 },
+  MTUM:  { base: 195.0, vol: 0.012 }, QMOM:  { base:  62.0, vol: 0.014 },
+  VLUE:  { base: 110.0, vol: 0.010 }, RPV:   { base:  55.0, vol: 0.010 },
+  QUAL:  { base: 175.0, vol: 0.010 }, DGRW:  { base:  70.0, vol: 0.010 },
+  USMV:  { base:  82.0, vol: 0.008 }, SPLV:  { base:  63.0, vol: 0.008 },
+  EFAV:  { base:  72.0, vol: 0.009 }, COWZ:  { base:  60.0, vol: 0.012 },
+  CALF:  { base:  42.0, vol: 0.014 }, UVXY:  { base:   7.0, vol: 0.050 },
+  VIXY:  { base:  20.0, vol: 0.040 }, VXX:   { base:  22.0, vol: 0.040 },
+  SVXY:  { base:  70.0, vol: 0.030 }, VIXM:  { base:  48.0, vol: 0.030 },
+  SSO:   { base:  72.0, vol: 0.016 }, SPXL:  { base: 120.0, vol: 0.024 },
+  UPRO:  { base:  88.0, vol: 0.024 }, QLD:   { base:  95.0, vol: 0.022 },
+  TQQQ:  { base:  62.0, vol: 0.032 }, TNA:   { base:  35.0, vol: 0.036 },
+  URTY:  { base:  22.0, vol: 0.036 }, TMF:   { base:  35.0, vol: 0.028 },
+  UBT:   { base:  24.0, vol: 0.018 }, LABU:  { base:  12.0, vol: 0.050 },
+  SOXL:  { base:  35.0, vol: 0.050 }, FAS:   { base: 130.0, vol: 0.036 },
+  SDS:   { base:  38.0, vol: 0.016 }, SPXU:  { base:  15.0, vol: 0.024 },
+  SPXS:  { base:  14.0, vol: 0.024 }, QID:   { base:  20.0, vol: 0.022 },
+  SQQQ:  { base:  10.0, vol: 0.032 }, TZA:   { base:  18.0, vol: 0.036 },
+  SRTY:  { base:  12.0, vol: 0.036 }, PFIX:  { base:  28.0, vol: 0.012 },
+  LABD:  { base:   8.0, vol: 0.050 }, SOXS:  { base:   6.0, vol: 0.050 },
+  FAZ:   { base:  15.0, vol: 0.036 }, DUST:  { base:  12.0, vol: 0.040 },
+  JDST:  { base:   5.0, vol: 0.050 }, FBTC:  { base:  72.0, vol: 0.028 },
+  BITB:  { base:  35.0, vol: 0.028 }, ARKB:  { base:  92.0, vol: 0.028 },
+  HODL:  { base:  28.0, vol: 0.028 }, BTCO:  { base:  68.0, vol: 0.028 },
+  GBTC:  { base:  62.0, vol: 0.028 }, ETHE:  { base:  28.0, vol: 0.030 },
+  BITO:  { base:  22.0, vol: 0.032 }, BTF:   { base:  18.0, vol: 0.032 },
+  XBTF:  { base:  25.0, vol: 0.032 }, BITU:  { base:  35.0, vol: 0.050 },
+  ETHU:  { base:  18.0, vol: 0.050 }, ARKG:  { base:  32.0, vol: 0.028 },
+  ARKQ:  { base:  68.0, vol: 0.022 }, ARKF:  { base:  25.0, vol: 0.025 },
+  ARKW:  { base:  72.0, vol: 0.025 }, ARKVX: { base:  38.0, vol: 0.022 },
+  ICLN:  { base:  14.0, vol: 0.020 }, FAN:   { base:  22.0, vol: 0.020 },
+  QCLN:  { base:  28.0, vol: 0.020 }, ACES:  { base:  45.0, vol: 0.018 },
+  LIT:   { base:  40.0, vol: 0.022 }, BATT:  { base:  18.0, vol: 0.022 },
+  DRIV:  { base:  32.0, vol: 0.020 }, CHAT:  { base:  28.0, vol: 0.022 },
+  BUG:   { base:  42.0, vol: 0.015 }, ROKT:  { base:  18.0, vol: 0.022 },
+  BLOK:  { base:  28.0, vol: 0.022 }, LEGR:  { base:  28.0, vol: 0.016 },
+  PAVE:  { base:  42.0, vol: 0.013 }, IFRA:  { base:  35.0, vol: 0.013 },
+  NFRA:  { base:  30.0, vol: 0.013 }, HERO:  { base:  18.0, vol: 0.020 },
+  ESPO:  { base:  65.0, vol: 0.018 }, NERD:  { base:  22.0, vol: 0.020 },
+  MSOS:  { base:  10.0, vol: 0.030 }, MJ:    { base:  10.0, vol: 0.030 },
+  AWAY:  { base:  35.0, vol: 0.018 }, GAMR:  { base:  30.0, vol: 0.020 },
+  UUP:   { base:  28.0, vol: 0.005 }, FEZ:   { base:  48.0, vol: 0.012 },
   // ── Crypto ───────────────────────────────────────────────────────────────────
   BTCUSDT:  { base: 67200,  vol: 0.028 }, ETHUSDT:  { base:  3480, vol: 0.025 },
   SOLUSDT:  { base:   150,  vol: 0.035 }, BNBUSDT:  { base:   580, vol: 0.025 },
@@ -611,32 +781,173 @@ export function getEtfData(symbol: string): EtfMetrics | null {
 }
 
 export const STOCK_LIST: string[] = [
-  // Mega Cap
+  // ── Mega Cap ─────────────────────────────────────────────────────────────────
   "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","JPM","V","UNH",
   "LLY","AVGO","XOM","MA","HD","PG","COST","JNJ","MRK","CVX",
-  // Large Cap
+  // ── Large Cap ────────────────────────────────────────────────────────────────
   "ABBV","BAC","KO","PEP","NFLX","TMO","ORCL","AMD","CRM","CSCO",
   "ACN","MCD","LIN","ADBE","INTC","WMT","DHR","TXN","IBM","INTU",
-  // Growth / Tech
+  // ── Growth / Tech ────────────────────────────────────────────────────────────
   "BKNG","ISRG","SPGI","NOW","PANW","SNOW","PLTR","UBER","COIN","SHOP",
   "SQ","PYPL","SNAP","RBLX","ABNB","DKNG","HOOD","ARM","SMCI","BABA",
-  // Financials / Industrials
+  // ── Financials / Industrials ─────────────────────────────────────────────────
   "GS","MS","BLK","AXP","C","DE","CAT","HON","RTX","GE",
   "ETN","LMT","BA","NEE","T","AMGN","GILD","SBUX","BX","DIS",
-  // Additional
   "PLD","PM","ABT","MDLZ","MO","ADI",
+  // ── Semiconductors / Hardware ────────────────────────────────────────────────
+  "QCOM","MU","LRCX","AMAT","KLAC","MRVL","ANET","DELL","HPQ","MSTR",
+  // ── Cloud / Software / AI ────────────────────────────────────────────────────
+  "NET","CRWD","ZS","DDOG","MDB","WDAY","TTD","TWLO","APP","DUOL",
+  // ── Consumer / Retail / EV ───────────────────────────────────────────────────
+  "NKE","LOW","TGT","F","GM","LULU","ONON","LYFT","RIVN","CELH",
+  "EBAY","WYNN","LVS","NCLH",
+  // ── Healthcare ───────────────────────────────────────────────────────────────
+  "PFE","BMY","CVS","MDT","BSX","ZTS","DXCM","MRNA","CI","EW",
+  // ── Financials (expanded) ────────────────────────────────────────────────────
+  "WFC","USB","COF","SCHW","CME","MCO","FIS","FISV","PNC","TFC",
+  // ── Energy / Materials ───────────────────────────────────────────────────────
+  "SLB","COP","EOG","DVN","MPC","VLO","PSX","FCX","NEM","HAL",
+  // ── Industrials / Transport ──────────────────────────────────────────────────
+  "UPS","FDX","WM","UNP","MMM","EMR","ITW","AXON","ROK","GNRC",
+  // ── Real Estate / Utilities ──────────────────────────────────────────────────
+  "AMT","EQIX","CCI","SPG","O","PSA","DUK","SO","DLR","AEP",
+  // ── Emerging Growth ──────────────────────────────────────────────────────────
+  "SPOT","ROKU","PINS","ZM","WBD","PATH","JOBY","ACHR",
+  // ── International / ADRs (US-listed) ────────────────────────────────────────
+  "TSM","ASML","SAP","TM","AZN","NVS","SHEL","BHP","SNY","RIO",
+  "BP","TTE","HSBC","NVO","DEO","BTI","UL","SE","PBR","VALE",
+  "ERIC","NOK",
 ];
 
 export const ETF_LIST: string[] = [
-  // Broad Market
-  "SPY","QQQ","IWM","VTI","IVV","DIA","RSP","SCHB","VEA","EEM",
-  // Sector / Thematic
-  "XLK","XLF","XLE","XLV","XLU","XLI","XLRE","XLB","XLC","XLP",
-  "SOXX","ARKK","IBIT","BITX","CIBR","BOTZ","ROBO","HACK","AIQ","UFO",
-  // Fixed Income / Commodities
-  "TLT","IEF","SHY","AGG","LQD","HYG","TIP","BND","GLD","SLV",
-  // International
-  "SPDW","SPEM","SCHD","VNQ","VTIP",
+  // ── Broad Market — US ────────────────────────────────────────────────────────
+  "SPY","IVV","VOO","SPLG",                          // S&P 500
+  "QQQ","QQQM","ONEQ",                               // NASDAQ 100 / Composite
+  "DIA",                                             // Dow Jones
+  "VTI","ITOT","SCHB","SPTM",                        // Total US Market
+  "IWM","VTWO",                                      // Russell 2000
+  "IWF","IWD","IWB",                                 // Russell 1000 Growth/Value/Blend
+  "MDY","IJH","SPMD",                                // S&P MidCap 400
+  "IJR","SPSM",                                      // S&P SmallCap 600
+  "RSP","EWSC",                                      // Equal Weight
+  "VXF",                                             // Extended Market
+
+  // ── US Sectors — SPDR ────────────────────────────────────────────────────────
+  "XLK","XLF","XLE","XLV","XLU","XLI","XLRE","XLB","XLC","XLP","XLY",
+
+  // ── US Sectors — Vanguard ────────────────────────────────────────────────────
+  "VGT","VFH","VDE","VHT","VPU","VIS","VNQ","VAW","VOX","VCR","VDC",
+
+  // ── US Sub-Sector ────────────────────────────────────────────────────────────
+  "SOXX","SMH",                                      // Semiconductors
+  "IBB","XBI",                                       // Biotech
+  "IGV",                                             // Software
+  "XOP","FTXN",                                      // Oil & Gas E&P
+  "KRE","IAT",                                       // Regional Banks
+  "ITB","XHB",                                       // Homebuilders
+  "JETS",                                            // Airlines
+  "XRT","RETL",                                      // Retail
+  "XME","PICK",                                      // Metals & Mining
+  "MOO","FINX",                                      // Agribusiness / FinTech
+
+  // ── International — Developed ─────────────────────────────────────────────────
+  "EFA","VEA","SPDW","IDEV",                         // Broad Developed
+  "EWJ","DXJ",                                       // Japan
+  "EWG","HEWG",                                      // Germany
+  "EWU",                                             // UK
+  "EWC",                                             // Canada
+  "EWA",                                             // Australia
+  "EWL","EWQ","EWD","EWN","EWP","EWI",               // Europe (CH/FR/SE/NL/ES/IT)
+
+  // ── International — Emerging ──────────────────────────────────────────────────
+  "EEM","VWO","SPEM","IEMG",                         // Broad Emerging Markets
+  "FXI","MCHI","KWEB",                               // China
+  "INDA","SMIN",                                     // India
+  "EWZ",                                             // Brazil
+  "EWT",                                             // Taiwan
+  "EWY",                                             // South Korea
+  "EWH","EWS","EWM","EWW","ECH","EPOL",              // HK/SG/MY/MX/CL/PL
+
+  // ── Fixed Income — Government ─────────────────────────────────────────────────
+  "TLT","VGLT","EDV","ZROZ",                         // Long-Term Treasury
+  "IEF","VGIT","IEI",                                // Intermediate Treasury
+  "SHY","VGSH","BIL","SGOV",                         // Short-Term Treasury
+  "TBT","TBF",                                       // Inverse Treasury
+
+  // ── Fixed Income — Aggregate & Credit ────────────────────────────────────────
+  "AGG","BND","BNDX",                                // US / Global Aggregate
+  "BSV","BIV","BLV",                                 // Vanguard Short/Int/Long
+  "LQD","VCLT","IGIB",                               // Investment-Grade Corp
+  "HYG","JNK","USHY",                                // High Yield
+  "BKLN","SRLN",                                     // Bank Loans
+  "EMB","PCY","VWOB",                                // EM Bonds
+
+  // ── Fixed Income — Inflation & Muni ──────────────────────────────────────────
+  "TIP","VTIP","SCHP","STIP",                        // TIPS
+  "MUB","VTEB","HYD",                                // Municipals
+
+  // ── Commodities — Precious Metals ────────────────────────────────────────────
+  "GLD","IAU","GLDM","SGOL","OUNZ",                  // Gold
+  "SLV","SIVR",                                      // Silver
+  "PPLT",                                            // Platinum
+
+  // ── Commodities — Energy ──────────────────────────────────────────────────────
+  "USO","DBO","OILK",                                // Crude Oil
+  "UNG","BOIL","KOLD",                               // Natural Gas
+
+  // ── Commodities — Broad & Agriculture ────────────────────────────────────────
+  "PDBC","DJP","GSG","COMB","COMT",                  // Broad Baskets
+  "CPER",                                            // Copper
+  "DBA","CORN","WEAT","SOYB",                        // Agriculture
+  "URA","URNM",                                      // Uranium
+
+  // ── Dividend / Income ────────────────────────────────────────────────────────
+  "SCHD","VIG","VYM","HDV","DVY","DGRO",
+  "SPHD","SPYD","NOBL","REGL","WDIV",
+
+  // ── Factor / Smart Beta ──────────────────────────────────────────────────────
+  "MTUM","QMOM",                                     // Momentum
+  "VLUE","RPV",                                      // Value
+  "QUAL","DGRW",                                     // Quality
+  "USMV","SPLV","EFAV",                              // Min Volatility
+  "COWZ","CALF",                                     // Free Cash Flow
+
+  // ── Volatility ────────────────────────────────────────────────────────────────
+  "UVXY","VIXY","VXX",                               // Long VIX
+  "SVXY","VIXM",                                     // Short / Mid VIX
+
+  // ── Leveraged — Long ──────────────────────────────────────────────────────────
+  "SSO","SPXL","UPRO",                               // 2x/3x S&P 500
+  "QLD","TQQQ",                                      // 2x/3x NASDAQ 100
+  "TNA","URTY",                                      // 3x Russell 2000
+  "TMF","UBT",                                       // 3x/2x Long Bond
+  "LABU","SOXL","FAS",                               // 3x Biotech/Semi/Financials
+
+  // ── Leveraged — Inverse ───────────────────────────────────────────────────────
+  "SDS","SPXU","SPXS",                               // 2x/3x Inverse S&P
+  "QID","SQQQ",                                      // 2x/3x Inverse NASDAQ
+  "TZA","SRTY",                                      // 3x Inverse Russell
+  "PFIX","LABD","SOXS","FAZ",                        // Rate Hedge / Inverse Sector
+  "DUST","JDST",                                     // 3x Inverse Gold Miners
+
+  // ── Crypto ETFs ───────────────────────────────────────────────────────────────
+  "IBIT","FBTC","BITB","ARKB","HODL","BTCO",         // Spot Bitcoin
+  "GBTC","ETHE",                                     // Grayscale
+  "BITO","BTF","XBTF",                               // Bitcoin Futures
+  "BITX","BITU","ETHU",                              // Leveraged Crypto
+
+  // ── Thematic ──────────────────────────────────────────────────────────────────
+  "ARKK","ARKG","ARKQ","ARKF","ARKW","ARKVX",        // ARK Innovation
+  "ICLN","FAN","QCLN","ACES",                        // Clean Energy
+  "LIT","BATT","DRIV",                               // EV / Lithium / Battery
+  "BOTZ","ROBO","AIQ","CHAT",                        // AI / Robotics
+  "CIBR","HACK","BUG",                               // Cybersecurity
+  "UFO","ROKT",                                      // Space
+  "BLOK","LEGR",                                     // Blockchain
+  "PAVE","IFRA","NFRA",                              // Infrastructure
+  "HERO","ESPO","NERD",                              // Gaming / Esports
+  "MSOS","MJ",                                       // Cannabis
+  "AWAY","GAMR",                                     // Travel / Gaming
 ];
 
 export const CRYPTO_LIST: string[] = [
