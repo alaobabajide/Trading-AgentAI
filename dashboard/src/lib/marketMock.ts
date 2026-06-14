@@ -274,7 +274,7 @@ const SEED: Record<string, { base: number; vol: number }> = {
   IBUY:  { base:  52.0, vol: 0.018 },
   FXE:   { base:  98.0, vol: 0.005 }, FXY:   { base:  62.0, vol: 0.006 },
   FXB:   { base: 118.0, vol: 0.006 }, FXF:   { base: 108.0, vol: 0.005 },
-  FXA:   { base:  62.0, vol: 0.007 },
+  FXA:   { base:  62.0, vol: 0.007 }, EMXC:  { base:  52.0, vol: 0.013 },
   // ── Crypto ───────────────────────────────────────────────────────────────────
   BTCUSDT:  { base: 67200,  vol: 0.028 }, ETHUSDT:  { base:  3480, vol: 0.025 },
   SOLUSDT:  { base:   150,  vol: 0.035 }, BNBUSDT:  { base:   580, vol: 0.025 },
