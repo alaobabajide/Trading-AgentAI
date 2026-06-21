@@ -169,14 +169,16 @@ def _aggregate_dual_panel(
         and a_dom != "NEUTRAL"
         and b_dom != "NEUTRAL"
     )
-    # Soft conflict: analysts directional but investor panel abstaining (≥6/8 neutral)
-    b_abstaining = b_votes["neutral"] >= 6 and a_dom != "NEUTRAL"
+    # Soft conflict: analysts directional but ALL investors neutral.
+    # Threshold raised from 6→8: Munger and Bogle structurally default NEUTRAL,
+    # so ≥6/8 fired constantly even on valid trending signals.
+    b_abstaining = b_votes["neutral"] >= 8 and a_dom != "NEUTRAL"
 
     if panels_conflict:
         conflict_note = f"Panel conflict: analysts={a_dom}, investors={b_dom} — standing aside"
     elif b_abstaining:
         conflict_note = (
-            f"Investor panel abstaining ({b_votes['neutral']}/8 neutral) "
+            f"Investor panel unanimous abstention (8/8 neutral) "
             f"while analysts={a_dom} — downgraded to COLD"
         )
     else:
@@ -219,22 +221,29 @@ def _compute_tier(
     """
     Deterministic tier from combined 15-agent vote count + regime.
 
-    HOT  = 10+ of 15 aligned AND no conflict AND regime is TRENDING
-    WARM = 6–9 of 15 aligned AND no conflict AND regime allows trading
-    COLD = < 6 aligned  OR  strong panel conflict  OR  investor abstention
-           OR  HIGH_VOLATILITY  OR  RANGING  OR  HOLD
+    HOT  = 10+ of 15 aligned AND no strong conflict
+    WARM = 6–9 of 15 aligned AND no strong conflict
+    COLD = < 6 aligned  OR  strong panel conflict  OR  universal investor abstention  OR  HOLD
+
+    RANGING and HIGH_VOLATILITY no longer force COLD — they prevent HOT (cap at WARM).
+    ATR% threshold raised from 4% → 7% since 4% is normal for tech/crypto.
     """
     aligned  = tally["bullish"] if action == "BUY" else tally["bearish"] if action == "SELL" else 0
+    strong_conflict = panels_conflict and tally.get("bullish", 0) >= 3 and tally.get("bearish", 0) >= 3
+    # Hard blockers: not enough votes, action is HOLD, strong bi-directional conflict, or unanimous abstention
+    hard_blocked = action == "HOLD" or strong_conflict or b_abstaining or aligned < 6
+
+    if hard_blocked:
+        return "COLD"
+
+    # Regime / vol conditions cap at WARM but don't force COLD
     high_vol = (
         "HIGH_VOLATILITY" in regime_label
-        or (indicators.get("atr_14", 0) / max(indicators.get("price", 1), 1)) > 0.04
+        or (indicators.get("atr_14", 0) / max(indicators.get("price", 1), 1)) > 0.07
     )
-    strong_conflict = panels_conflict and tally.get("bullish", 0) >= 3 and tally.get("bearish", 0) >= 3
-    blocked = high_vol or "RANGING" in regime_label or action == "HOLD" or strong_conflict or b_abstaining
+    soft_cap = high_vol or "RANGING" in regime_label
 
-    if blocked or aligned < 6:
-        return "COLD"
-    if aligned >= 10:
+    if aligned >= 10 and not soft_cap:
         return "HOT"
     return "WARM"
 
