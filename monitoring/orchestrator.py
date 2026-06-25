@@ -34,10 +34,23 @@ from monitoring.metrics import (
 
 log = logging.getLogger(__name__)
 
-# Symbols to watch — extend as needed
-STOCK_WATCHLIST  = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL"]
-ETF_WATCHLIST    = ["SPY", "QQQ", "IWM", "GLD", "TLT"]
-CRYPTO_WATCHLIST = ["BTCUSDT", "ETHUSDT"]
+# Symbols watched every 15-min cycle
+STOCK_WATCHLIST  = [
+    # Mega-cap tech
+    "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META",
+    # High-volume growth / momentum
+    "NFLX", "ADBE", "CRM", "AMD", "COIN",
+    # Financials / energy / consumer
+    "JPM", "XOM", "V",
+]
+ETF_WATCHLIST    = [
+    "SPY", "QQQ", "IWM",          # broad market
+    "GLD", "SLV",                  # metals
+    "TLT", "HYG",                  # fixed income
+    "XLE", "XLF", "XLK",          # sector
+    "VTI",                         # total market
+]
+CRYPTO_WATCHLIST = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
 
 
 def _wait_for_brain(url: str, timeout_secs: int = 60) -> bool:

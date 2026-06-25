@@ -28,14 +28,14 @@ else
     echo "[start] TELEGRAM_BOT_TOKEN not set — bot disabled."
 fi
 
-# ── 2b. Start auto-trading orchestrator (if AUTO_TRADE=true) ─────────────────
-if [ "$AUTO_TRADE" = "true" ]; then
-    echo "[start] AUTO_TRADE=true — launching orchestrator…"
-    # Orchestrator polls /health internally and waits up to 90s for uvicorn
+# ── 2b. Start auto-trading orchestrator ──────────────────────────────────────
+# Runs by default. Set AUTO_TRADE=false in Railway env vars to disable.
+if [ "${AUTO_TRADE:-true}" != "false" ]; then
+    echo "[start] Launching orchestrator (set AUTO_TRADE=false to disable)…"
     python -m monitoring.orchestrator &
     echo "[start] Orchestrator PID=$!"
 else
-    echo "[start] AUTO_TRADE not set — orchestrator disabled (set AUTO_TRADE=true in Railway to enable)."
+    echo "[start] AUTO_TRADE=false — orchestrator disabled."
 fi
 
 # ── 3. Start nginx in foreground (keeps container alive) ─────────────────────
