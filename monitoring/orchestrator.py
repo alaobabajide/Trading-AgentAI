@@ -86,6 +86,16 @@ class Orchestrator:
             cfg.binance_api_key, cfg.binance_secret_key, cfg.binance_testnet,
         )
 
+        # Singleton Alpaca client — reused across all market-hour checks and position checks
+        self._alpaca_client = None
+        if cfg.alpaca_api_key and cfg.alpaca_secret_key:
+            try:
+                from alpaca.trading.client import TradingClient
+                is_paper = "paper" in cfg.alpaca_base_url.lower()
+                self._alpaca_client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
+            except Exception as exc:
+                log.warning("Could not initialise Alpaca client: %s", exc)
+
         self._peak_equity: float = 0.0
         # Per-symbol thresholds stored from last signal (keyed by symbol)
         self._pos_thresholds: dict[str, tuple[float, float]] = {}  # symbol → (sl_pct, tp_pct)
@@ -133,18 +143,11 @@ class Orchestrator:
     # ── Signal + execution ────────────────────────────────────────────────────
 
     def _is_market_open(self) -> bool:
-        """Return True only during regular US market hours (9:30–16:00 ET, Mon–Fri).
-
-        Bracket orders with TimeInForce.DAY are rejected by Alpaca outside these
-        hours, so we skip execution cycles entirely rather than burning API calls.
-        Signal generation still runs (results are cached for the next open).
-        """
+        """Return True only during regular US market hours (9:30–16:00 ET, Mon–Fri)."""
         try:
-            from alpaca.trading.client import TradingClient
-            cfg = self._cfg
-            is_paper = "paper" in cfg.alpaca_base_url.lower()
-            client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
-            clock = client.get_clock()
+            if self._alpaca_client is None:
+                return True  # no Alpaca credentials — assume open (crypto trades 24/7)
+            clock = self._alpaca_client.get_clock()
             return bool(clock.is_open)
         except Exception as exc:
             log.warning("Could not check market clock: %s — assuming open", exc)
@@ -164,12 +167,13 @@ class Orchestrator:
 
     def _has_open_position(self, symbol: str, asset_class: str) -> bool:
         """Return True if an open position for this symbol already exists."""
+        if asset_class == "crypto":
+            # Crypto positions live on Binance — skip Alpaca check to avoid false negatives
+            return False
         try:
-            from alpaca.trading.client import TradingClient
-            cfg = self._cfg
-            is_paper = "paper" in cfg.alpaca_base_url.lower()
-            client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
-            positions = client.get_all_positions()
+            if self._alpaca_client is None:
+                return False
+            positions = self._alpaca_client.get_all_positions()
             return any(p.symbol == symbol for p in positions)
         except Exception as exc:
             log.warning("Could not check open positions for %s: %s", symbol, exc)
@@ -403,10 +407,10 @@ class Orchestrator:
     # ── Entry point ───────────────────────────────────────────────────────────
 
     def run(self) -> None:
-        # Wait for Brain API to be ready before first cycle
-        if not _wait_for_brain(self._brain_url, timeout_secs=90):
-            log.error("Giving up waiting for Brain API — orchestrator exiting")
-            return
+        # Wait for Brain API — retry indefinitely in 30s windows rather than exiting
+        while not _wait_for_brain(self._brain_url, timeout_secs=120):
+            log.warning("Brain API not ready — retrying in 30s …")
+            time.sleep(30)
 
         try:
             start_metrics_server(port=8001)

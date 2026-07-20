@@ -33,12 +33,12 @@ class RegimeDetector:
 
         atr_pct = atr / price
 
-        if atr_pct > 0.030:
+        if atr_pct > 0.050:
             label, direction = "HIGH_VOLATILITY", "NEUTRAL"
             reasoning = (
-                f"ATR is {atr_pct * 100:.1f}% of price (threshold 3.0%). "
+                f"ATR is {atr_pct * 100:.1f}% of price (threshold 5.0%). "
                 "Elevated volatility degrades both trend-following and mean-reversion strategies. "
-                "Recommend standing aside or cutting position sizes ≥ 50%."
+                "Recommend cutting position sizes ≥ 50%."
             )
         elif macd < macd_sig and rsi < 50:
             label, direction = "TRENDING_DOWN", "BEARISH"

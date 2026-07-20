@@ -66,14 +66,28 @@ class CryptoExecutionEngine:
                 return float(b["free"])
         return 0.0
 
+    def _get_position_qty(self, client, symbol: str) -> float:
+        """Returns free balance of the base asset for a symbol (e.g. BTC for BTCUSDT)."""
+        # Strip USDT suffix to get base asset
+        base = symbol.replace("USDT", "").replace("BUSD", "")
+        balances = client.get_account()["balances"]
+        for b in balances:
+            if b["asset"] == base:
+                return float(b["free"])
+        return 0.0
+
     def _check_crypto_cap(self, client, portfolio_equity: float) -> bool:
         """Returns True if more crypto can be bought (cap not reached)."""
-        balances = client.get_account()["balances"]
-        prices = {t["symbol"]: float(t["price"]) for t in client.get_all_tickers()}
+        try:
+            balances = client.get_account()["balances"]
+            prices = {t["symbol"]: float(t["price"]) for t in client.get_all_tickers()}
+        except Exception as exc:
+            log.warning("Could not fetch Binance tickers for cap check: %s — allowing BUY", exc)
+            return True
         crypto_usd = 0.0
         for b in balances:
             asset = b["asset"]
-            if asset == "USDT":
+            if asset in ("USDT", "BUSD"):
                 continue
             qty = float(b["free"]) + float(b["locked"])
             if qty < 1e-8:
@@ -102,19 +116,45 @@ class CryptoExecutionEngine:
 
         client = self._client()
 
-        # Enforce crypto cap on BUY
-        if signal.action == "BUY":
-            if not self._check_crypto_cap(client, portfolio_equity):
-                return None
-
         # Current price
-        ticker = client.get_symbol_ticker(symbol=signal.symbol)
-        current_price = float(ticker["price"])
+        try:
+            ticker = client.get_symbol_ticker(symbol=signal.symbol)
+            current_price = float(ticker["price"])
+        except Exception as exc:
+            log.error("Could not fetch price for %s: %s", signal.symbol, exc)
+            return None
         if current_price <= 0:
             log.error("Invalid price for %s", signal.symbol)
             return None
 
-        # Notional
+        stop_price = round(current_price * (1 - signal.stop_loss_pct), 8)
+        take_profit_price = round(current_price * (1 + signal.take_profit_pct), 8)
+
+        if signal.action == "SELL":
+            # Close actual position — qty from real Binance holdings, not USDT balance
+            qty = self._get_position_qty(client, signal.symbol)
+            if qty <= 0:
+                log.info("No open position for %s — SELL skipped", signal.symbol)
+                return None
+            try:
+                order = client.order_market_sell(symbol=signal.symbol, quantity=round(qty, 6))
+            except Exception as exc:
+                log.error("Crypto SELL failed for %s: %s", signal.symbol, exc)
+                return None
+            order_id = str(order.get("orderId", "unknown"))
+            log.info("Crypto SELL: %s qty=%.6f price=%.6f id=%s", signal.symbol, qty, current_price, order_id)
+            return CryptoOrderResult(
+                symbol=signal.symbol, order_id=order_id, action="SELL",
+                qty=qty, submitted_price=current_price,
+                stop_price=0.0, take_profit_price=0.0,
+                exchange="binance_testnet" if self._testnet else "binance",
+                timestamp=datetime.now(timezone.utc), raw=order,
+            )
+
+        # BUY path
+        if not self._check_crypto_cap(client, portfolio_equity):
+            return None
+
         usdt_balance = self._get_account_usdt(client)
         max_notional = min(
             portfolio_equity * signal.suggested_position_pct,
@@ -123,11 +163,8 @@ class CryptoExecutionEngine:
         )
         qty = round(max_notional / current_price, 6)
         if qty <= 0:
-            log.warning("Computed qty=0 for %s — skipping", signal.symbol)
+            log.warning("Computed qty=0 for %s (usdt=%.2f) — skipping BUY", signal.symbol, usdt_balance)
             return None
-
-        stop_price = round(current_price * (1 - signal.stop_loss_pct), 8)
-        take_profit_price = round(current_price * (1 + signal.take_profit_pct), 8)
 
         try:
             if signal.action == "BUY":
@@ -142,8 +179,6 @@ class CryptoExecutionEngine:
                     stopLimitPrice=str(round(stop_price * 0.995, 8)),
                     stopLimitTimeInForce="GTC",
                 )
-            else:  # SELL — close position
-                order = client.order_market_sell(symbol=signal.symbol, quantity=qty)
 
             order_id = str(order.get("orderId", "unknown"))
             log.info(

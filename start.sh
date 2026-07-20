@@ -28,12 +28,21 @@ else
     echo "[start] TELEGRAM_BOT_TOKEN not set — bot disabled."
 fi
 
-# ── 2b. Start auto-trading orchestrator ──────────────────────────────────────
+# ── 2b. Start auto-trading orchestrator with automatic restart ────────────────
 # Runs by default. Set AUTO_TRADE=false in Railway env vars to disable.
 if [ "${AUTO_TRADE:-true}" != "false" ]; then
-    echo "[start] Launching orchestrator (set AUTO_TRADE=false to disable)…"
-    python -m monitoring.orchestrator &
-    echo "[start] Orchestrator PID=$!"
+    echo "[start] Launching orchestrator supervisor (set AUTO_TRADE=false to disable)…"
+    # Supervisor loop: restart orchestrator if it exits for any reason
+    (
+        while true; do
+            echo "[orchestrator] Starting…"
+            python -m monitoring.orchestrator
+            EXIT=$?
+            echo "[orchestrator] Exited with code $EXIT — restarting in 15s…"
+            sleep 15
+        done
+    ) &
+    echo "[start] Orchestrator supervisor running in background."
 else
     echo "[start] AUTO_TRADE=false — orchestrator disabled."
 fi

@@ -484,7 +484,7 @@ def config_status():
         "telegram":        bool(cfg.telegram_bot_token),
         "alpaca_base_url": cfg.alpaca_base_url,
         "binance_testnet": cfg.binance_testnet,
-        "auto_trade":      os.environ.get("AUTO_TRADE", "").lower() == "true",
+        "auto_trade":      os.environ.get("AUTO_TRADE", "true").lower() != "false",
         "ready_for_signals":  bool(cfg.anthropic_api_key),
         "ready_for_trading":  bool(cfg.anthropic_api_key and cfg.alpaca_api_key),
     }
@@ -497,10 +497,11 @@ def generate_signal(req: SignalRequest):
         raise HTTPException(400, "asset_class must be 'stock' or 'crypto'")
     from config import get_settings
     cfg = get_settings()
-    if not cfg.anthropic_api_key:
+    # Only require Anthropic key for LLM (live) mode — paper mode is rule-based and needs no key
+    if not req.paper_mode and not cfg.anthropic_api_key:
         raise HTTPException(
             status_code=503,
-            detail="ANTHROPIC_API_KEY is not configured. Set it in Railway environment variables.",
+            detail="ANTHROPIC_API_KEY is not configured. Set it in Railway env vars, or enable paper_mode for rule-based signals.",
         )
     try:
         alpaca, binance, sentiment_fetcher, onchain_fetcher, portfolio_fetcher, orchestrator = (

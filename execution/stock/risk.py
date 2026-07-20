@@ -86,7 +86,7 @@ class RiskControls:
         # Stop distance: max of ATR-based or fixed percentage
         atr_stop = atr_multiplier * atr if atr > 0 else current_price * stop_loss_pct
         stop_distance = max(atr_stop, current_price * stop_loss_pct)
-        stop_price = round(current_price - stop_distance, 4)
+        stop_price = max(round(current_price - stop_distance, 4), 0.01)  # Alpaca rejects ≤0
         take_profit_price = round(current_price + current_price * take_profit_pct, 4)
 
         # Notional cap

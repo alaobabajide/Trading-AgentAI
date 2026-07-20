@@ -56,7 +56,10 @@ class StockExecutionEngine:
         """Lazily refresh equity-based risk controls."""
         acct = self._trading.get_account()
         equity = float(acct.equity)
-        daily_pnl_pct = (float(acct.equity) - float(acct.last_equity)) / float(acct.last_equity) * 100
+        last_equity = float(acct.last_equity or equity or 1.0)
+        if last_equity == 0:
+            last_equity = equity or 1.0
+        daily_pnl_pct = (equity - last_equity) / last_equity * 100
         rc = RiskControls(equity, self._max_pos, self._cb_drawdown)
         rc.check_circuit_breaker(daily_pnl_pct)
         return rc

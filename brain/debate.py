@@ -988,7 +988,10 @@ def _paper_risk_manager(
             f"Position sized at {pos_pct*100:.1f}% of equity."
         )
 
-    votes = vote_tally.get("bullish" if action == "BUY" else "bearish", 0)
+    # Use original_action for vote lookup so mutated HOLD doesn't fetch the wrong bucket
+    original_action = action  # action may have been mutated to HOLD above
+    vote_key = "bullish" if original_action == "BUY" else "bearish"
+    votes = vote_tally.get(vote_key, 0)
     return json.dumps({
         "action":                 action,
         "confidence":             round(votes / 15.0, 2),
