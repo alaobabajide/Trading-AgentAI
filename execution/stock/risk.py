@@ -86,8 +86,8 @@ class RiskControls:
         # Stop distance: max of ATR-based or fixed percentage
         atr_stop = atr_multiplier * atr if atr > 0 else current_price * stop_loss_pct
         stop_distance = max(atr_stop, current_price * stop_loss_pct)
-        stop_price = max(round(current_price - stop_distance, 4), 0.01)  # Alpaca rejects ≤0
-        take_profit_price = round(current_price + current_price * take_profit_pct, 4)
+        stop_price = max(round(current_price - stop_distance, 2), 0.01)  # Alpaca requires whole cents
+        take_profit_price = round(current_price + current_price * take_profit_pct, 2)
 
         # Notional cap
         max_notional = self.equity * min(signal_position_pct, self.max_position_pct)
@@ -119,7 +119,7 @@ class TrailingStopManager:
         peak = self._peaks.get(symbol, current_price)
         if current_price > peak:
             self._peaks[symbol] = current_price
-            new_stop = round(current_price * (1 - self.trail_pct), 4)
+            new_stop = round(current_price * (1 - self.trail_pct), 2)
             log.debug("Trailing stop %s: peak=%.2f new_stop=%.2f", symbol, current_price, new_stop)
             return new_stop
         return None

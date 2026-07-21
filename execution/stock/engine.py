@@ -118,52 +118,44 @@ class StockExecutionEngine:
             take_profit=TakeProfitRequest(limit_price=sizing.take_profit_price),
         )
 
-        try:
-            order = self._trading.submit_order(order_req)
-            self._trailing.register(signal.symbol, current_price)
+        order = self._trading.submit_order(order_req)
+        self._trailing.register(signal.symbol, current_price)
 
-            log.info(
-                "BUY bracket submitted: %d %s @ market stop=%.2f tp=%.2f id=%s",
-                sizing.shares, signal.symbol,
-                sizing.stop_price, sizing.take_profit_price, order.id,
-            )
-            return OrderResult(
-                symbol=signal.symbol,
-                order_id=str(order.id),
-                action=signal.action,
-                qty=sizing.shares,
-                submitted_price=current_price,
-                stop_price=sizing.stop_price,
-                take_profit_price=sizing.take_profit_price,
-                timestamp=datetime.now(timezone.utc),
-                raw=order,
-            )
-        except Exception as exc:
-            log.error("Order submission failed for %s: %s", signal.symbol, exc)
-            return None
+        log.info(
+            "BUY bracket submitted: %d %s @ market stop=%.2f tp=%.2f id=%s",
+            sizing.shares, signal.symbol,
+            sizing.stop_price, sizing.take_profit_price, order.id,
+        )
+        return OrderResult(
+            symbol=signal.symbol,
+            order_id=str(order.id),
+            action=signal.action,
+            qty=sizing.shares,
+            submitted_price=current_price,
+            stop_price=sizing.stop_price,
+            take_profit_price=sizing.take_profit_price,
+            timestamp=datetime.now(timezone.utc),
+            raw=order,
+        )
 
     def _close_position(self, symbol: str) -> OrderResult | None:
         """Close an existing long position at market (cancels any bracket child orders)."""
-        try:
-            order = self._trading.close_position(symbol)
-            qty = int(float(getattr(order, "qty", 0) or 0))
-            price = float(getattr(order, "filled_avg_price", 0) or 0)
-            self._trailing.remove(symbol)
-            log.info("SELL close_position submitted: %s id=%s", symbol, order.id)
-            return OrderResult(
-                symbol=symbol,
-                order_id=str(order.id),
-                action="SELL",
-                qty=qty,
-                submitted_price=price,
-                stop_price=0.0,
-                take_profit_price=0.0,
-                timestamp=datetime.now(timezone.utc),
-                raw=order,
-            )
-        except Exception as exc:
-            log.error("close_position failed for %s: %s", symbol, exc)
-            return None
+        order = self._trading.close_position(symbol)
+        qty = int(float(getattr(order, "qty", 0) or 0))
+        price = float(getattr(order, "filled_avg_price", 0) or 0)
+        self._trailing.remove(symbol)
+        log.info("SELL close_position submitted: %s id=%s", symbol, order.id)
+        return OrderResult(
+            symbol=symbol,
+            order_id=str(order.id),
+            action="SELL",
+            qty=qty,
+            submitted_price=price,
+            stop_price=0.0,
+            take_profit_price=0.0,
+            timestamp=datetime.now(timezone.utc),
+            raw=order,
+        )
 
     def update_trailing_stops(self, symbol: str, current_price: float) -> None:
         """Call periodically to ratchet trailing stops."""
