@@ -135,8 +135,8 @@ function AppInner() {
         </div>
       </main>
 
-      {/* Warm/Hot signal veto banner */}
-      {hitl.pendingSignal && hitl.vetoSecsLeft > 0 && (
+      {/* Warm/Hot signal veto banner — stays mounted at secsLeft=0 so auto-execute fires */}
+      {hitl.pendingSignal && (
         <WarmSignalBanner
           signal={hitl.pendingSignal}
           secsLeft={hitl.vetoSecsLeft}

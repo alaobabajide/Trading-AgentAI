@@ -49,14 +49,14 @@ export function useHITL(): HITLState & HITLActions {
         if (s <= 1) {
           clearInterval(vetoTimer.current!);
           vetoTimer.current = null;
-          setPending(null);
-          // Auto-confirm after timeout in assisted mode
+          // Do NOT clear pendingSignal here — the WarmSignalBanner watches for
+          // secsLeft=0 and auto-calls onConfirm (which executes and then clears).
           return 0;
         }
         return s - 1;
       });
     }, 1000);
-  }, [clearVeto]);
+  }, []);
 
   // ── Cool-off countdown ──────────────────────────────────────────────────────
   const clearCool = useCallback(() => {

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { X, Zap } from "lucide-react";
 import clsx from "clsx";
 import type { Signal } from "../lib/types";
@@ -12,6 +13,16 @@ interface Props {
 
 export function WarmSignalBanner({ signal, secsLeft, onVeto, onConfirm }: Props) {
   const isHot = signal.tier === "HOT";
+  const firedRef = useRef(false);
+
+  // Auto-execute when the veto countdown reaches zero.
+  // The banner text already promises "Auto-executing in Xs" — this makes it true.
+  useEffect(() => {
+    if (secsLeft === 0 && !firedRef.current) {
+      firedRef.current = true;
+      onConfirm();
+    }
+  }, [secsLeft, onConfirm]);
   const progress = isHot
     ? (secsLeft / 5) * 100
     : (secsLeft / 10) * 100;
