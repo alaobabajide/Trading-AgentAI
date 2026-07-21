@@ -28,7 +28,7 @@ function OrdersTable({ orders }: { orders: AlpacaOrder[] }) {
   if (orders.length === 0) {
     return (
       <p className="text-sm text-slate-500 text-center py-4">
-        No pending orders — all submitted orders have been filled, cancelled, or expired.
+        No orders found on this Alpaca account yet.
       </p>
     );
   }
@@ -86,13 +86,14 @@ function OrdersTable({ orders }: { orders: AlpacaOrder[] }) {
 
 export function PositionsPage() {
   const { portfolio, apiState } = usePortfolio();
-  const [showAllOrders, setShowAllOrders] = useState(false);
-  const { orders, fetchError: ordersError, loading: ordersLoading } = useOrders(showAllOrders ? "all" : "open");
+  const [showPendingOnly, setShowPendingOnly] = useState(false);
+  const { orders, fetchError: ordersError, loading: ordersLoading } = useOrders(showPendingOnly ? "open" : "all");
 
   const portfolioError = portfolio?.fetch_error ?? null;
-  const hasPendingOrders = orders.some(
+  const pendingOrders = orders.filter(
     (o) => ["new", "pending_new", "accepted", "partially_filled"].includes(o.status)
   );
+  const hasPendingOrders = pendingOrders.length > 0;
 
   return (
     <div className="space-y-5">
@@ -133,7 +134,7 @@ export function PositionsPage() {
           <div>
             <div className="text-sm font-semibold text-amber-400">Orders pending — waiting for fill</div>
             <div className="text-xs text-slate-400 mt-0.5">
-              {orders.filter((o) => ["new", "pending_new", "accepted", "partially_filled"].includes(o.status)).length} order(s) submitted to Alpaca are awaiting execution.
+              {pendingOrders.length} order(s) submitted to Alpaca are awaiting execution.
               Positions will appear here once the market opens and orders are filled.
             </div>
           </div>
@@ -165,17 +166,22 @@ export function PositionsPage() {
         <div className="flex items-center justify-between">
           <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 flex items-center gap-2">
             <Clock className="w-3.5 h-3.5" />
-            {showAllOrders ? "Recent Orders (Last 50)" : "Pending Orders"}
+            {showPendingOnly ? "Pending Orders" : "Order History (Last 50)"}
+            {hasPendingOrders && (
+              <span className="px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 text-[9px] font-bold">
+                {pendingOrders.length} PENDING
+              </span>
+            )}
           </h2>
           <div className="flex items-center gap-2">
             {ordersLoading && (
               <RefreshCw className="w-3 h-3 text-slate-500 animate-spin" />
             )}
             <button
-              onClick={() => setShowAllOrders((v) => !v)}
+              onClick={() => setShowPendingOnly((v) => !v)}
               className="text-[10px] font-mono text-slate-500 hover:text-slate-300 underline underline-offset-2 transition-colors"
             >
-              {showAllOrders ? "Show pending only" : "Show all recent"}
+              {showPendingOnly ? "Show full history" : "Show pending only"}
             </button>
           </div>
         </div>
