@@ -5,8 +5,6 @@ import json
 import logging
 from typing import Any
 
-import anthropic
-
 log = logging.getLogger(__name__)
 
 # Tactical agents (fundamental, technical, etc.) use Haiku — fast + cheap.
@@ -22,7 +20,7 @@ class BaseAnalyst:
     system_prompt: str = "You are a financial analyst."
     model: str   = TACTICAL_MODEL   # override in subclass for synthesis agents
 
-    def __init__(self, client: anthropic.Anthropic) -> None:
+    def __init__(self, client: Any) -> None:
         self._client = client
 
     def analyse(self, context: dict[str, Any]) -> str:

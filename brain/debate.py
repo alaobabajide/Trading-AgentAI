@@ -8,7 +8,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Literal
 
-import anthropic
 import ta
 import pandas as pd
 
@@ -1142,6 +1141,7 @@ class DebateOrchestrator:
         stop_loss_pct: float = 0.02,
         take_profit_pct: float = 0.05,
     ) -> None:
+        import anthropic  # lazy: paper mode works without the package
         client = anthropic.Anthropic(api_key=anthropic_api_key)
 
         # Panel A — analyst agents

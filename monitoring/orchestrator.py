@@ -315,14 +315,10 @@ class Orchestrator:
         """
         self._refresh_risk_config()   # pull latest thresholds before every check
 
-        if not self._cfg.alpaca_api_key:
+        if not self._alpaca_client:
             return
         try:
-            from alpaca.trading.client import TradingClient
-            cfg = self._cfg
-            is_paper = "paper" in cfg.alpaca_base_url.lower()
-            client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
-            positions = client.get_all_positions()
+            positions = self._alpaca_client.get_all_positions()
         except Exception as exc:
             log.warning("Position monitor: could not fetch positions: %s", exc)
             return
@@ -348,7 +344,7 @@ class Orchestrator:
             if reason:
                 log.info("Closing %s — %s", symbol, reason)
                 try:
-                    order = client.close_position(symbol)
+                    order = self._alpaca_client.close_position(symbol)
                     order_counter.labels(
                         symbol=symbol, action="SELL", exchange="alpaca", status="submitted",
                     ).inc()
