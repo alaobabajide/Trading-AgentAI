@@ -473,8 +473,10 @@ export function IndicesPage({ paperMode = true }: IndicesPageProps) {
     }
   }
 
-  const hasAnyLoading = Object.values(signalStates).some((s) => s.loading);
-  const errorState = Object.values(signalStates).find((s) => s.error);
+  const hasAnyLoading = group.entries.some((e) => signalStates[e.etf_proxy]?.loading);
+  const errorState = group.entries
+    .map((e) => signalStates[e.etf_proxy])
+    .find((s) => s?.error);
 
   return (
     <div className="space-y-6 max-w-7xl">
@@ -505,7 +507,7 @@ export function IndicesPage({ paperMode = true }: IndicesPageProps) {
         {INDEX_GROUPS.map((g) => (
           <button
             key={g.id}
-            onClick={() => setActiveGroup(g.id)}
+            onClick={() => { setActiveGroup(g.id); setLatestResult(null); }}
             className={clsx(
               "flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all border",
               activeGroup === g.id

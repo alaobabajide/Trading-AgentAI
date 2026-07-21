@@ -122,7 +122,8 @@ function PriceSparkline({ symbol }: { symbol: string }) {
 }
 
 function RangeBar({ low, high, current }: { low: number; high: number; current: number }) {
-  const pct = !low && !high ? 50 : Math.min(100, Math.max(0, ((current - low) / (high - low)) * 100));
+  const range = high - low;
+  const pct = !range ? 50 : Math.min(100, Math.max(0, ((current - low) / range) * 100));
   return (
     <div className="space-y-1.5">
       <div className="relative h-2 bg-surface-700 rounded-full overflow-visible">

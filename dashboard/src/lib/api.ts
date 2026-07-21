@@ -130,7 +130,7 @@ function mergeSignals(local: Signal[], incoming: Signal[]): Signal[] {
 
 // ── React hooks ───────────────────────────────────────────────────────────────
 
-type ApiState = "loading" | "live" | "mock";
+type ApiState = "loading" | "live" | "mock" | "error";
 
 /**
  * Loads portfolio from the real API. Returns null until the first successful
@@ -148,7 +148,7 @@ export function usePortfolio() {
         const data = await fetchPortfolio();
         if (!cancelled) { setPortfolio(data); setState("live"); }
       } catch {
-        if (!cancelled) setState((s) => s === "loading" ? "mock" : s);
+        if (!cancelled) setState((s) => s === "loading" ? "mock" : "error");
       }
     }
 
@@ -198,7 +198,7 @@ export function useSignals() {
           setApiState("live");
         }
       } catch {
-        if (!cancelled) setApiState((s) => s === "loading" ? "mock" : s);
+        if (!cancelled) setApiState((s) => s === "loading" ? "mock" : "error");
       }
     }
 
@@ -214,7 +214,7 @@ export function useSignals() {
       applyIncoming(data as Signal[]);
       setApiState("live");
     } catch {
-      setApiState((s) => s === "loading" ? "mock" : s);
+      setApiState((s) => s === "loading" ? "mock" : "error");
     } finally {
       if (manual) setRefreshing(false);
     }
@@ -318,10 +318,14 @@ export function useRiskConfig() {
 
   useEffect(() => {
     let cancelled = false;
-    fetchRiskConfig()
-      .then((c) => { if (!cancelled) setConfig(c); })
-      .catch(() => { /* backend may not be up yet */ });
-    return () => { cancelled = true; };
+    function load() {
+      fetchRiskConfig()
+        .then((c) => { if (!cancelled) setConfig(c); })
+        .catch(() => { /* backend may not be up yet */ });
+    }
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, []);
 
   async function save(updates: Partial<Omit<RiskConfig, "source" | "overrides" | "defaults">>) {

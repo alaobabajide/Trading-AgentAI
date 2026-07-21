@@ -424,9 +424,13 @@ export function SignalsPage() {
             "text-[10px] font-mono px-2 py-1 rounded border",
             apiState === "live"    ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" :
             apiState === "loading" ? "bg-slate-500/10 text-slate-400 border-slate-600/20" :
+            apiState === "error"   ? "bg-red-500/10 text-red-400 border-red-500/20" :
                                      "bg-amber-500/10 text-amber-400 border-amber-500/20",
           )}>
-            {apiState === "live" ? "Live cache" : apiState === "loading" ? "Loading…" : "Mock data"}
+            {apiState === "live"    ? "Live cache"
+              : apiState === "loading" ? "Loading…"
+              : apiState === "error"   ? "Connection error"
+              : "Mock data"}
           </span>
         </div>
       </div>

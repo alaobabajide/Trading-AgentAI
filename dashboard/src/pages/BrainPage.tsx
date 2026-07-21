@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Brain, Loader2, Send, CheckCircle2 } from "lucide-react";
+import { Brain, Loader2, Send, CheckCircle2, XCircle, Clock } from "lucide-react";
 import clsx from "clsx";
 import { SignalCard } from "../components/SignalCard";
 import type { Signal } from "../lib/types";
@@ -26,6 +26,11 @@ export function BrainPage({ paperMode = true }: BrainPageProps) {
   const hitl = useHITLContext();
 
   async function handleRun() {
+    const sym = symbol.trim().toUpperCase();
+    if (!sym || !/^[A-Z0-9]{1,20}$/.test(sym)) {
+      setError("Invalid symbol — use 1–20 uppercase letters/digits (e.g. AAPL, BTCUSDT)");
+      return;
+    }
     setLoading(true);
     setError(null);
     setResult(null);
@@ -34,7 +39,7 @@ export function BrainPage({ paperMode = true }: BrainPageProps) {
       const resp = await fetch("/api/signal", {
         method: "POST",
         headers: apiHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ symbol: symbol.toUpperCase(), asset_class: assetClass, paper_mode: paperMode }),
+        body: JSON.stringify({ symbol: sym, asset_class: assetClass, paper_mode: paperMode }),
       });
       if (!resp.ok) {
         const data = await safeJson(resp) as { detail?: string };
@@ -59,8 +64,9 @@ export function BrainPage({ paperMode = true }: BrainPageProps) {
           }
         } else if (disposition === "veto_window") {
           setExecStatus("Queued for approval — review the confirmation banner.");
+        } else if (disposition === "queue_manual") {
+          setExecStatus("Queued for manual execution — click Execute on the signal card below.");
         }
-        // "queue_manual" → execute button on the card handles it
       }
     } catch (err) {
       setError((err as Error).message ?? "Network error — backend not reachable");
@@ -163,7 +169,13 @@ export function BrainPage({ paperMode = true }: BrainPageProps) {
               ? "bg-amber-500/10 border border-amber-500/20 text-amber-400"
               : "bg-red-500/10 border border-red-500/20 text-red-400",
           )}>
-            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            {execStatus.startsWith("Auto-executed") ? (
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+            ) : execStatus.startsWith("Queued") ? (
+              <Clock className="w-4 h-4 shrink-0" />
+            ) : (
+              <XCircle className="w-4 h-4 shrink-0" />
+            )}
             {execStatus}
           </div>
         )}

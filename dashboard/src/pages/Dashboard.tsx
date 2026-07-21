@@ -5,7 +5,7 @@ import { EquityChart } from "../components/EquityChart";
 import { PositionsTable } from "../components/PositionsTable";
 import { SignalCard } from "../components/SignalCard";
 import { StatCard } from "../components/StatCard";
-import { usePortfolio, useSignals, useEquitySeries } from "../lib/api";
+import { usePortfolio, useSignals, useEquitySeries, useRiskConfig } from "../lib/api";
 import type { EquityPoint } from "../lib/types";
 
 function LiveBadge({ live }: { live: boolean }) {
@@ -25,6 +25,7 @@ type EquityPeriod = "1D" | "1M" | "1Y";
 export function Dashboard() {
   const { portfolio: p, apiState } = usePortfolio();
   const { signals, apiState: sigState } = useSignals();
+  const { config: riskCfg } = useRiskConfig();
   const [equityPeriod, setEquityPeriod] = useState<EquityPeriod>("1D");
   const { series: liveSeries, isLive: equityLive } = useEquitySeries(equityPeriod);
   const isLive = apiState === "live";
@@ -85,8 +86,8 @@ export function Dashboard() {
         <StatCard
           label="Crypto Allocation"
           value={`${((p?.crypto_allocation_pct ?? 0) * 100).toFixed(1)}%`}
-          sub={`Cap: 30% — ${((0.30 - (p?.crypto_allocation_pct ?? 0)) * 100).toFixed(1)}% headroom`}
-          trend={(p?.crypto_allocation_pct ?? 0) > 0.27 ? "down" : "neutral"}
+          sub={`Cap: ${((riskCfg?.max_crypto_allocation_pct ?? 0.30) * 100).toFixed(0)}% — ${(((riskCfg?.max_crypto_allocation_pct ?? 0.30) - (p?.crypto_allocation_pct ?? 0)) * 100).toFixed(1)}% headroom`}
+          trend={(p?.crypto_allocation_pct ?? 0) > ((riskCfg?.max_crypto_allocation_pct ?? 0.30) * 0.90) ? "down" : "neutral"}
         />
       </div>
 
@@ -130,12 +131,19 @@ export function Dashboard() {
           <div className="glass rounded-2xl p-5">
             <h2 className="text-sm font-semibold mb-3">Risk Controls</h2>
             <div className="space-y-2 text-xs text-slate-400 font-mono">
-              {[
-                ["Circuit breaker", "OK"],
-                ["Max position",    "5% NAV"],
-                ["Crypto cap",      "30%"],
-                ["Stop (default)",  "2%"],
-              ].map(([k, v]) => (
+              {(riskCfg ? [
+                ["Circuit breaker", `${(riskCfg.circuit_breaker_drawdown * 100).toFixed(0)}% drawdown`],
+                ["Max position",    `${(riskCfg.max_position_pct * 100).toFixed(0)}% NAV`],
+                ["Crypto cap",      `${(riskCfg.max_crypto_allocation_pct * 100).toFixed(0)}%`],
+                ["Stop (default)",  `${(riskCfg.stop_loss_pct * 100).toFixed(1)}%`],
+                ["Target (default)",`${(riskCfg.take_profit_pct * 100).toFixed(1)}%`],
+              ] : [
+                ["Circuit breaker", "—"],
+                ["Max position",    "—"],
+                ["Crypto cap",      "—"],
+                ["Stop (default)",  "—"],
+                ["Target (default)","—"],
+              ]).map(([k, v]) => (
                 <div key={k} className="flex justify-between">
                   <span>{k}</span>
                   <span className="text-slate-200">{v}</span>

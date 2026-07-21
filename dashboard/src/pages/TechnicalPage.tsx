@@ -86,24 +86,29 @@ function toCandles(bars: BarData[]): Candle[] {
 }
 
 function toIndicators(bars: BarData[]): IndicatorPoint[] {
-  return bars.map((b) => ({
-    time:     b.time,
-    rsi:      b.rsi     ?? 50,
-    macd:     b.macd    ?? 0,
-    signal:   b.macd_signal ?? 0,
-    hist:     b.macd_hist   ?? 0,
-    bbUpper:  b.bb_upper ?? b.close * 1.02,
-    bbMid:    b.bb_mid   ?? b.close,
-    bbLower:  b.bb_lower ?? b.close * 0.98,
-    atr:      b.atr ?? 0,
-    close:    b.close,
-  }));
+  // Only include bars where indicators have been computed — early bars lack
+  // the lookback window (e.g. RSI needs 14 bars) so we skip them rather than
+  // showing misleading neutral defaults.
+  return bars
+    .filter((b) => b.rsi != null && b.macd != null && b.bb_upper != null)
+    .map((b) => ({
+      time:     b.time,
+      rsi:      b.rsi!,
+      macd:     b.macd!,
+      signal:   b.macd_signal ?? 0,
+      hist:     b.macd_hist   ?? 0,
+      bbUpper:  b.bb_upper!,
+      bbMid:    b.bb_mid   ?? b.close,
+      bbLower:  b.bb_lower ?? b.close,
+      atr:      b.atr ?? 0,
+      close:    b.close,
+    }));
 }
 
 export function TechnicalPage() {
   const [symbol, setSymbol] = useState("AAPL");
   const [tf, setTf]         = useState<Timeframe>("1M");
-  const assetClass = symbol.endsWith("USDT") ? "crypto" : "stock";
+  const assetClass = /USDT$|USD$|BTC$|ETH$/i.test(symbol) || symbol.includes("/") ? "crypto" : "stock";
 
   const { bars, loading, error, updatedAt } = useBars(symbol, TF_DAYS[tf], assetClass);
 
@@ -206,7 +211,7 @@ export function TechnicalPage() {
             </div>
             <div className={clsx("text-sm font-mono mt-1", bullish ? "text-emerald-400" : "text-red-400")}>
               {bullish ? "▲" : "▼"} {Math.abs(changePct).toFixed(2)}%
-              <span className="text-slate-500 ml-2">vs prev close</span>
+              <span className="text-slate-500 ml-2">vs prev bar ({tf})</span>
             </div>
           </div>
           <div className="flex flex-wrap gap-2 ml-auto">
