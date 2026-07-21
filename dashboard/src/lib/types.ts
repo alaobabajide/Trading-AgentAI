@@ -81,6 +81,7 @@ export interface PortfolioSnapshot {
   daily_pnl: number;
   daily_pnl_pct: number;
   crypto_allocation_pct: number;
+  fetch_error?: string | null;
 }
 
 export interface EquityPoint {

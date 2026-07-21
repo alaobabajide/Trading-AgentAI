@@ -359,6 +359,60 @@ export function useRiskConfig() {
   return { config, saving, saved, error, save, reset };
 }
 
+export interface AlpacaOrder {
+  order_id:         string;
+  client_order_id:  string;
+  symbol:           string;
+  side:             string;
+  order_type:       string;
+  qty:              number;
+  filled_qty:       number;
+  status:           string;
+  submitted_at:     string | null;
+  filled_at:        string | null;
+  limit_price:      number | null;
+  stop_price:       number | null;
+  filled_avg_price: number | null;
+}
+
+export interface OrdersResponse {
+  orders:      AlpacaOrder[];
+  fetch_error: string | null;
+}
+
+export function useOrders(statusFilter: "open" | "all" | "closed" = "open") {
+  const [orders, setOrders]     = useState<AlpacaOrder[]>([]);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [loading, setLoading]   = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const res = await fetch(`${BASE}/orders?status=${statusFilter}`, {
+          headers: apiHeaders(),
+          signal: AbortSignal.timeout(12000),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await safeJson<OrdersResponse>(res);
+        if (!cancelled) {
+          setOrders(data.orders ?? []);
+          setFetchError(data.fetch_error ?? null);
+        }
+      } catch (e) {
+        if (!cancelled) setFetchError((e as Error).message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    const id = setInterval(load, 30_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [statusFilter]);
+
+  return { orders, fetchError, loading };
+}
+
 /**
  * Polls /api/health every 30s to drive the "Brain live" indicator.
  */

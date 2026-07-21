@@ -776,24 +776,21 @@ def execute_trade(req: ExecuteRequest):
 def get_portfolio():
     """Return current portfolio state (positions, equity, P&L).
 
-    Returns a zeroed default if no exchange credentials are configured so the
-    dashboard always renders rather than showing a 500 error.
+    Returns a zeroed default with fetch_error set if credentials are missing or
+    the exchange API call fails — the dashboard surfaces this as an error banner
+    instead of silently showing $0 / 0 positions.
     """
     from config import get_settings
     from data.portfolio import PortfolioFetcher, PortfolioState
     from datetime import timezone
 
     cfg = get_settings()
+    fetch_error: str | None = None
 
-    # If no Alpaca credentials are set at all, return a safe empty state
-    # rather than attempting a call that will fail.
     if not cfg.alpaca_api_key:
-        log.warning("/portfolio called with no ALPACA_API_KEY configured — returning empty state")
-        state = PortfolioState(
-            timestamp=datetime.now(timezone.utc),
-            equity=0.0,
-            cash=0.0,
-        )
+        fetch_error = "ALPACA_API_KEY is not configured — check Settings"
+        log.warning("/portfolio: no ALPACA_API_KEY — returning empty state")
+        state = PortfolioState(timestamp=datetime.now(timezone.utc), equity=0.0, cash=0.0)
     else:
         portfolio_fetcher = PortfolioFetcher(
             cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,
@@ -803,12 +800,8 @@ def get_portfolio():
             state = portfolio_fetcher.snapshot()
         except Exception as exc:
             log.error("Portfolio fetch failed: %s", exc, exc_info=True)
-            # Return empty state so the dashboard degrades gracefully
-            state = PortfolioState(
-                timestamp=datetime.now(timezone.utc),
-                equity=0.0,
-                cash=0.0,
-            )
+            fetch_error = f"Alpaca portfolio fetch failed: {exc}"
+            state = PortfolioState(timestamp=datetime.now(timezone.utc), equity=0.0, cash=0.0)
 
     return {
         "timestamp":             state.timestamp.isoformat(),
@@ -818,6 +811,7 @@ def get_portfolio():
         "daily_pnl":             state.daily_pnl,
         "daily_pnl_pct":         state.daily_pnl_pct,
         "crypto_allocation_pct": state.crypto_allocation_pct,
+        "fetch_error":           fetch_error,
         "positions": [
             {
                 "symbol":             p.symbol,
@@ -832,6 +826,64 @@ def get_portfolio():
             for p in state.positions
         ],
     }
+
+
+@app.get("/orders")
+def get_orders(status: str = "open"):
+    """Return open or recent orders from Alpaca.
+
+    status=open   — pending / partially-filled / new (default)
+    status=all    — last 50 orders regardless of fill state
+    status=closed — filled, cancelled, expired
+
+    Positions only appear after an order is FULLY FILLED. This endpoint
+    exposes the order queue so the dashboard can show submitted-but-unfilled
+    trades that would otherwise be invisible to the user.
+    """
+    if status not in ("open", "all", "closed"):
+        raise HTTPException(400, "status must be open, all, or closed")
+
+    from config import get_settings
+    from alpaca.trading.client import TradingClient
+    from alpaca.trading.requests import GetOrdersRequest
+    from alpaca.trading.enums import QueryOrderStatus
+
+    cfg = get_settings()
+    if not cfg.alpaca_api_key:
+        return {"orders": [], "fetch_error": "ALPACA_API_KEY is not configured"}
+
+    is_paper = "paper" in cfg.alpaca_base_url.lower()
+    client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
+
+    status_map = {
+        "open":   QueryOrderStatus.OPEN,
+        "all":    QueryOrderStatus.ALL,
+        "closed": QueryOrderStatus.CLOSED,
+    }
+
+    try:
+        orders = client.get_orders(filter=GetOrdersRequest(status=status_map[status], limit=50))
+        result = []
+        for o in orders:
+            result.append({
+                "order_id":         str(o.id),
+                "client_order_id":  str(o.client_order_id or ""),
+                "symbol":           o.symbol,
+                "side":             o.side.value if o.side else "unknown",
+                "order_type":       o.type.value if o.type else "unknown",
+                "qty":              float(o.qty or 0),
+                "filled_qty":       float(o.filled_qty or 0),
+                "status":           o.status.value if o.status else "unknown",
+                "submitted_at":     o.submitted_at.isoformat() if o.submitted_at else None,
+                "filled_at":        o.filled_at.isoformat() if o.filled_at else None,
+                "limit_price":      float(o.limit_price) if o.limit_price else None,
+                "stop_price":       float(o.stop_price) if o.stop_price else None,
+                "filled_avg_price": float(o.filled_avg_price) if o.filled_avg_price else None,
+            })
+        return {"orders": result, "fetch_error": None}
+    except Exception as exc:
+        log.error("Orders fetch failed: %s", exc, exc_info=True)
+        return {"orders": [], "fetch_error": f"Alpaca orders fetch failed: {exc}"}
 
 
 def _alpaca_portfolio_history(cfg, is_paper: bool, period: str, timeframe: str) -> list:
