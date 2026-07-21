@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { Activity, RefreshCw, AlertCircle } from "lucide-react";
 import clsx from "clsx";
 import { SymbolSelector } from "../components/SymbolSelector";
