@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import clsx from "clsx";
 import { Sidebar } from "./components/Sidebar";
 import { WarmSignalBanner } from "./components/WarmSignalBanner";
@@ -32,6 +32,42 @@ function AppInner() {
   const hitl    = useHITLContext();
   const modeCfg = MODE_CONFIG[hitl.profile.mode];
   const isPaper = tradingEnv === "paper";
+
+  // Toast state for execute results
+  const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function showToast(type: "success" | "error", msg: string) {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ type, msg });
+    toastTimer.current = setTimeout(() => setToast(null), 6000);
+  }
+
+  // Auto-execute when the veto countdown expires in Assisted mode.
+  // This is the correct place: HITLContext has both the pending signal AND execute().
+  // The `prev > 0` guard prevents firing in Manual mode where vetoSecsLeft starts at 0.
+  const prevVetoRef = useRef(0);
+  useEffect(() => {
+    const prev = prevVetoRef.current;
+    prevVetoRef.current = hitl.vetoSecsLeft;
+
+    if (prev > 0 && hitl.vetoSecsLeft === 0 && hitl.pendingSignal) {
+      const sig = hitl.pendingSignal;
+      hitl.confirmSignal(); // clear banner immediately
+      hitl.executeSignal(sig).then((result) => {
+        if (result) {
+          showToast("success",
+            `Order submitted · ${result.symbol} ${result.action} · ${result.qty ?? result.notional ?? ""}${result.qty ? " shares" : " USD"} · ID ${result.order_id.slice(0, 8)}`
+          );
+        } else {
+          showToast("error",
+            `Order failed · ${sig.symbol} ${sig.action} · ${hitl.executeErrorRef.current ?? "unknown error"}`
+          );
+        }
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hitl.vetoSecsLeft]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-surface-900">
@@ -135,8 +171,8 @@ function AppInner() {
         </div>
       </main>
 
-      {/* Warm/Hot signal veto banner — stays mounted at secsLeft=0 so auto-execute fires */}
-      {hitl.pendingSignal && (
+      {/* Warm/Hot signal veto banner */}
+      {hitl.pendingSignal && hitl.vetoSecsLeft > 0 && (
         <WarmSignalBanner
           signal={hitl.pendingSignal}
           secsLeft={hitl.vetoSecsLeft}
@@ -146,6 +182,20 @@ function AppInner() {
             hitl.confirmSignal();
           }}
         />
+      )}
+
+      {/* Execute result toast */}
+      {toast && (
+        <div
+          className={`fixed top-6 right-6 z-50 max-w-sm rounded-2xl border px-4 py-3 text-xs font-mono shadow-2xl glass ${
+            toast.type === "success"
+              ? "border-emerald-500/30 text-emerald-400"
+              : "border-red-500/30 text-red-400"
+          }`}
+        >
+          <div className="font-semibold mb-0.5">{toast.type === "success" ? "Order submitted" : "Order failed"}</div>
+          <div className="text-slate-400">{toast.msg}</div>
+        </div>
       )}
 
       {/* Manual mode cool-off overlay */}
