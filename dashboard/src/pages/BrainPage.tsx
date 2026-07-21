@@ -1,23 +1,10 @@
 import { useState } from "react";
-import { Brain, FlaskConical, Loader2, Send, CheckCircle2 } from "lucide-react";
+import { Brain, Loader2, Send, CheckCircle2 } from "lucide-react";
 import clsx from "clsx";
 import { SignalCard } from "../components/SignalCard";
 import type { Signal } from "../lib/types";
-import { mockSignals } from "../lib/mock";
 import { useHITLContext } from "../context/HITLContext";
 import { apiHeaders } from "../lib/api";
-
-/** Build a plausible mock signal for any symbol when the backend is offline. */
-function mockSignalFor(sym: string, cls: "stock" | "crypto"): Signal {
-  const base = mockSignals.find((s) => s.symbol === sym.toUpperCase())
-    ?? mockSignals[Math.floor(Math.random() * mockSignals.length)];
-  return {
-    ...base,
-    symbol: sym.toUpperCase(),
-    asset_class: cls,
-    generated_at: new Date().toISOString(),
-  };
-}
 
 async function safeJson(resp: Response): Promise<unknown> {
   const text = await resp.text();
@@ -35,7 +22,6 @@ export function BrainPage({ paperMode = true }: BrainPageProps) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<Signal | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [usedMock, setUsedMock] = useState(false);
   const [execStatus, setExecStatus] = useState<string | null>(null);
   const hitl = useHITLContext();
 
@@ -43,7 +29,6 @@ export function BrainPage({ paperMode = true }: BrainPageProps) {
     setLoading(true);
     setError(null);
     setResult(null);
-    setUsedMock(false);
     setExecStatus(null);
     try {
       const resp = await fetch("/api/signal", {
@@ -53,10 +38,7 @@ export function BrainPage({ paperMode = true }: BrainPageProps) {
       });
       if (!resp.ok) {
         const data = await safeJson(resp) as { detail?: string };
-        const msg = data?.detail ?? `HTTP ${resp.status}`;
-        setError(msg);
-        setUsedMock(true);
-        setResult(mockSignalFor(symbol, assetClass));
+        setError(data?.detail ?? `HTTP ${resp.status}`);
         return;
       }
       const data = await safeJson(resp) as Signal;
@@ -82,8 +64,6 @@ export function BrainPage({ paperMode = true }: BrainPageProps) {
       }
     } catch (err) {
       setError((err as Error).message ?? "Network error — backend not reachable");
-      setUsedMock(true);
-      setResult(mockSignalFor(symbol, assetClass));
     } finally {
       setLoading(false);
     }
@@ -194,13 +174,6 @@ export function BrainPage({ paperMode = true }: BrainPageProps) {
           </div>
         )}
       </div>
-
-      {usedMock && !error && (
-        <div className="flex items-center gap-2 text-xs text-amber-400/80 font-mono bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5">
-          <FlaskConical className="w-3.5 h-3.5 shrink-0" />
-          Brain API offline — showing simulated signal. Start the backend to run live analysis.
-        </div>
-      )}
 
       {result && <SignalCard signal={result} />}
     </div>

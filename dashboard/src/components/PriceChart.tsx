@@ -6,7 +6,7 @@ import {
   ComposedChart, Area, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
-import type { IndicatorPoint } from "../lib/marketMock";
+export type IndicatorPoint = { time: string; rsi: number; macd: number; signal: number; hist: number; bbUpper: number; bbMid: number; bbLower: number; atr: number; close: number };
 
 interface Props { data: IndicatorPoint[]; height?: number }
 

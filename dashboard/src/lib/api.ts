@@ -5,7 +5,6 @@
  */
 import { useEffect, useState } from "react";
 import { EquityPoint, PortfolioSnapshot, Signal } from "./types";
-import { mockPortfolio, mockSignals } from "./mock";
 
 const BASE = "/api";
 
@@ -134,11 +133,11 @@ function mergeSignals(local: Signal[], incoming: Signal[]): Signal[] {
 type ApiState = "loading" | "live" | "mock";
 
 /**
- * Loads portfolio from the real API, falls back to mock if unavailable.
- * Returns mock immediately so the UI is never blank, then polls every 30s.
+ * Loads portfolio from the real API. Returns null until the first successful
+ * fetch, then polls every 30s.
  */
 export function usePortfolio() {
-  const [portfolio, setPortfolio] = useState<PortfolioSnapshot>(mockPortfolio);
+  const [portfolio, setPortfolio] = useState<PortfolioSnapshot | null>(null);
   const [state, setState] = useState<ApiState>("loading");
 
   useEffect(() => {
@@ -177,8 +176,7 @@ export function useSignals() {
   const [apiState, setApiState] = useState<ApiState>("loading");
   const [refreshing, setRefreshing] = useState(false);
 
-  // Show real signals if we have any; fall back to mock placeholder until then
-  const signals = liveSignals.length > 0 ? liveSignals : mockSignals;
+  const signals = liveSignals;
 
   function applyIncoming(data: Signal[]) {
     if (data.length === 0) return;

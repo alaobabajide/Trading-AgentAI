@@ -1,43 +1,42 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { BookOpen } from "lucide-react";
 import clsx from "clsx";
 import { SymbolSelector } from "../components/SymbolSelector";
 import { EarningsChart } from "../components/EarningsChart";
 import { AnalystBar } from "../components/AnalystBar";
 import { EtfHoldingsChart, SectorDonut } from "../components/EtfHoldingsChart";
-import { useLiveData } from "../hooks/useLiveTick";
 import {
   getFundamentals, getEarnings, getEtfData,
-  generateCandles, ETF_LIST,
+  ETF_LIST,
   type FundamentalMetrics, type EtfMetrics,
 } from "../lib/marketMock";
+import { apiHeaders } from "../lib/api";
 import { LineChart, Line, YAxis, ResponsiveContainer } from "recharts";
 
 // ── Agent views ───────────────────────────────────────────────────────────────
-
-const AGENT_VIEWS: Record<string, { direction: string; reasoning: string }> = {
-  AAPL:    { direction: "BEARISH",  reasoning: "Services growth decelerating YoY. iPhone unit sales miss consensus. RSI divergence suggests near-term correction risk. Recommend trimming exposure." },
-  MSFT:    { direction: "BULLISH",  reasoning: "Azure revenue growth re-accelerating at 33% YoY driven by AI workloads. Copilot monetisation ahead of schedule. Strong FCF generation supports valuation premium." },
-  NVDA:    { direction: "BULLISH",  reasoning: "Data-center GPU demand structurally elevated. Blackwell ramp beats expectations. Gross margins expanding to 75%+. NIM platform creates software moat." },
-  TSLA:    { direction: "NEUTRAL",  reasoning: "EV price war compressing margins. FSD v12 shows promise but regulatory timeline uncertain. Energy storage segment offsetting auto weakness." },
-  BTCUSDT: { direction: "BULLISH",  reasoning: "Post-halving supply shock historically precedes 6-18 month bull run. ETF net inflows consistently positive. BTC dominance rising." },
-  ETHUSDT: { direction: "BULLISH",  reasoning: "Spot ETH ETF approval expected to unlock institutional demand. Staking yield ~4% creates natural floor demand. Layer-2 ecosystem expanding." },
-  SPY:     { direction: "NEUTRAL",  reasoning: "S&P 500 at stretched valuations (P/E 24×) but earnings growth holding. Fed pivot narrative supportive near-term. Concentration risk in top-10 names elevated. Expect choppy sideways trading." },
-  QQQ:     { direction: "BULLISH",  reasoning: "Nasdaq-100 driven by AI capex supercycle. Mega-cap tech earnings revisions trending higher. Momentum strong but RSI approaching overbought. Scale in on pullbacks." },
-  IWM:     { direction: "BEARISH",  reasoning: "Small-caps face disproportionate headwind from higher-for-longer rates (float-rate debt exposure ~40%). Earnings revision breadth deteriorating. Prefer large-cap in this cycle." },
-  GLD:     { direction: "BULLISH",  reasoning: "Gold breaking out above $2,300 on central bank accumulation and de-dollarisation trend. Real rates declining. Tactical hedge against geopolitical tail risk and dollar weakness." },
-  TLT:     { direction: "NEUTRAL",  reasoning: "Long-duration Treasuries caught between sticky inflation and eventual Fed easing. Duration risk elevated. Current yield 4.2% attractive for risk-off portfolios; position sizing cautious." },
-  XLK:     { direction: "BULLISH",  reasoning: "Tech sector earnings growth outpacing index. AI infrastructure spend concentrating in XLK top holdings (AAPL, MSFT, NVDA ~65% weight). Expense ratio advantage vs active funds." },
-  EEM:     { direction: "NEUTRAL",  reasoning: "EM valuations cheap at 14× P/E but dollar strength and China structural headwinds offset. India and Mexico bright spots. High expense ratio (0.70%) a drag vs alternatives." },
-};
+// Agent views come from the Brain console — not hardcoded here.
 
 // ── Shared sub-components ─────────────────────────────────────────────────────
 
 function PriceSparkline({ symbol }: { symbol: string }) {
-  const data = useLiveData(
-    () => generateCandles(symbol, 30, Date.now()).map((c) => ({ v: c.close })),
-    5000,
-  );
+  const [data, setData] = useState<{ v: number }[]>([]);
+  const assetClass = symbol.endsWith("USDT") ? "crypto" : "stock";
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/bars/${encodeURIComponent(symbol)}?days=30&asset_class=${assetClass}`, {
+      headers: apiHeaders(),
+      signal: AbortSignal.timeout(15000),
+    })
+      .then((r) => r.json())
+      .then((d: { bars?: { close: number }[] }) => {
+        if (!cancelled) setData((d.bars ?? []).map((b) => ({ v: b.close })));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [symbol, assetClass]);
+
+  if (!data.length) return <div className="h-[72px] flex items-center justify-center text-xs text-slate-600">Loading…</div>;
   const start = data[0]?.v ?? 0;
   const end   = data[data.length - 1]?.v ?? 0;
   const up    = end >= start;
@@ -81,25 +80,8 @@ function MetricCell({ label, value, color }: { label: string; value: string; col
   );
 }
 
-function AgentView({ symbol }: { symbol: string }) {
-  const view = AGENT_VIEWS[symbol];
-  if (!view) return null;
-  return (
-    <div className="glass rounded-2xl p-5 space-y-3">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400">Agent View</h2>
-        <span className={clsx(
-          "text-[10px] font-mono font-semibold px-2 py-0.5 rounded",
-          view.direction === "BULLISH" ? "bg-emerald-500/15 text-emerald-400"
-          : view.direction === "BEARISH" ? "bg-red-500/15 text-red-400"
-          : "bg-yellow-500/15 text-yellow-400",
-        )}>
-          {view.direction}
-        </span>
-      </div>
-      <p className="text-xs text-slate-400 leading-relaxed">{view.reasoning}</p>
-    </div>
-  );
+function AgentView({ symbol: _symbol }: { symbol: string }) {
+  return null;
 }
 
 // ── ETF panel ─────────────────────────────────────────────────────────────────
@@ -261,11 +243,30 @@ export function FundamentalPage() {
   const metrics  = !isEtf ? getFundamentals(symbol) : null;
 
   const basePrice = etf?.currentPrice ?? metrics?.currentPrice ?? 100;
+  const [priceLive, setPriceLive] = useState(basePrice);
+  const _assetClass = symbol.endsWith("USDT") ? "crypto" : "stock";
 
-  const priceLive = useLiveData(() => {
-    const c = generateCandles(symbol, 2, Date.now());
-    return c[c.length - 1]?.close ?? basePrice;
-  }, 3000);
+  useEffect(() => {
+    setPriceLive(basePrice);
+    let cancelled = false;
+    const load = () => {
+      fetch(`/api/bars/${encodeURIComponent(symbol)}?days=2&asset_class=${_assetClass}`, {
+        headers: apiHeaders(),
+        signal: AbortSignal.timeout(15000),
+      })
+        .then((r) => r.json())
+        .then((d: { current_price?: number; bars?: { close: number }[] }) => {
+          if (!cancelled) {
+            const price = d.current_price ?? d.bars?.[d.bars.length - 1]?.close ?? basePrice;
+            setPriceLive(price);
+          }
+        })
+        .catch(() => {});
+    };
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [symbol, basePrice, _assetClass]);
 
   const priceChange    = priceLive - basePrice;
   const priceChangePct = basePrice ? (priceChange / basePrice) * 100 : 0;
@@ -283,13 +284,6 @@ export function FundamentalPage() {
           <BookOpen className="w-5 h-5 text-brand-400" />
           Fundamental Analysis
         </h1>
-        <div className="flex items-center gap-2 text-xs font-mono text-slate-500">
-          <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60" />
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-          </span>
-          Live price feed
-        </div>
       </div>
 
       <SymbolSelector value={symbol} onChange={setSymbol} />

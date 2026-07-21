@@ -2,7 +2,7 @@ import {
   ComposedChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Cell,
 } from "recharts";
-import type { Candle } from "../lib/marketMock";
+export type Candle = { time: string; open: number; high: number; low: number; close: number; volume: number };
 
 interface Props {
   candles: Candle[];

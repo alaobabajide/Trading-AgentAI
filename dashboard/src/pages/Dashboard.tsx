@@ -37,22 +37,24 @@ export function Dashboard() {
   const series: EquityPoint[] = (() => {
     if (liveSeries.length >= 2) return liveSeries;
 
-    if (isLive && p.equity > 0) {
+    if (isLive && (p?.equity ?? 0) > 0) {
       // Portfolio data is live — synthesise a 2-point line so the chart
       // always reflects real current equity even when history is loading.
       const now      = new Date().toISOString();
       const dayStart = new Date(Date.now() - 8 * 3_600_000).toISOString();
-      const open     = p.equity - p.daily_pnl;
+      const equity   = p!.equity;
+      const daily_pnl = p!.daily_pnl;
+      const open     = equity - daily_pnl;
       return [
-        { time: dayStart, equity: open > 0 ? open : p.equity, pnl: 0 },
-        { time: now,      equity: p.equity,                   pnl: p.daily_pnl },
+        { time: dayStart, equity: open > 0 ? open : equity, pnl: 0 },
+        { time: now,      equity: equity,                   pnl: daily_pnl },
       ];
     }
 
     return [];   // nothing real yet — EquityChart handles empty gracefully
   })();
 
-  const pnlUp = p.daily_pnl >= 0;
+  const pnlUp = (p?.daily_pnl ?? 0) >= 0;
 
   return (
     <div className="space-y-6">
@@ -60,7 +62,7 @@ export function Dashboard() {
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard
           label="Portfolio Equity"
-          value={`$${p.equity.toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
+          value={`$${(p?.equity ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
           sub={`Total NAV · ${isLive ? "Live" : "Mock"}`}
           trend="neutral"
           icon={<DollarSign className="w-4 h-4" />}
@@ -68,23 +70,23 @@ export function Dashboard() {
         />
         <StatCard
           label="Daily P&L"
-          value={`${pnlUp ? "+" : ""}$${p.daily_pnl.toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
-          sub={`${pnlUp ? "+" : ""}${p.daily_pnl_pct.toFixed(2)}% today`}
+          value={`${pnlUp ? "+" : ""}$${(p?.daily_pnl ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
+          sub={`${pnlUp ? "+" : ""}${(p?.daily_pnl_pct ?? 0).toFixed(2)}% today`}
           trend={pnlUp ? "up" : "down"}
           icon={pnlUp ? <TrendingUp className="w-4 h-4 text-emerald-500" /> : <TrendingDown className="w-4 h-4 text-red-500" />}
         />
         <StatCard
           label="Cash"
-          value={`$${p.cash.toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
-          sub={`Buying power: $${(p.buying_power ?? p.cash).toLocaleString("en-US", { maximumFractionDigits: 0 })}`}
+          value={`$${(p?.cash ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
+          sub={`Buying power: $${(p?.buying_power ?? p?.cash ?? 0).toLocaleString("en-US", { maximumFractionDigits: 0 })}`}
           trend="neutral"
           icon={<Wallet className="w-4 h-4" />}
         />
         <StatCard
           label="Crypto Allocation"
-          value={`${(p.crypto_allocation_pct * 100).toFixed(1)}%`}
-          sub={`Cap: 30% — ${((0.30 - p.crypto_allocation_pct) * 100).toFixed(1)}% headroom`}
-          trend={p.crypto_allocation_pct > 0.27 ? "down" : "neutral"}
+          value={`${((p?.crypto_allocation_pct ?? 0) * 100).toFixed(1)}%`}
+          sub={`Cap: 30% — ${((0.30 - (p?.crypto_allocation_pct ?? 0)) * 100).toFixed(1)}% headroom`}
+          trend={(p?.crypto_allocation_pct ?? 0) > 0.27 ? "down" : "neutral"}
         />
       </div>
 
@@ -123,7 +125,7 @@ export function Dashboard() {
         <div className="space-y-4">
           <div className="glass rounded-2xl p-5">
             <h2 className="text-sm font-semibold mb-4">Allocation</h2>
-            <AllocationDonut positions={p.positions} equity={p.equity} cash={p.cash} />
+            <AllocationDonut positions={p?.positions ?? []} equity={p?.equity ?? 0} cash={p?.cash ?? 0} />
           </div>
           <div className="glass rounded-2xl p-5">
             <h2 className="text-sm font-semibold mb-3">Risk Controls</h2>
@@ -150,7 +152,7 @@ export function Dashboard() {
           <h2 className="text-sm font-semibold">Open Positions</h2>
           <LiveBadge live={isLive} />
         </div>
-        <PositionsTable positions={p.positions} />
+        <PositionsTable positions={p?.positions ?? []} />
       </div>
 
       {/* Recent signals */}

@@ -110,6 +110,54 @@ class AlpacaMarketData:
             ))
         return bars
 
+    def get_intraday_bars(self, symbol: str, hours: int = 48) -> list[Bar]:
+        """Fetch hourly OHLCV bars for the last N hours (for intraday charts)."""
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame
+        from alpaca.data.enums import DataFeed
+        from datetime import timedelta
+
+        end   = datetime.now(timezone.utc)
+        start = end - timedelta(hours=hours)
+        bars: list[Bar] = []
+
+        for feed in (DataFeed.SIP, DataFeed.IEX):
+            try:
+                req  = StockBarsRequest(
+                    symbol_or_symbols=symbol,
+                    timeframe=TimeFrame.Hour,
+                    start=start,
+                    end=end,
+                    feed=feed,
+                )
+                resp = self._client.get_stock_bars(req)
+                df: pd.DataFrame = resp.df
+                if not df.empty:
+                    break
+                df = pd.DataFrame()
+            except Exception as exc:
+                log.debug("Intraday feed %s failed for %s (%s)", feed, symbol, exc)
+                df = pd.DataFrame()
+
+        if df.empty:
+            return bars
+
+        if isinstance(df.index, pd.MultiIndex):
+            df = df.loc[symbol] if symbol in df.index.get_level_values(0) else df.droplevel(0)
+
+        for ts, row in df.iterrows():
+            bars.append(Bar(
+                symbol=symbol,
+                timestamp=ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts,
+                open=float(row["open"]),
+                high=float(row["high"]),
+                low=float(row["low"]),
+                close=float(row["close"]),
+                volume=float(row["volume"]),
+                asset_class="stock",
+            ))
+        return bars
+
     def get_latest_quote(self, symbol: str) -> Quote | None:
         from alpaca.data.requests import StockLatestQuoteRequest
         from alpaca.data.enums import DataFeed

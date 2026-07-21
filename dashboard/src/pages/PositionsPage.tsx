@@ -22,16 +22,16 @@ export function PositionsPage() {
       </div>
 
       <div className="glass rounded-2xl p-5">
-        <PositionsTable positions={portfolio.positions} />
+        <PositionsTable positions={portfolio?.positions ?? []} />
       </div>
 
       {/* Portfolio summary */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
-          { label: "Equity",        value: `$${portfolio.equity.toLocaleString("en-US", { minimumFractionDigits: 2 })}` },
-          { label: "Cash",          value: `$${portfolio.cash.toLocaleString("en-US", { minimumFractionDigits: 2 })}` },
-          { label: "Daily P&L",     value: `${portfolio.daily_pnl >= 0 ? "+" : ""}$${portfolio.daily_pnl.toLocaleString("en-US", { minimumFractionDigits: 2 })}` },
-          { label: "Crypto alloc.", value: `${(portfolio.crypto_allocation_pct * 100).toFixed(1)}%` },
+          { label: "Equity",        value: `$${(portfolio?.equity ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}` },
+          { label: "Cash",          value: `$${(portfolio?.cash ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}` },
+          { label: "Daily P&L",     value: `${(portfolio?.daily_pnl ?? 0) >= 0 ? "+" : ""}$${(portfolio?.daily_pnl ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}` },
+          { label: "Crypto alloc.", value: `${((portfolio?.crypto_allocation_pct ?? 0) * 100).toFixed(1)}%` },
         ].map(({ label, value }) => (
           <div key={label} className="glass rounded-xl p-3 text-center">
             <div className="text-[10px] text-slate-500 uppercase tracking-wider">{label}</div>

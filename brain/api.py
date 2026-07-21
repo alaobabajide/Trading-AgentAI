@@ -1154,6 +1154,81 @@ def get_indices():
     }
 
 
+@app.get("/bars/{symbol}")
+def get_bars(symbol: str, days: int = 60, asset_class: str = "stock"):
+    """Real OHLCV bars + per-bar indicators from Alpaca (stocks) or Binance (crypto).
+
+    Used by the dashboard Technical and Fundamental pages for live charting.
+    Indicators computed: RSI-14, MACD, Bollinger Bands (20), ATR-14.
+    """
+    sym = _validate_symbol(symbol)
+    if days < 1 or days > 730:
+        raise HTTPException(400, "days must be 1–730")
+
+    from config import get_settings
+    cfg = get_settings()
+
+    try:
+        import pandas as pd
+        import ta as _ta
+
+        if asset_class == "crypto":
+            from data.market_data import BinanceMarketData
+            md = BinanceMarketData(cfg.binance_api_key, cfg.binance_secret_key, cfg.binance_testnet)
+            snap = md.snapshot(sym, days=max(days, 210))
+        else:
+            from data.market_data import AlpacaMarketData
+            md = AlpacaMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)
+            snap = _get_market_snapshot(md, sym, max(days, 210))
+
+        if not snap.bars:
+            raise HTTPException(503, f"No bar data available for {sym}")
+
+        df = pd.DataFrame([
+            {
+                "time":   b.timestamp.strftime("%Y-%m-%d"),
+                "open":   b.open,
+                "high":   b.high,
+                "low":    b.low,
+                "close":  b.close,
+                "volume": b.volume,
+            }
+            for b in snap.bars
+        ])
+
+        if len(df) >= 14:
+            df["rsi"]         = _ta.momentum.RSIIndicator(df["close"], window=14).rsi()
+            _macd             = _ta.trend.MACD(df["close"])
+            df["macd"]        = _macd.macd()
+            df["macd_signal"] = _macd.macd_signal()
+            df["macd_hist"]   = _macd.macd_diff()
+            df["atr"]         = _ta.volatility.AverageTrueRange(
+                df["high"], df["low"], df["close"], window=14
+            ).average_true_range()
+        if len(df) >= 20:
+            _bb            = _ta.volatility.BollingerBands(df["close"], window=20, window_dev=2)
+            df["bb_upper"] = _bb.bollinger_hband()
+            df["bb_mid"]   = _bb.bollinger_mavg()
+            df["bb_lower"] = _bb.bollinger_lband()
+
+        df = df.where(pd.notna(df), other=None)
+        bars_out = df.tail(days).to_dict(orient="records")
+
+        current_price = (
+            snap.latest_quote.mid
+            if snap.latest_quote and snap.latest_quote.mid
+            else (snap.bars[-1].close if snap.bars else None)
+        )
+
+        return {"symbol": sym, "asset_class": asset_class, "bars": bars_out, "current_price": current_price}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("bars endpoint error for %s: %s", sym, exc)
+        raise HTTPException(503, "Market data temporarily unavailable")
+
+
 @app.get("/audit")
 def get_audit_log(limit: int = 50):
     """Return the last N trade audit log entries (newest first)."""
