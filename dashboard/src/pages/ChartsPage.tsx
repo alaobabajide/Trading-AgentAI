@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Search, X } from "lucide-react";
+import { ExternalLink, Search, X } from "lucide-react";
 import clsx from "clsx";
 import { TradingViewChart } from "../components/TradingViewChart";
 import { TradingViewTicker } from "../components/TradingViewTicker";
@@ -32,6 +32,99 @@ const GROUP_BADGE: Partial<Record<TvGroup, string>> = {
   Forex:   "FX",
   NGX:     "NGX",
 };
+
+function NgxChartFallback({ sym }: { sym: TvSymbol }) {
+  const tvUrl = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(sym.tv)}`;
+  const tvSymPage = `https://www.tradingview.com/symbols/${sym.tv.replace(":", "-")}/`;
+
+  return (
+    <div
+      className="glass rounded-2xl flex-1 min-h-0 flex flex-col items-center justify-center gap-6 p-10"
+      style={{ minHeight: 480 }}
+    >
+      {/* Stock identity */}
+      <div className="text-center">
+        <div className="text-3xl font-mono font-bold text-white mb-1 tracking-tight">{sym.label}</div>
+        <div className="text-slate-400 text-sm mb-3">{sym.description}</div>
+        <span className="text-xs font-semibold text-green-400 bg-green-500/10 border border-green-500/20 rounded-full px-3 py-1">
+          Nigerian Exchange Group · NGXGROUP
+        </span>
+      </div>
+
+      {/* Explanation */}
+      <div className="text-center max-w-md">
+        <p className="text-slate-400 text-sm leading-relaxed">
+          Live embedded charts for Nigerian Exchange (NGX) stocks require a TradingView data
+          subscription and are not available in the free embeddable widget.
+          Click below to open the full interactive chart on TradingView.
+        </p>
+      </div>
+
+      {/* Action links */}
+      <div className="flex flex-col sm:flex-row gap-3">
+        <a
+          href={tvUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2 bg-brand-500/20 border border-brand-500/40 text-brand-300 hover:bg-brand-500/30 rounded-xl px-5 py-3 font-semibold text-sm transition-all"
+        >
+          <ExternalLink className="w-4 h-4 shrink-0" />
+          Open Chart on TradingView
+        </a>
+        <a
+          href={tvSymPage}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2 bg-white/5 border border-white/10 text-slate-300 hover:bg-white/10 rounded-xl px-5 py-3 font-semibold text-sm transition-all"
+        >
+          <ExternalLink className="w-4 h-4 shrink-0" />
+          Symbol Overview
+        </a>
+      </div>
+
+      <p className="text-[10px] text-slate-700 font-mono">
+        Opens in a new tab · TradingView free account required
+      </p>
+    </div>
+  );
+}
+
+function NgxMiniCard({ sym, onClick }: { sym: TvSymbol; onClick: () => void }) {
+  const tvUrl = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(sym.tv)}`;
+
+  return (
+    <div className="flex flex-col h-full p-4">
+      <div className="flex items-center justify-between mb-2">
+        <span className="font-mono font-bold text-sm text-white">{sym.label}</span>
+        <span className="text-[9px] px-1.5 py-0.5 rounded uppercase font-semibold border text-green-400 bg-green-500/10 border-green-500/20">
+          NGX
+        </span>
+      </div>
+      <div className="text-[10px] text-slate-500 mb-3 leading-tight">{sym.description}</div>
+      <div className="flex-1 flex flex-col items-center justify-center gap-2">
+        <p className="text-[10px] text-slate-600 text-center">
+          Embedded chart unavailable for NGX stocks
+        </p>
+        <a
+          href={tvUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="flex items-center gap-1.5 text-[10px] text-brand-400 hover:text-brand-300 font-medium transition-colors"
+        >
+          <ExternalLink className="w-3 h-3" />
+          View on TradingView
+        </a>
+      </div>
+      <button
+        onClick={onClick}
+        className="mt-2 text-[10px] text-slate-600 hover:text-slate-400 transition-colors"
+      >
+        Open details →
+      </button>
+    </div>
+  );
+}
 
 export function ChartsPage() {
   const [active, setActive]     = useState<TvSymbol>(TV_SYMBOLS[0]);
@@ -160,23 +253,25 @@ export function ChartsPage() {
               <span className="text-xs text-slate-500 hidden sm:block truncate max-w-xs">{active.description}</span>
             </div>
             <div className="flex items-center gap-3">
-              {/* Interval picker */}
-              <div className="flex items-center gap-0.5 bg-surface-700 rounded-lg p-0.5 border border-white/5">
-                {INTERVALS.map((iv) => (
-                  <button
-                    key={iv.value}
-                    onClick={() => setInterval(iv.value)}
-                    className={clsx(
-                      "px-2.5 py-1 rounded-md text-[11px] font-mono font-medium transition-all",
-                      interval === iv.value
-                        ? "bg-brand-500/30 text-brand-300"
-                        : "text-slate-400 hover:text-slate-200",
-                    )}
-                  >
-                    {iv.label}
-                  </button>
-                ))}
-              </div>
+              {/* Interval picker — hidden for NGX (no embedded chart) */}
+              {active.group !== "NGX" && (
+                <div className="flex items-center gap-0.5 bg-surface-700 rounded-lg p-0.5 border border-white/5">
+                  {INTERVALS.map((iv) => (
+                    <button
+                      key={iv.value}
+                      onClick={() => setInterval(iv.value)}
+                      className={clsx(
+                        "px-2.5 py-1 rounded-md text-[11px] font-mono font-medium transition-all",
+                        interval === iv.value
+                          ? "bg-brand-500/30 text-brand-300"
+                          : "text-slate-400 hover:text-slate-200",
+                      )}
+                    >
+                      {iv.label}
+                    </button>
+                  ))}
+                </div>
+              )}
               {/* Grid toggle */}
               <button
                 onClick={() => setShowGrid((v) => !v)}
@@ -205,15 +300,21 @@ export function ChartsPage() {
                   )}
                   style={{ height: 200 }}
                 >
-                  <div className="px-4 pt-3 pb-1 flex items-center justify-between">
-                    <span className="font-mono font-semibold text-sm">{s.label}</span>
-                    <span className={clsx("text-[9px] px-1.5 py-0.5 rounded uppercase font-medium border", GROUP_COLORS[s.group])}>
-                      {s.group}
-                    </span>
-                  </div>
-                  <div style={{ height: 155 }}>
-                    <TradingViewMiniChart sym={s} />
-                  </div>
+                  {s.group === "NGX" ? (
+                    <NgxMiniCard sym={s} onClick={() => { setActive(s); setShowGrid(false); }} />
+                  ) : (
+                    <>
+                      <div className="px-4 pt-3 pb-1 flex items-center justify-between">
+                        <span className="font-mono font-semibold text-sm">{s.label}</span>
+                        <span className={clsx("text-[9px] px-1.5 py-0.5 rounded uppercase font-medium border", GROUP_COLORS[s.group])}>
+                          {s.group}
+                        </span>
+                      </div>
+                      <div style={{ height: 155 }}>
+                        <TradingViewMiniChart sym={s} />
+                      </div>
+                    </>
+                  )}
                 </div>
               ))}
             </div>
@@ -221,10 +322,13 @@ export function ChartsPage() {
             /* Full advanced chart */
             <div className="flex-1 min-h-0 p-6 flex flex-col gap-3">
               <div className="glass rounded-2xl overflow-hidden flex-1 min-h-0" style={{ minHeight: 480 }}>
-                <TradingViewChart symbol={active.tv} interval={interval} />
+                {active.group === "NGX"
+                  ? <NgxChartFallback sym={active} />
+                  : <TradingViewChart symbol={active.tv} interval={interval} />
+                }
               </div>
-              {/* Indicator legend */}
-              <div className="glass rounded-xl px-4 py-3 flex flex-wrap items-center gap-x-1 gap-y-2">
+              {/* Indicator legend — only shown when a TradingView chart is active */}
+              {active.group !== "NGX" && <div className="glass rounded-xl px-4 py-3 flex flex-wrap items-center gap-x-1 gap-y-2">
                 <span className="text-slate-500 font-semibold uppercase tracking-widest text-[10px] mr-3">Chart Key</span>
 
                 {/* BB */}
@@ -278,7 +382,7 @@ export function ChartsPage() {
                 </span>
 
                 <span className="ml-auto text-slate-600 text-[10px] italic">FIB &amp; TL: draw using the ✎ toolbar on the left of the chart</span>
-              </div>
+              </div>}
             </div>
           )}
         </div>

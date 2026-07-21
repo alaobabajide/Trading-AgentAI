@@ -641,7 +641,6 @@ export const TV_SYMBOLS: TvSymbol[] = [
   { tv: "NGXGROUP:HONYFLOUR",  label: "HONYFLOUR",  group: "NGX", description: "Honeywell Flour Mills" },
   { tv: "NGXGROUP:CAPHOTEL",   label: "CAPHOTEL",   group: "NGX", description: "Capital Hotel" },
   { tv: "NGXGROUP:LINKASSURE", label: "LINKASSURE", group: "NGX", description: "Linkage Assurance" },
-  { tv: "NGXGROUP:TRANSCOHOT", label: "TRANSCOHOT", group: "NGX", description: "Transcorp Hotels" },
   { tv: "NGXGROUP:CILEASING",  label: "CILEASING",  group: "NGX", description: "C&I Leasing" },
 ];
 
