@@ -1229,6 +1229,150 @@ def get_bars(symbol: str, days: int = 60, asset_class: str = "stock"):
         raise HTTPException(503, "Market data temporarily unavailable")
 
 
+_FUND_CACHE: dict[str, tuple[float, dict]] = {}
+_FUND_TTL = 3600  # 1 hour — fundamentals change slowly
+
+
+@app.get("/fundamentals/{symbol}")
+def get_fundamentals(symbol: str, asset_class: str = "stock"):
+    """Real fundamental data from Yahoo Finance: key metrics, analyst consensus,
+    quarterly earnings history. Cached 1 h per symbol to avoid hammering Yahoo.
+    """
+    sym = _validate_symbol(symbol)
+    cache_key = f"{sym}:{asset_class}"
+
+    import time as _time
+    cached = _FUND_CACHE.get(cache_key)
+    if cached and _time.time() - cached[0] < _FUND_TTL:
+        return cached[1]
+
+    try:
+        import yfinance as yf
+        import pandas as pd
+
+        yf_sym = sym.replace("USDT", "-USD") if asset_class == "crypto" else sym
+        ticker = yf.Ticker(yf_sym)
+        info = ticker.info or {}
+
+        def _sf(v, scale=1.0, decimals=2):
+            try:
+                return round(float(v or 0) * scale, decimals)
+            except Exception:
+                return 0.0
+
+        def _fmt_cap(v):
+            try:
+                v = float(v)
+                if v >= 1e12: return f"${v / 1e12:.2f}T"
+                if v >= 1e9:  return f"${v / 1e9:.2f}B"
+                if v >= 1e6:  return f"${v / 1e6:.2f}M"
+            except Exception:
+                pass
+            return "N/A"
+
+        # ── Analyst consensus ─────────────────────────────────────────────────
+        buy_ct = hold_ct = sell_ct = 0
+        try:
+            rs = ticker.recommendations_summary
+            if rs is not None and not rs.empty:
+                row = rs.iloc[0]
+                buy_ct  = int((row.get("strongBuy") or 0) + (row.get("buy") or 0))
+                hold_ct = int(row.get("hold") or 0)
+                sell_ct = int((row.get("sell") or 0) + (row.get("strongSell") or 0))
+        except Exception:
+            n    = int(info.get("numberOfAnalystOpinions") or 0)
+            mean = _sf(info.get("recommendationMean"))
+            if n and mean:
+                bf = max(0.0, (3 - mean) / 2)
+                sf = max(0.0, (mean - 3) / 2)
+                hf = max(0.0, 1 - bf - sf)
+                buy_ct  = round(n * bf)
+                sell_ct = round(n * sf)
+                hold_ct = n - buy_ct - sell_ct
+
+        mean_rec = _sf(info.get("recommendationMean"))
+        if mean_rec > 0:
+            if mean_rec <= 1.5:   rating = "Strong Buy"
+            elif mean_rec <= 2.5: rating = "Buy"
+            elif mean_rec <= 3.5: rating = "Hold"
+            else:                 rating = "Sell"
+        else:
+            rk = (info.get("recommendationKey") or "").lower()
+            if "strong" in rk and "buy" in rk: rating = "Strong Buy"
+            elif "buy"  in rk:                  rating = "Buy"
+            elif "hold" in rk or "neutral" in rk: rating = "Hold"
+            elif "sell" in rk:                  rating = "Sell"
+            else:                               rating = "N/A"
+
+        # ── Quarterly earnings (last 4 reported quarters) ─────────────────────
+        earnings = []
+        if asset_class != "crypto":
+            try:
+                stmt = ticker.quarterly_income_stmt
+                if stmt is not None and not stmt.empty:
+                    rev_row = eps_row = None
+                    for k in ("Total Revenue", "Operating Revenue"):
+                        if k in stmt.index:
+                            rev_row = stmt.loc[k]; break
+                    for k in ("Diluted EPS", "Basic EPS"):
+                        if k in stmt.index:
+                            eps_row = stmt.loc[k]; break
+
+                    cols = sorted(stmt.columns)[-4:]
+                    for col in cols:
+                        dt  = pd.Timestamp(col)
+                        qtr = f"Q{((dt.month - 1) // 3) + 1} '{str(dt.year)[-2:]}"
+                        rev = 0.0
+                        eps = 0.0
+                        if rev_row is not None and col in rev_row.index:
+                            v = rev_row[col]
+                            if pd.notna(v): rev = round(float(v) / 1e9, 2)
+                        if eps_row is not None and col in eps_row.index:
+                            v = eps_row[col]
+                            if pd.notna(v): eps = round(float(v), 2)
+                        earnings.append({
+                            "quarter": qtr,
+                            "eps_est": 0.0,
+                            "eps_actual": eps,
+                            "revenue_est": 0.0,
+                            "revenue_actual": rev,
+                        })
+            except Exception as e:
+                log.warning("earnings fetch failed for %s: %s", sym, e)
+
+        result = {
+            "symbol":             sym,
+            "asset_class":        asset_class,
+            "name":               info.get("longName") or info.get("shortName") or sym,
+            "market_cap":         _fmt_cap(info.get("marketCap")),
+            "pe":                 _sf(info.get("trailingPE"), decimals=1),
+            "forward_pe":         _sf(info.get("forwardPE"), decimals=1),
+            "eps":                _sf(info.get("trailingEps"), decimals=2),
+            "revenue_growth_yoy": _sf(info.get("revenueGrowth"), scale=100, decimals=1),
+            "gross_margin":       _sf(info.get("grossMargins"), scale=100, decimals=1),
+            "debt_to_equity":     _sf(info.get("debtToEquity"), decimals=2),
+            "roe":                _sf(info.get("returnOnEquity"), scale=100, decimals=1),
+            "beta":               _sf(info.get("beta"), decimals=2),
+            "week52_high":        _sf(info.get("fiftyTwoWeekHigh"), decimals=2),
+            "week52_low":         _sf(info.get("fiftyTwoWeekLow"), decimals=2),
+            "current_price":      _sf(info.get("currentPrice") or info.get("regularMarketPrice"), decimals=2),
+            "analyst_target":     _sf(info.get("targetMeanPrice"), decimals=2),
+            "analyst_rating":     rating,
+            "buy_count":          buy_ct,
+            "hold_count":         hold_ct,
+            "sell_count":         sell_ct,
+            "earnings":           earnings,
+        }
+        _FUND_CACHE[cache_key] = (_time.time(), result)
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("fundamentals error for %s: %s", sym, exc)
+        raise HTTPException(503, "Fundamental data temporarily unavailable")
+
+
 @app.get("/audit")
 def get_audit_log(limit: int = 50):
     """Return the last N trade audit log entries (newest first)."""
