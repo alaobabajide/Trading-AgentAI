@@ -2,7 +2,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Cell,
 } from "recharts";
-import type { Candle } from "../lib/marketMock";
+import type { Candle } from "./CandlestickChart";
 
 interface Props { candles: Candle[]; height?: number }
 

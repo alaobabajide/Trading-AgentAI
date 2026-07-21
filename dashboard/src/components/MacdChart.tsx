@@ -2,7 +2,7 @@ import {
   ComposedChart, Bar, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine,
 } from "recharts";
-import type { IndicatorPoint } from "../lib/marketMock";
+import type { IndicatorPoint } from "./PriceChart";
 import clsx from "clsx";
 
 interface Props { data: IndicatorPoint[]; height?: number }
