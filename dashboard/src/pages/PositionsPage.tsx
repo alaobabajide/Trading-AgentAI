@@ -1,10 +1,55 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { BarChart2, AlertCircle, Clock, RefreshCw } from "lucide-react";
 import { format } from "date-fns";
 import clsx from "clsx";
 import { PositionsTable } from "../components/PositionsTable";
 import { usePortfolio, useOrders } from "../lib/api";
 import type { AlpacaOrder } from "../lib/api";
+
+function usMarketStatus(): { open: boolean; nextOpen: string } {
+  return useMemo(() => {
+    const now = new Date();
+    // Convert to ET (UTC-4 in summer / UTC-5 in winter)
+    const etOffset = isDst(now) ? -4 : -5;
+    const etNow = new Date(now.getTime() + etOffset * 60 * 60 * 1000);
+    const etDay  = etNow.getUTCDay();   // 0=Sun, 6=Sat
+    const etHour = etNow.getUTCHours();
+    const etMin  = etNow.getUTCMinutes();
+    const etMins = etHour * 60 + etMin; // minutes since midnight ET
+
+    const marketOpen  = 9 * 60 + 30;   // 9:30 AM ET
+    const marketClose = 16 * 60;        // 4:00 PM ET
+
+    const isWeekday = etDay >= 1 && etDay <= 5;
+    const isInSession = isWeekday && etMins >= marketOpen && etMins < marketClose;
+
+    if (isInSession) return { open: true, nextOpen: "" };
+
+    // Calculate next open
+    let daysUntilOpen = 0;
+    if (!isWeekday || etMins >= marketClose) {
+      // Move to next weekday
+      const daysToAdd = etDay === 5 ? 3 : etDay === 6 ? 2 : 1;
+      daysUntilOpen = daysToAdd;
+    }
+    // daysUntilOpen === 0 means later today (before open)
+    const nextOpenET = new Date(etNow);
+    nextOpenET.setUTCDate(nextOpenET.getUTCDate() + daysUntilOpen);
+    nextOpenET.setUTCHours(9, 30, 0, 0);
+    const nextOpenUTC = new Date(nextOpenET.getTime() - etOffset * 60 * 60 * 1000);
+    const h = nextOpenUTC.getUTCHours().toString().padStart(2, "0");
+    const m = nextOpenUTC.getUTCMinutes().toString().padStart(2, "0");
+    const day = nextOpenUTC.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+    return { open: false, nextOpen: `${day} at ${h}:${m} UTC` };
+  }, []);
+}
+
+function isDst(d: Date): boolean {
+  // Approximate US DST: second Sunday in March → first Sunday in November
+  const jan = new Date(d.getFullYear(), 0, 1).getTimezoneOffset();
+  const jul = new Date(d.getFullYear(), 6, 1).getTimezoneOffset();
+  return d.getTimezoneOffset() < Math.max(jan, jul);
+}
 
 // ── Order status display helpers ─────────────────────────────────────────────
 
@@ -88,6 +133,7 @@ export function PositionsPage() {
   const { portfolio, apiState } = usePortfolio();
   const [showPendingOnly, setShowPendingOnly] = useState(false);
   const { orders, fetchError: ordersError, loading: ordersLoading } = useOrders(showPendingOnly ? "open" : "all");
+  const market = usMarketStatus();
 
   const portfolioError = portfolio?.fetch_error ?? null;
   const pendingOrders = orders.filter(
@@ -127,17 +173,43 @@ export function PositionsPage() {
         </div>
       )}
 
-      {/* Pending orders callout — shown when there are open orders but no filled positions */}
+      {/* Pending orders callout */}
       {hasPendingOrders && (portfolio?.positions ?? []).length === 0 && (
         <div className="glass rounded-2xl p-4 flex items-start gap-3 border border-amber-500/20 bg-amber-500/5">
           <Clock className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
-          <div>
-            <div className="text-sm font-semibold text-amber-400">Orders pending — waiting for fill</div>
-            <div className="text-xs text-slate-400 mt-0.5">
-              {pendingOrders.length} order(s) submitted to Alpaca are awaiting execution.
-              Positions will appear here once the market opens and orders are filled.
+          <div className="space-y-1 text-xs">
+            <div className="text-sm font-semibold text-amber-400">
+              {pendingOrders.length} order{pendingOrders.length > 1 ? "s" : ""} pending — queued at Alpaca
             </div>
+            {market.open ? (
+              <p className="text-slate-300">
+                US market is <span className="text-emerald-400 font-semibold">OPEN</span>.
+                Market orders should fill within seconds — refresh to see the latest status.
+              </p>
+            ) : (
+              <p className="text-slate-300">
+                US market is <span className="text-amber-400 font-semibold">CLOSED</span>.
+                Orders will execute automatically when the market opens:{" "}
+                <span className="font-mono text-white">{market.nextOpen}</span>
+                {" "}(9:30 AM ET · 2:30 PM Lagos time).
+              </p>
+            )}
+            <p className="text-slate-500">
+              Stop-loss and take-profit orders are GTC — they stay active across sessions until triggered or you cancel them.
+              Filled positions appear in the table above.
+            </p>
           </div>
+        </div>
+      )}
+
+      {/* Market hours info — shown any time when market is closed and there are no open positions */}
+      {!market.open && !hasPendingOrders && (portfolio?.positions ?? []).length === 0 && (
+        <div className="glass rounded-2xl p-3 flex items-center gap-3 border border-slate-700/40 bg-slate-800/20">
+          <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+          <p className="text-xs text-slate-500">
+            US market closed · Next session: <span className="text-slate-400 font-mono">{market.nextOpen}</span>
+            {" "}· Orders submitted now will fill at market open.
+          </p>
         </div>
       )}
 

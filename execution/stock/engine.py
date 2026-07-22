@@ -112,7 +112,7 @@ class StockExecutionEngine:
             symbol=signal.symbol,
             qty=sizing.shares,
             side=OrderSide.BUY,
-            time_in_force=TimeInForce.DAY,
+            time_in_force=TimeInForce.GTC,  # DAY would cancel stop/TP at 4 PM ET every day
             order_class="bracket",
             stop_loss=StopLossRequest(stop_price=sizing.stop_price),
             take_profit=TakeProfitRequest(limit_price=sizing.take_profit_price),
