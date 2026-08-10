@@ -18,9 +18,10 @@ class TradingSignal:
     # HITL tier — driven by vote count + deterministic regime, NOT LLM confidence
     tier: Literal["HOT", "WARM", "COLD"] = "WARM"
 
-    # Vote tally — Panel A (11 analysts) + Panel B (8 investor personas) = combined 19
+    # Vote tally — Panel A (15 analysts × 1.0) + Panel B (12 personas × preference weight)
+    # combined tally values are float due to weighted Panel B votes
     vote_tally: dict = field(default_factory=dict)       # combined {bullish: N, bearish: N, neutral: N}
-    votes_for_action: int = 0                             # combined count of agents that agree with action
+    votes_for_action: float = 0.0                        # weighted vote count agreeing with action
     regime_label: str = "UNKNOWN"                         # TRENDING_UP / TRENDING_DOWN / RANGING / HIGH_VOLATILITY
 
     # Dual-panel fields

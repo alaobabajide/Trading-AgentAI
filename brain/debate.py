@@ -126,14 +126,39 @@ _PANEL_B_VOTERS = frozenset({
     "soros", "druckenmiller", "simons", "templeton",
 })
 
+# ── Panel B preference weights per asset class ────────────────────────────────
+# Panel A analysts are always 1.0 — they are technical/quant domain-agnostic.
+# For Panel B, each persona's vote is scaled by how relevant their real-world
+# track record and philosophy is to the asset class being traded.
+# Weight > 1.0 → domain expert, amplified.  Weight < 1.0 → outside domain,
+# reduced.  Weight = 0.0 → excluded entirely (Bogle on crypto).
+# ETFs are received as asset_class="stock" by the backend, so only two keys:
+_PERSONA_WEIGHTS: dict[str, dict[str, float]] = {
+    #                            stock   crypto
+    "buffett":       {"stock": 1.5, "crypto": 0.1},  # legendary stock investor; "rat poison"
+    "munger":        {"stock": 1.5, "crypto": 0.1},  # "rat poison squared"
+    "lynch":         {"stock": 1.5, "crypto": 0.5},  # GARP stocks; crypto not his domain
+    "ackman":        {"stock": 1.2, "crypto": 0.3},  # activist stocks; minimal crypto conviction
+    "cohen":         {"stock": 1.0, "crypto": 1.2},  # pure momentum — works on any liquid asset
+    "dalio":         {"stock": 1.2, "crypto": 0.8},  # macro all-weather; small crypto as hedge
+    "wood":          {"stock": 1.0, "crypto": 1.8},  # strongest crypto/innovation conviction
+    "bogle":         {"stock": 1.0, "crypto": 0.0},  # passive index only; zero crypto
+    "soros":         {"stock": 1.0, "crypto": 1.5},  # reflexivity fits crypto boom/bust cycles
+    "druckenmiller": {"stock": 1.0, "crypto": 1.5},  # concentrated macro; publicly owns BTC
+    "simons":        {"stock": 1.0, "crypto": 1.3},  # pure quant; statistical patterns ideal for crypto
+    "templeton":     {"stock": 1.2, "crypto": 0.5},  # global contrarian value; stocks his domain
+}
+# Stock total Panel B weight: 14.1   Crypto total Panel B weight: 9.6
+# Total system weight (15 Panel A + Panel B): stock=29.1  crypto=24.6
+
 # ── yfinance TTL cache (30 min) — prevents rate-limiting with 40+ symbols ────
 _YF_CACHE: dict[str, tuple[float, dict]] = {}
 _YF_CACHE_TTL = 1800  # seconds
 
 
 def _count_votes(views: dict[str, str], voter_set: frozenset[str]) -> dict[str, int]:
-    """Count BULLISH / BEARISH / NEUTRAL votes for a given panel's voter set."""
-    tally = {"bullish": 0, "bearish": 0, "neutral": 0}
+    """Count BULLISH / BEARISH / NEUTRAL votes for Panel A (always weight = 1)."""
+    tally: dict[str, int] = {"bullish": 0, "bearish": 0, "neutral": 0}
     for key, view in views.items():
         if key not in voter_set:
             continue
@@ -145,6 +170,48 @@ def _count_votes(views: dict[str, str], voter_set: frozenset[str]) -> dict[str, 
         else:
             tally["neutral"] += 1
     return tally
+
+
+def _count_votes_weighted(
+    views: dict[str, str],
+    voter_set: frozenset[str],
+    asset_class: str,
+) -> dict[str, float]:
+    """
+    Weighted vote tally for Panel B personas.
+
+    Each persona's vote is multiplied by its asset-class preference weight from
+    _PERSONA_WEIGHTS.  A weight of 0.0 (Bogle on crypto) excludes the agent
+    entirely.  Panel A always uses _count_votes() with weight = 1.0.
+    """
+    tally: dict[str, float] = {"bullish": 0.0, "bearish": 0.0, "neutral": 0.0}
+    for key, view in views.items():
+        if key not in voter_set:
+            continue
+        weight = _PERSONA_WEIGHTS.get(key, {}).get(asset_class, 1.0)
+        if weight == 0.0:
+            continue  # excluded from this asset class entirely
+        direction = _parse_direction(view)
+        if direction == "BULLISH":
+            tally["bullish"] += weight
+        elif direction == "BEARISH":
+            tally["bearish"] += weight
+        else:
+            tally["neutral"] += weight
+    return tally
+
+
+def _total_b_weight(asset_class: str) -> float:
+    """Sum of all Panel B preference weights for the given asset class."""
+    return sum(
+        _PERSONA_WEIGHTS.get(p, {}).get(asset_class, 1.0)
+        for p in _PANEL_B_VOTERS
+    )
+
+
+def _total_system_weight(asset_class: str) -> float:
+    """Total weighted vote pool: Panel A (always 15 × 1.0) + weighted Panel B."""
+    return 15.0 + _total_b_weight(asset_class)
 
 
 def _dominant_direction(tally: dict[str, int]) -> str:
@@ -159,19 +226,23 @@ def _dominant_direction(tally: dict[str, int]) -> str:
 def _aggregate_dual_panel(
     panel_a: dict[str, str],
     panel_b: dict[str, str],
+    asset_class: str = "stock",
 ) -> tuple[dict, dict, dict, bool, str, bool]:
     """
-    Aggregate votes from both panels.
+    Aggregate votes from both panels with asset-class-weighted Panel B.
+
+    Panel A: all 15 analysts weighted = 1.0 (domain-agnostic technical specialists).
+    Panel B: each of the 12 investor personas weighted by _PERSONA_WEIGHTS[name][asset_class].
+             e.g. Buffett crypto=0.1, Wood crypto=1.8, Bogle crypto=0.0 (excluded).
+
+    b_abstaining threshold: proportional to total Panel B weight so the bar stays
+    at the same 83.3% (10/12) ratio regardless of asset class.
 
     Returns:
         a_votes, b_votes, combined_votes, panels_conflict, conflict_note, b_abstaining
-
-    panels_conflict: True when both panels are directional but in opposite directions.
-    b_abstaining:    True when Panel A is directional but ≥6/8 investors are neutral
-                     (investor panel refusing to confirm — downgrade to COLD).
     """
-    a_votes = _count_votes(panel_a, _PANEL_A_VOTERS)
-    b_votes = _count_votes(panel_b, _PANEL_B_VOTERS)
+    a_votes = _count_votes(panel_a, _PANEL_A_VOTERS)                             # int dict
+    b_votes = _count_votes_weighted(panel_b, _PANEL_B_VOTERS, asset_class)       # float dict
 
     combined = {
         "bullish": a_votes["bullish"] + b_votes["bullish"],
@@ -182,22 +253,28 @@ def _aggregate_dual_panel(
     a_dom = _dominant_direction(a_votes)
     b_dom = _dominant_direction(b_votes)
 
-    # Hard conflict: both panels directional but opposing
+    # Hard conflict: both panels directional but in opposing directions
     panels_conflict = (
         a_dom != b_dom
         and a_dom != "NEUTRAL"
         and b_dom != "NEUTRAL"
     )
-    # Soft conflict: analysts directional but near-unanimous investor abstention.
-    # Threshold = 10/12: Munger, Bogle, and Simons structurally default NEUTRAL,
-    # so requires near-unanimous (10+/12) to trigger abstain downgrade.
-    b_abstaining = b_votes["neutral"] >= 10 and a_dom != "NEUTRAL"
+
+    # Soft conflict: analysts directional but investors near-unanimously abstain.
+    # Threshold = 83.3% of total Panel B weight (same ratio as the original 10/12).
+    # On crypto, stock-specialist neutrals (Buffett 0.1, Munger 0.1, Bogle 0.0)
+    # barely contribute, so this only fires when the crypto-relevant personas
+    # (Wood, Soros, Druckenmiller, Simons, Cohen) are themselves neutral.
+    b_total_w  = _total_b_weight(asset_class)
+    b_abstain_threshold = (10.0 / 12.0) * b_total_w
+    b_abstaining = b_votes["neutral"] >= b_abstain_threshold and a_dom != "NEUTRAL"
 
     if panels_conflict:
         conflict_note = f"Panel conflict: analysts={a_dom}, investors={b_dom} — standing aside"
     elif b_abstaining:
         conflict_note = (
-            f"Investor panel unanimous abstention (8/8 neutral) "
+            f"Investor panel near-unanimous abstention "
+            f"(weighted neutral={b_votes['neutral']:.1f}/{b_total_w:.1f}) "
             f"while analysts={a_dom} — downgraded to COLD"
         )
     else:
@@ -1554,6 +1631,8 @@ def _paper_risk_manager(
     pos_pct = min(max_pos, cash_ratio * 0.90) if action == "BUY" else max_pos
     pos_pct = round(max(0.01, pos_pct), 4)
 
+    total_w = _total_system_weight(asset_class)
+
     if asset_class == "crypto":
         headroom = max(0.0, max_crypto - portfolio.crypto_allocation_pct)
         if headroom < 0.005 and action == "BUY":
@@ -1570,7 +1649,7 @@ def _paper_risk_manager(
             rationale = (
                 f"Paper mode rule-based risk. Equity=${equity:,.0f}, cash=${cash:,.0f} "
                 f"({cash_ratio*100:.1f}%). Crypto headroom {headroom*100:.1f}%. "
-                f"Consensus {votes}/19. Position={pos_pct*100:.1f}% NAV."
+                f"Weighted consensus {votes:.1f}/{total_w:.1f}. Position={pos_pct*100:.1f}% NAV."
             )
     elif action == "BUY" and cash < equity * 0.03:
         action    = "HOLD"
@@ -1583,7 +1662,7 @@ def _paper_risk_manager(
         votes     = vote_tally.get("bullish" if action == "BUY" else "bearish", 0)
         rationale = (
             f"Paper mode rule-based risk. Equity=${equity:,.0f}, cash=${cash:,.0f} "
-            f"({cash_ratio*100:.1f}%). Vote consensus {votes}/19. "
+            f"({cash_ratio*100:.1f}%). Weighted consensus {votes:.1f}/{total_w:.1f}. "
             f"Position sized at {pos_pct*100:.1f}% of equity."
         )
 
@@ -1593,7 +1672,7 @@ def _paper_risk_manager(
     votes = vote_tally.get(vote_key, 0)
     return json.dumps({
         "action":                 action,
-        "confidence":             round(votes / 27.0, 2),
+        "confidence":             round(float(votes) / total_w, 2),
         "rationale":              rationale,
         "suggested_position_pct": pos_pct,
         "stop_loss_pct":          stop_loss_pct,
@@ -2055,9 +2134,9 @@ class DebateOrchestrator:
         for role, view in {**analyst_views, **investor_views}.items():
             log.info("%s: %s", role.title(), view[:80])
 
-        # ── Dual-panel vote aggregation ───────────────────────────────────────
+        # ── Dual-panel vote aggregation (weighted by asset-class preference) ────
         panel_a_tally, panel_b_tally, combined_tally, panels_conflict, conflict_note, b_abstaining = (
-            _aggregate_dual_panel(analyst_views, investor_views)
+            _aggregate_dual_panel(analyst_views, investor_views, asset_class)
         )
         action           = _action_from_votes(combined_tally, panels_conflict=panels_conflict, threshold=11)
         regime_view      = analyst_views.get("regime", "")
@@ -2230,8 +2309,8 @@ class DebateOrchestrator:
         )
 
         log.info(
-            "Signal: %s %s tier=%s votes=%d/19 (A=%s B=%s) conflict=%s regime=%s fit=%s",
-            action, symbol, tier, votes_for_action,
+            "Signal: %s %s tier=%s votes=%.1f/%.1f (A=%s B=%s) conflict=%s regime=%s fit=%s",
+            action, symbol, tier, votes_for_action, _total_system_weight(asset_class),
             panel_a_tally, panel_b_tally, panels_conflict, regime_label, strategy_fit,
         )
         return signal
