@@ -1702,7 +1702,7 @@ def _compute_indicators(snapshot: MarketSnapshot) -> dict[str, Any]:
     Each paper-mode agent reads a distinct non-overlapping sub-set so votes are
     genuinely independent (asymmetric information lenses).
     """
-    if len(snapshot.bars) < 61:
+    if len(snapshot.bars) < 35:
         return {}
 
     closes  = pd.Series([b.close  for b in snapshot.bars], dtype=float)
@@ -1892,13 +1892,13 @@ class DebateOrchestrator:
         # Guard: refuse to run debate on empty/insufficient data — produces garbage signals
         if not indicators:
             log.warning(
-                "Insufficient bar data for %s (%d bars, need 61+) — returning HOLD/COLD",
+                "Insufficient bar data for %s (%d bars, need 35+) — returning HOLD/COLD",
                 symbol, len(market.bars),
             )
             return TradingSignal(
                 symbol=symbol, asset_class=asset_class,
                 action="HOLD", confidence=0.0,
-                rationale=f"Insufficient data: {len(market.bars)} bars (61+ required for indicator computation)",
+                rationale=f"Insufficient data: {len(market.bars)} bars (35+ required for indicator computation)",
                 tier="COLD",
             )
 
