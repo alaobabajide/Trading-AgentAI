@@ -309,14 +309,14 @@ def _build_services(cfg):
     # Heavy imports done here (inside a request handler) so a bad import never
     # prevents the health endpoint from starting.
     from config import get_settings  # noqa: F401 (already passed as cfg)
-    from data.market_data import AlpacaMarketData, BinanceMarketData
+    from data.market_data import AlpacaMarketData, AlpacaCryptoMarketData
     from data.sentiment import SentimentFetcher
     from data.onchain import OnChainFetcher
     from data.portfolio import PortfolioFetcher
     from brain.debate import DebateOrchestrator
 
-    alpaca = AlpacaMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)
-    binance = BinanceMarketData(cfg.binance_api_key, cfg.binance_secret_key, cfg.binance_testnet)
+    alpaca        = AlpacaMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)
+    alpaca_crypto = AlpacaCryptoMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)
     sentiment = SentimentFetcher()
     onchain = OnChainFetcher(eth_rpc_url=cfg.eth_rpc_url)
     portfolio = PortfolioFetcher(
@@ -333,7 +333,7 @@ def _build_services(cfg):
         stop_loss_pct=eff["stop_loss_pct"],
         take_profit_pct=eff["take_profit_pct"],
     )
-    return alpaca, binance, sentiment, onchain, portfolio, orchestrator
+    return alpaca, alpaca_crypto, sentiment, onchain, portfolio, orchestrator
 
 
 def _get_services(cfg):
@@ -504,7 +504,7 @@ def generate_signal(req: SignalRequest):
             detail="ANTHROPIC_API_KEY is not configured. Set it in Railway env vars, or enable paper_mode for rule-based signals.",
         )
     try:
-        alpaca, binance, sentiment_fetcher, onchain_fetcher, portfolio_fetcher, orchestrator = (
+        alpaca, alpaca_crypto, sentiment_fetcher, onchain_fetcher, portfolio_fetcher, orchestrator = (
             _get_services(cfg)
         )
     except Exception as exc:
@@ -517,7 +517,7 @@ def generate_signal(req: SignalRequest):
             market = _get_market_snapshot(alpaca, req.symbol, req.lookback_days)
             onchain_snap = None
         else:
-            market = _get_market_snapshot(binance, req.symbol, req.lookback_days)
+            market = _get_market_snapshot(alpaca_crypto, req.symbol, req.lookback_days)
             onchain_snap = onchain_fetcher.snapshot()
     except Exception as exc:
         log.error("Market data fetch failed: %s", exc, exc_info=True)
@@ -723,25 +723,18 @@ def execute_trade(req: ExecuteRequest):
                 "target_pct":      tp_pct,
             }
 
-        else:  # crypto — Binance
-            from alpaca.trading.client import TradingClient
+        else:  # crypto — Alpaca (same API key, no geo-blocks)
             from execution.crypto.engine import CryptoExecutionEngine
-
-            # Get portfolio equity from Alpaca so crypto cap is evaluated correctly
-            is_paper = "paper" in cfg.alpaca_base_url.lower()
-            trading_client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
-            acct           = trading_client.get_account()
-            portfolio_equity = float(acct.equity)
 
             eff = _effective_config(cfg)
             engine = CryptoExecutionEngine(
-                binance_api_key=cfg.binance_api_key,
-                binance_secret_key=cfg.binance_secret_key,
-                testnet=cfg.binance_testnet,
+                alpaca_api_key=cfg.alpaca_api_key,
+                alpaca_secret_key=cfg.alpaca_secret_key,
+                alpaca_base_url=cfg.alpaca_base_url,
                 max_position_pct=eff["max_position_pct"],
                 max_crypto_allocation_pct=eff["max_crypto_allocation_pct"],
             )
-            result = engine.execute(signal, portfolio_equity=portfolio_equity)
+            result = engine.execute(signal)
 
             if result is None:
                 raise HTTPException(
@@ -1208,7 +1201,7 @@ def get_indices():
 
 @app.get("/bars/{symbol}")
 def get_bars(symbol: str, days: int = 60, asset_class: str = "stock"):
-    """Real OHLCV bars + per-bar indicators from Alpaca (stocks) or Binance (crypto).
+    """Real OHLCV bars + per-bar indicators from Alpaca (stocks and crypto).
 
     Used by the dashboard Technical and Fundamental pages for live charting.
     Indicators computed: RSI-14, MACD, Bollinger Bands (20), ATR-14.
@@ -1225,9 +1218,9 @@ def get_bars(symbol: str, days: int = 60, asset_class: str = "stock"):
         import ta as _ta
 
         if asset_class == "crypto":
-            from data.market_data import BinanceMarketData
-            md = BinanceMarketData(cfg.binance_api_key, cfg.binance_secret_key, cfg.binance_testnet)
-            snap = md.snapshot(sym, days=max(days, 210))
+            from data.market_data import AlpacaCryptoMarketData
+            md = AlpacaCryptoMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)
+            snap = _get_market_snapshot(md, sym, max(days, 210))
         else:
             from data.market_data import AlpacaMarketData
             md = AlpacaMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)

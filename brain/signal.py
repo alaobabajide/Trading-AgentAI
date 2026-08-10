@@ -18,7 +18,7 @@ class TradingSignal:
     # HITL tier — driven by vote count + deterministic regime, NOT LLM confidence
     tier: Literal["HOT", "WARM", "COLD"] = "WARM"
 
-    # Vote tally — Panel A (7 analysts) + Panel B (8 investor personas) + combined 15
+    # Vote tally — Panel A (11 analysts) + Panel B (8 investor personas) = combined 19
     vote_tally: dict = field(default_factory=dict)       # combined {bullish: N, bearish: N, neutral: N}
     votes_for_action: int = 0                             # combined count of agents that agree with action
     regime_label: str = "UNKNOWN"                         # TRENDING_UP / TRENDING_DOWN / RANGING / HIGH_VOLATILITY
@@ -62,6 +62,24 @@ class TradingSignal:
     wood_view: str = ""
     bogle_view: str = ""
 
+    # Per-agent opinions — Panel A Wave 2 specialists
+    breakout_view: str = ""
+    trend_strength_view: str = ""
+    sector_rotation_view: str = ""
+    earnings_event_view: str = ""
+
+    # Per-agent opinions — Panel A Wave 3 specialists (27-agent pool)
+    momentum_scorer_view: str = ""
+    supply_demand_view: str = ""
+    volume_analyst_view: str = ""
+    risk_reward_view: str = ""
+
+    # Per-agent opinions — Panel B Wave 3 investor personas (27-agent pool)
+    soros_view: str = ""
+    druckenmiller_view: str = ""
+    simons_view: str = ""
+    templeton_view: str = ""
+
     @property
     def is_actionable(self) -> bool:
         return self.action != "HOLD"
@@ -91,24 +109,39 @@ class TradingSignal:
             "panels_conflict":  self.panels_conflict,
             "conflict_note":    self.conflict_note,
             "agent_views": {
-                # Panel A — original analyst agents
-                "fundamental":  self.fundamental_view,
-                "technical":    self.technical_view,
-                "sentiment":    self.sentiment_view,
-                "macro":        self.macro_view,
-                "quant":        self.quant_view,
-                "options_flow": self.options_flow_view,
-                "regime":       self.regime_view,
-                "strategy":     self.strategy_view,
-                "risk":         self.risk_view,
-                # Panel B — investor personas
-                "buffett":      self.buffett_view,
-                "munger":       self.munger_view,
-                "lynch":        self.lynch_view,
-                "ackman":       self.ackman_view,
-                "cohen":        self.cohen_view,
-                "dalio":        self.dalio_view,
-                "wood":         self.wood_view,
-                "bogle":        self.bogle_view,
+                # Panel A — original 7 analyst agents
+                "fundamental":      self.fundamental_view,
+                "technical":        self.technical_view,
+                "sentiment":        self.sentiment_view,
+                "macro":            self.macro_view,
+                "quant":            self.quant_view,
+                "options_flow":     self.options_flow_view,
+                "regime":           self.regime_view,
+                "strategy":         self.strategy_view,
+                "risk":             self.risk_view,
+                # Panel A — Wave 2 specialists
+                "breakout":         self.breakout_view,
+                "trend_strength":   self.trend_strength_view,
+                "sector_rotation":  self.sector_rotation_view,
+                "earnings_event":   self.earnings_event_view,
+                # Panel A — Wave 3 specialists
+                "momentum_scorer":  self.momentum_scorer_view,
+                "supply_demand":    self.supply_demand_view,
+                "volume_analyst":   self.volume_analyst_view,
+                "risk_reward":      self.risk_reward_view,
+                # Panel B — original 8 investor personas
+                "buffett":          self.buffett_view,
+                "munger":           self.munger_view,
+                "lynch":            self.lynch_view,
+                "ackman":           self.ackman_view,
+                "cohen":            self.cohen_view,
+                "dalio":            self.dalio_view,
+                "wood":             self.wood_view,
+                "bogle":            self.bogle_view,
+                # Panel B — Wave 3 investor personas
+                "soros":            self.soros_view,
+                "druckenmiller":    self.druckenmiller_view,
+                "simons":           self.simons_view,
+                "templeton":        self.templeton_view,
             },
         }

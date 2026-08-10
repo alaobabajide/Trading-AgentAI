@@ -1,8 +1,8 @@
 """Layer 1 — Portfolio state.
 
-Aggregates positions, equity, and P&L from Alpaca (stocks)
-and Binance (crypto) into a single PortfolioState object used
-by the Brain and Risk layers.
+Aggregates positions, equity, and P&L from Alpaca (stocks and crypto)
+into a single PortfolioState object used by the Brain and Risk layers.
+Crypto positions are detected by symbol suffix (BTCUSD, ETHUSD, etc.).
 """
 from __future__ import annotations
 
@@ -51,16 +51,15 @@ class PortfolioFetcher:
         alpaca_api_key: str,
         alpaca_secret_key: str,
         alpaca_base_url: str,
-        binance_api_key: str,
-        binance_secret_key: str,
+        binance_api_key: str = "",
+        binance_secret_key: str = "",
         binance_testnet: bool = True,
     ) -> None:
         self._alpaca_key = alpaca_api_key
         self._alpaca_secret = alpaca_secret_key
         self._alpaca_url = alpaca_base_url
-        self._binance_key = binance_api_key
-        self._binance_secret = binance_secret_key
-        self._binance_testnet = binance_testnet
+        # binance_* params kept for backward-compat with existing callers but are unused
+        _ = binance_api_key, binance_secret_key, binance_testnet
 
     # ── Alpaca ────────────────────────────────────────────────────────────────
 
@@ -86,9 +85,12 @@ class PortfolioFetcher:
             current = float(p.current_price)
             mv = float(p.market_value)
             upnl = float(p.unrealized_pl)
+            sym = str(p.symbol)
+            # Alpaca crypto symbols end in USD (BTCUSD, ETHUSD, SOLUSD…)
+            is_crypto = sym.endswith("USD") and len(sym) > 3 and not sym.startswith("USD")
             positions.append(Position(
-                symbol=p.symbol,
-                asset_class="stock",
+                symbol=sym,
+                asset_class="crypto" if is_crypto else "stock",
                 qty=qty,
                 avg_entry_price=avg_price,
                 current_price=current,
@@ -98,62 +100,20 @@ class PortfolioFetcher:
             ))
         return positions, equity, cash, buying_power, daily_pnl
 
-    # ── Binance ───────────────────────────────────────────────────────────────
-
-    def _binance_positions(self) -> list[Position]:
-        from binance.client import Client
-
-        client = Client(self._binance_key, self._binance_secret, testnet=self._binance_testnet)
-        balances = client.get_account()["balances"]
-        prices = {t["symbol"]: float(t["price"]) for t in client.get_all_tickers()}
-
-        positions: list[Position] = []
-        for bal in balances:
-            free = float(bal["free"])
-            locked = float(bal["locked"])
-            total = free + locked
-            if total < 1e-8:
-                continue
-            asset = bal["asset"]
-            if asset == "USDT":
-                continue
-            pair = f"{asset}USDT"
-            price = prices.get(pair, 0.0)
-            if price == 0:
-                continue
-            mv = total * price
-            positions.append(Position(
-                symbol=pair,
-                asset_class="crypto",
-                qty=total,
-                avg_entry_price=price,   # Binance spot doesn't expose avg cost
-                current_price=price,
-                market_value=mv,
-                unrealized_pnl=0.0,
-                unrealized_pnl_pct=0.0,
-            ))
-        return positions
-
     # ── Unified snapshot ──────────────────────────────────────────────────────
 
     def snapshot(self) -> PortfolioState:
-        stock_positions, equity, cash, buying_power, daily_pnl = [], 0.0, 0.0, 0.0, 0.0
-        crypto_positions: list[Position] = []
+        all_positions, equity, cash, buying_power, daily_pnl = [], 0.0, 0.0, 0.0, 0.0
 
         if self._alpaca_key:
             try:
-                stock_positions, equity, cash, buying_power, daily_pnl = self._alpaca_positions()
+                all_positions, equity, cash, buying_power, daily_pnl = self._alpaca_positions()
             except Exception as exc:
                 log.error("Alpaca portfolio fetch failed: %s", exc)
 
-        if self._binance_key:
-            try:
-                crypto_positions = self._binance_positions()
-            except Exception as exc:
-                log.error("Binance portfolio fetch failed: %s", exc)
-
-        all_positions = stock_positions + crypto_positions
-        crypto_mv = sum(p.market_value for p in crypto_positions)
+        # Crypto positions now live on Alpaca (asset_class="crypto" detected by symbol suffix).
+        # Binance fetch is skipped — Railway's US IP blocks Binance regardless.
+        crypto_mv = sum(p.market_value for p in all_positions if p.asset_class == "crypto")
         crypto_pct = crypto_mv / max(equity, 1)
 
         return PortfolioState(
@@ -166,3 +126,5 @@ class PortfolioFetcher:
             daily_pnl_pct=daily_pnl / max(equity - daily_pnl, 1) * 100,
             crypto_allocation_pct=crypto_pct,
         )
+
+

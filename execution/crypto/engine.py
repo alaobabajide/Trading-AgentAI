@@ -1,10 +1,10 @@
-"""Crypto execution engine — Hummingbot-style adapter + Binance.
+"""Crypto execution engine — Alpaca trading API.
 
 Architecture:
   • Receives a TradingSignal (asset_class = "crypto").
-  • Enforces the global 30 % crypto cap.
-  • Submits market + OCO (one-cancels-other) orders on Binance.
-  • Supports Binance testnet and 50+ exchanges via ccxt fallback.
+  • Enforces the global 30 % crypto cap using Alpaca portfolio.
+  • Submits market orders via Alpaca (same API key as stocks — no Binance geo-block).
+  • Symbol format: BTCUSD, ETHUSD, SOLUSD, AVAXUSD (no slash in trading API).
 """
 from __future__ import annotations
 
@@ -33,220 +33,147 @@ class CryptoOrderResult:
 
 
 class CryptoExecutionEngine:
-    """
-    Thin execution layer that wraps Binance (primary) and ccxt (fallback).
-
-    Hummingbot's strategy runner is embedded as an external process;
-    this class handles signal → order routing.
-    """
+    """Crypto execution via Alpaca — same account, same API key, no geo-restrictions."""
 
     def __init__(
         self,
-        binance_api_key: str,
-        binance_secret_key: str,
-        testnet: bool = True,
+        alpaca_api_key: str,
+        alpaca_secret_key: str,
+        alpaca_base_url: str = "https://paper-api.alpaca.markets",
         max_position_pct: float = 0.05,
         max_crypto_allocation_pct: float = 0.30,
+        # Legacy Binance kwargs accepted but ignored — kept for callers that pass them
+        binance_api_key: str = "",
+        binance_secret_key: str = "",
+        testnet: bool = True,
     ) -> None:
-        self._key = binance_api_key
-        self._secret = binance_secret_key
-        self._testnet = testnet
-        self._max_pos = max_position_pct
-        self._max_crypto_pct = max_crypto_allocation_pct
+        from alpaca.trading.client import TradingClient
+        is_paper = "paper" in alpaca_base_url.lower()
+        self._trading      = TradingClient(alpaca_api_key, alpaca_secret_key, paper=is_paper)
+        self._max_pos      = max_position_pct
+        self._max_crypto   = max_crypto_allocation_pct
+        self._is_paper     = is_paper
 
-    def _client(self):
-        from binance.client import Client
-        return Client(self._key, self._secret, testnet=self._testnet)
+    def _get_account(self):
+        return self._trading.get_account()
 
-    def _get_account_usdt(self, client) -> float:
-        """Returns free USDT balance."""
-        balances = client.get_account()["balances"]
-        for b in balances:
-            if b["asset"] == "USDT":
-                return float(b["free"])
-        return 0.0
-
-    def _get_position_qty(self, client, symbol: str) -> float:
-        """Returns free balance of the base asset for a symbol (e.g. BTC for BTCUSDT)."""
-        # Strip USDT suffix to get base asset
-        base = symbol.replace("USDT", "").replace("BUSD", "")
-        balances = client.get_account()["balances"]
-        for b in balances:
-            if b["asset"] == base:
-                return float(b["free"])
-        return 0.0
-
-    def _check_crypto_cap(self, client, portfolio_equity: float) -> bool:
-        """Returns True if more crypto can be bought (cap not reached)."""
+    def _get_position_qty(self, symbol: str) -> float:
         try:
-            balances = client.get_account()["balances"]
-            prices = {t["symbol"]: float(t["price"]) for t in client.get_all_tickers()}
-        except Exception as exc:
-            log.warning("Could not fetch Binance tickers for cap check: %s — allowing BUY", exc)
-            return True
-        crypto_usd = 0.0
-        for b in balances:
-            asset = b["asset"]
-            if asset in ("USDT", "BUSD"):
-                continue
-            qty = float(b["free"]) + float(b["locked"])
-            if qty < 1e-8:
-                continue
-            pair = f"{asset}USDT"
-            price = prices.get(pair, 0.0)
-            crypto_usd += qty * price
+            positions = self._trading.get_all_positions()
+            for p in positions:
+                if p.symbol == symbol:
+                    return float(p.qty or 0)
+        except Exception:
+            pass
+        return 0.0
 
-        crypto_pct = crypto_usd / max(portfolio_equity, 1)
-        if crypto_pct >= self._max_crypto_pct:
-            log.warning(
-                "Global crypto cap reached (%.1f%% >= %.1f%%) — blocking BUY",
-                crypto_pct * 100, self._max_crypto_pct * 100,
-            )
-            return False
-        return True
+    def _check_crypto_cap(self, equity: float) -> bool:
+        """Return True if more crypto can be allocated (cap not reached)."""
+        try:
+            positions = self._trading.get_all_positions()
+            crypto_value = 0.0
+            for p in positions:
+                sym = p.symbol or ""
+                # Alpaca crypto symbols end in USD (BTCUSD, ETHUSD, etc.)
+                if sym.endswith("USD") and len(sym) > 3:
+                    crypto_value += float(p.market_value or 0)
+            crypto_pct = crypto_value / max(equity, 1)
+            if crypto_pct >= self._max_crypto:
+                log.warning(
+                    "Crypto cap reached (%.1f%% >= %.1f%%) — blocking BUY",
+                    crypto_pct * 100, self._max_crypto * 100,
+                )
+                return False
+            return True
+        except Exception as exc:
+            log.warning("Could not check crypto cap: %s — allowing BUY", exc)
+            return True
 
     def execute(
         self,
         signal: TradingSignal,
         portfolio_equity: float = 100_000.0,
     ) -> CryptoOrderResult | None:
+        from alpaca.trading.requests import MarketOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce
+
         if signal.action == "HOLD":
             log.info("HOLD signal for %s — no order submitted", signal.symbol)
             return None
 
-        client = self._client()
-
-        # Current price
         try:
-            ticker = client.get_symbol_ticker(symbol=signal.symbol)
-            current_price = float(ticker["price"])
+            acct   = self._get_account()
+            cash   = float(acct.cash or 0)
+            equity = float(acct.equity or portfolio_equity)
         except Exception as exc:
-            log.error("Could not fetch price for %s: %s", signal.symbol, exc)
-            return None
-        if current_price <= 0:
-            log.error("Invalid price for %s", signal.symbol)
+            log.error("Could not fetch Alpaca account for crypto execution: %s", exc)
             return None
 
-        stop_price = round(current_price * (1 - signal.stop_loss_pct), 8)
-        take_profit_price = round(current_price * (1 + signal.take_profit_pct), 8)
+        exchange_label = "alpaca_paper_crypto" if self._is_paper else "alpaca_live_crypto"
 
         if signal.action == "SELL":
-            # Close actual position — qty from real Binance holdings, not USDT balance
-            qty = self._get_position_qty(client, signal.symbol)
+            qty = self._get_position_qty(signal.symbol)
             if qty <= 0:
-                log.info("No open position for %s — SELL skipped", signal.symbol)
+                log.info("No open crypto position for %s — SELL skipped", signal.symbol)
                 return None
             try:
-                order = client.order_market_sell(symbol=signal.symbol, quantity=round(qty, 6))
+                order = self._trading.close_position(signal.symbol)
+                log.info("Crypto SELL: %s qty=%.6f id=%s", signal.symbol, qty, order.id)
+                return CryptoOrderResult(
+                    symbol=signal.symbol,
+                    order_id=str(order.id),
+                    action="SELL",
+                    qty=qty,
+                    submitted_price=float(getattr(order, "filled_avg_price", 0) or 0),
+                    stop_price=0.0,
+                    take_profit_price=0.0,
+                    exchange=exchange_label,
+                    timestamp=datetime.now(timezone.utc),
+                    raw=order,
+                )
             except Exception as exc:
                 log.error("Crypto SELL failed for %s: %s", signal.symbol, exc)
                 return None
-            order_id = str(order.get("orderId", "unknown"))
-            log.info("Crypto SELL: %s qty=%.6f price=%.6f id=%s", signal.symbol, qty, current_price, order_id)
-            return CryptoOrderResult(
-                symbol=signal.symbol, order_id=order_id, action="SELL",
-                qty=qty, submitted_price=current_price,
-                stop_price=0.0, take_profit_price=0.0,
-                exchange="binance_testnet" if self._testnet else "binance",
-                timestamp=datetime.now(timezone.utc), raw=order,
-            )
 
         # BUY path
-        if not self._check_crypto_cap(client, portfolio_equity):
+        if not self._check_crypto_cap(equity):
             return None
 
-        usdt_balance = self._get_account_usdt(client)
-        max_notional = min(
-            portfolio_equity * signal.suggested_position_pct,
-            portfolio_equity * self._max_pos,
-            usdt_balance * 0.99,  # keep 1% buffer
+        notional = min(
+            equity * signal.suggested_position_pct,
+            equity * self._max_pos,
+            cash * 0.99,
         )
-        qty = round(max_notional / current_price, 6)
-        if qty <= 0:
-            log.warning("Computed qty=0 for %s (usdt=%.2f) — skipping BUY", signal.symbol, usdt_balance)
+        if notional < 1.0:
+            log.warning("Notional too small for %s (%.2f) — skipping BUY", signal.symbol, notional)
             return None
 
         try:
-            if signal.action == "BUY":
-                order = client.order_market_buy(symbol=signal.symbol, quantity=qty)
-                # Place OCO sell (stop + limit)
-                client.create_oco_order(
-                    symbol=signal.symbol,
-                    side="SELL",
-                    quantity=qty,
-                    price=str(take_profit_price),
-                    stopPrice=str(stop_price),
-                    stopLimitPrice=str(round(stop_price * 0.995, 8)),
-                    stopLimitTimeInForce="GTC",
-                )
-
-            order_id = str(order.get("orderId", "unknown"))
+            order_req = MarketOrderRequest(
+                symbol=signal.symbol,
+                notional=round(notional, 2),
+                side=OrderSide.BUY,
+                time_in_force=TimeInForce.GTC,
+            )
+            order = self._trading.submit_order(order_req)
+            qty   = float(getattr(order, "qty", 0) or 0)
+            price = float(getattr(order, "filled_avg_price", 0) or 0)
             log.info(
-                "Crypto order: %s %s qty=%.6f price=%.6f stop=%.6f tp=%.6f id=%s",
-                signal.action, signal.symbol, qty,
-                current_price, stop_price, take_profit_price, order_id,
+                "Crypto BUY: %s notional=%.2f qty=%.6f id=%s",
+                signal.symbol, notional, qty, order.id,
             )
             return CryptoOrderResult(
                 symbol=signal.symbol,
-                order_id=order_id,
-                action=signal.action,
+                order_id=str(order.id),
+                action="BUY",
                 qty=qty,
-                submitted_price=current_price,
-                stop_price=stop_price,
-                take_profit_price=take_profit_price,
-                exchange="binance_testnet" if self._testnet else "binance",
+                submitted_price=price,
+                stop_price=0.0,
+                take_profit_price=0.0,
+                exchange=exchange_label,
                 timestamp=datetime.now(timezone.utc),
                 raw=order,
             )
         except Exception as exc:
-            log.error("Crypto order failed for %s: %s", signal.symbol, exc)
+            log.error("Crypto BUY failed for %s: %s", signal.symbol, exc)
             return None
-
-    # ── ccxt multi-exchange fallback ──────────────────────────────────────────
-
-    def execute_via_ccxt(
-        self,
-        exchange_id: str,
-        signal: TradingSignal,
-        portfolio_equity: float = 100_000.0,
-    ) -> CryptoOrderResult | None:
-        """Fallback execution via ccxt — supports 50+ exchanges."""
-        try:
-            import ccxt
-        except ImportError:
-            log.error("ccxt not installed — pip install ccxt")
-            return None
-
-        exchange_cls = getattr(ccxt, exchange_id, None)
-        if exchange_cls is None:
-            log.error("Unknown ccxt exchange: %s", exchange_id)
-            return None
-
-        exchange = exchange_cls({
-            "apiKey": self._key,
-            "secret": self._secret,
-            "options": {"defaultType": "spot"},
-        })
-        if self._testnet and hasattr(exchange, "set_sandbox_mode"):
-            exchange.set_sandbox_mode(True)
-
-        pair = f"{signal.symbol[:3]}/{signal.symbol[3:]}"  # BTCUSDT → BTC/USDT
-        ticker = exchange.fetch_ticker(pair)
-        current_price = ticker["last"]
-        max_notional = portfolio_equity * min(signal.suggested_position_pct, self._max_pos)
-        amount = round(max_notional / current_price, 6)
-
-        side = "buy" if signal.action == "BUY" else "sell"
-        order = exchange.create_market_order(pair, side, amount)
-        return CryptoOrderResult(
-            symbol=signal.symbol,
-            order_id=str(order["id"]),
-            action=signal.action,
-            qty=amount,
-            submitted_price=current_price,
-            stop_price=round(current_price * (1 - signal.stop_loss_pct), 8),
-            take_profit_price=round(current_price * (1 + signal.take_profit_pct), 8),
-            exchange=exchange_id,
-            timestamp=datetime.now(timezone.utc),
-            raw=order,
-        )

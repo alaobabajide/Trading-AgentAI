@@ -29,7 +29,7 @@ class BaseAnalyst:
         try:
             response = self._client.messages.create(
                 model=self.model,
-                max_tokens=512,
+                max_tokens=1024,
                 system=self.system_prompt,
                 messages=[{"role": "user", "content": user_msg}],
             )

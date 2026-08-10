@@ -247,3 +247,102 @@ class BinanceMarketData:
             bars=self.get_bars(symbol, days),
             latest_quote=self.get_latest_quote(symbol),
         )
+
+
+# ── Alpaca crypto data (replaces Binance — Railway-compatible, no geo-blocks) ──
+
+class AlpacaCryptoMarketData:
+    """Wraps Alpaca's CryptoHistoricalDataClient — no geo-blocks, same API key as stocks."""
+
+    def __init__(self, api_key: str = "", secret_key: str = "") -> None:
+        from alpaca.data import CryptoHistoricalDataClient
+        if api_key and secret_key:
+            self._client = CryptoHistoricalDataClient(api_key, secret_key)
+        else:
+            self._client = CryptoHistoricalDataClient()
+
+    @staticmethod
+    def _to_alpaca_symbol(symbol: str) -> str:
+        """Convert trading-API format BTCUSD → data-API format BTC/USD."""
+        if "/" in symbol:
+            return symbol
+        if symbol.endswith("USD"):
+            base = symbol[:-3]
+            return f"{base}/USD"
+        return symbol
+
+    def get_bars(self, symbol: str, days: int = 60) -> list[Bar]:
+        from alpaca.data.requests import CryptoBarsRequest
+        from alpaca.data.timeframe import TimeFrame
+
+        alpaca_sym = self._to_alpaca_symbol(symbol)
+        end   = datetime.now(timezone.utc)
+        start = end - timedelta(days=days)
+        bars: list[Bar] = []
+        try:
+            req  = CryptoBarsRequest(
+                symbol_or_symbols=alpaca_sym,
+                timeframe=TimeFrame.Day,
+                start=start,
+                end=end,
+            )
+            resp = self._client.get_crypto_bars(req)
+            df: pd.DataFrame = resp.df
+        except Exception as exc:
+            log.warning("Alpaca crypto bars failed for %s (%s): %s", symbol, alpaca_sym, exc)
+            return bars
+
+        if df.empty:
+            log.warning("No crypto bar data returned for %s", symbol)
+            return bars
+
+        if isinstance(df.index, pd.MultiIndex):
+            lvl0 = df.index.get_level_values(0)
+            df = df.xs(alpaca_sym, level=0) if alpaca_sym in lvl0 else df.droplevel(0)
+
+        for ts, row in df.iterrows():
+            bars.append(Bar(
+                symbol=symbol,
+                timestamp=ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts,
+                open=float(row["open"]),
+                high=float(row["high"]),
+                low=float(row["low"]),
+                close=float(row["close"]),
+                volume=float(row["volume"]),
+                asset_class="crypto",
+            ))
+        return bars
+
+    def get_latest_quote(self, symbol: str) -> Quote | None:
+        from alpaca.data.requests import CryptoLatestQuoteRequest
+
+        alpaca_sym = self._to_alpaca_symbol(symbol)
+        try:
+            req  = CryptoLatestQuoteRequest(symbol_or_symbols=alpaca_sym)
+            resp = self._client.get_crypto_latest_quote(req)
+            q    = resp.get(alpaca_sym)
+            if q is None:
+                return None
+            bid = float(getattr(q, "bid_price", 0) or 0)
+            ask = float(getattr(q, "ask_price", 0) or 0)
+            if bid == 0 and ask == 0:
+                ask = bid = float(getattr(q, "ask_price", 0) or 0)
+            return Quote(
+                symbol=symbol,
+                timestamp=q.timestamp,
+                bid=bid,
+                ask=ask,
+                mid=(bid + ask) / 2,
+                asset_class="crypto",
+            )
+        except Exception as exc:
+            log.warning("Alpaca crypto quote failed for %s: %s", symbol, exc)
+            return None
+
+    def snapshot(self, symbol: str, days: int = 60) -> MarketSnapshot:
+        return MarketSnapshot(
+            symbol=symbol,
+            asset_class="crypto",
+            bars=self.get_bars(symbol, days),
+            latest_quote=self.get_latest_quote(symbol),
+        )

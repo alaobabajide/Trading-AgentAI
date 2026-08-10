@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 import httpx
@@ -38,19 +40,31 @@ log = logging.getLogger(__name__)
 STOCK_WATCHLIST  = [
     # Mega-cap tech
     "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META",
-    # High-volume growth / momentum
-    "NFLX", "ADBE", "CRM", "AMD", "COIN",
-    # Financials / energy / consumer
-    "JPM", "XOM", "V",
+    # Growth tech / cloud / fintech
+    "NFLX", "ADBE", "CRM", "AMD", "COIN", "SHOP", "UBER",
+    # Semiconductors
+    "INTC", "QCOM", "AVGO", "MU", "TXN",
+    # Financials
+    "JPM", "GS", "MS", "BAC", "BX", "V", "MA",
+    # Healthcare / pharma
+    "JNJ", "UNH", "LLY", "ABBV", "AMGN",
+    # Consumer / retail
+    "WMT", "COST", "HD", "NKE", "SBUX", "MCD",
+    # Energy
+    "XOM", "CVX", "OXY",
 ]
 ETF_WATCHLIST    = [
-    "SPY", "QQQ", "IWM",          # broad market
-    "GLD", "SLV",                  # metals
-    "TLT", "HYG",                  # fixed income
-    "XLE", "XLF", "XLK",          # sector
-    "VTI",                         # total market
+    "SPY", "QQQ", "IWM",             # broad market
+    "GLD", "SLV",                     # metals
+    "TLT", "HYG",                     # fixed income
+    "XLE", "XLF", "XLK",             # sector originals
+    "XLV", "XLP", "XLI", "XLU",      # defensive sectors
+    "VTI",                            # total market
+    "ARKK",                           # thematic innovation
+    "EEM", "VEA",                     # international
 ]
-CRYPTO_WATCHLIST = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
+# Alpaca crypto format (BTCUSD, not BTCUSDT) — no Binance geo-block
+CRYPTO_WATCHLIST = ["BTCUSD", "ETHUSD", "SOLUSD", "AVAXUSD", "DOGEUSD", "LTCUSD"]
 
 
 def _wait_for_brain(url: str, timeout_secs: int = 60) -> bool:
@@ -98,7 +112,9 @@ class Orchestrator:
 
         self._peak_equity: float = 0.0
         # Per-symbol thresholds stored from last signal (keyed by symbol)
+        # Lock guards concurrent writes from ThreadPoolExecutor workers.
         self._pos_thresholds: dict[str, tuple[float, float]] = {}  # symbol → (sl_pct, tp_pct)
+        self._pos_thresholds_lock = threading.Lock()
         # Live risk config — refreshed from brain API before every monitor run
         self._stop_loss_pct  = cfg.stop_loss_pct
         self._take_profit_pct = cfg.take_profit_pct
@@ -167,9 +183,6 @@ class Orchestrator:
 
     def _has_open_position(self, symbol: str, asset_class: str) -> bool:
         """Return True if an open position for this symbol already exists."""
-        if asset_class == "crypto":
-            # Crypto positions live on Binance — skip Alpaca check to avoid false negatives
-            return False
         try:
             if self._alpaca_client is None:
                 return False
@@ -225,14 +238,15 @@ class Orchestrator:
         signal_confidence_histogram.observe(confidence)
 
         log.info(
-            "Signal %-6s  %-6s  conf=%.2f  tier=%-4s  votes=%d/15  conflict=%s",
+            "Signal %-6s  %-6s  conf=%.2f  tier=%-4s  votes=%d/27  conflict=%s",
             symbol, action, confidence, tier, votes_for, conflict,
         )
 
         # Always cache latest thresholds from the signal (used by position monitor)
         sl_pct = sig.get("stop_loss_pct",  self._cfg.stop_loss_pct)
         tp_pct = sig.get("take_profit_pct", self._cfg.take_profit_pct)
-        self._pos_thresholds[symbol] = (sl_pct, tp_pct)
+        with self._pos_thresholds_lock:
+            self._pos_thresholds[symbol] = (sl_pct, tp_pct)
 
         # ── Gate 4: only act on WARM or HOT signals ───────────────────────────
         if action == "HOLD" or tier == "COLD":
@@ -281,7 +295,7 @@ class Orchestrator:
             log.error("  ✗ Execute call failed for %s: %s", symbol, exc)
             status = "skipped"
 
-        exchange = "alpaca" if asset_class == "stock" else "binance"
+        exchange = "alpaca" if asset_class == "stock" else "alpaca_crypto"
         order_counter.labels(symbol=symbol, action=action, exchange=exchange, status=status).inc()
 
     # ── Live config sync ──────────────────────────────────────────────────────
@@ -330,10 +344,11 @@ class Orchestrator:
             except (TypeError, ValueError):
                 continue
 
-            sl_pct, tp_pct = self._pos_thresholds.get(
-                symbol,
-                (self._stop_loss_pct, self._take_profit_pct),
-            )
+            with self._pos_thresholds_lock:
+                sl_pct, tp_pct = self._pos_thresholds.get(
+                    symbol,
+                    (self._stop_loss_pct, self._take_profit_pct),
+                )
 
             reason = None
             if plpc >= tp_pct:
@@ -349,7 +364,8 @@ class Orchestrator:
                         symbol=symbol, action="SELL", exchange="alpaca", status="submitted",
                     ).inc()
                     log.info("  ✓ Position closed: %s id=%s", symbol, order.id)
-                    self._pos_thresholds.pop(symbol, None)
+                    with self._pos_thresholds_lock:
+                        self._pos_thresholds.pop(symbol, None)
                 except Exception as exc:
                     log.error("  ✗ Failed to close %s: %s", symbol, exc)
             else:
@@ -390,13 +406,24 @@ class Orchestrator:
             [(s, "crypto") for s in CRYPTO_WATCHLIST]
         )
 
-        for sym, asset_class in all_symbols:
-            try:
-                self._process_symbol(sym, asset_class, portfolio)
-            except Exception as exc:
-                log.error("Unhandled error processing %s: %s", sym, exc)
-            # Small gap between symbols to avoid rate-limiting
-            time.sleep(1)
+        # Parallel symbol processing:
+        # Paper mode (rule-based, no LLM): 16 workers — zero API calls, pure computation.
+        # Live mode (LLM debate): 8 workers — Haiku is fast + I/O-bound, parallelism pays.
+        max_workers = 16 if self._paper_mode else 8
+        log.info("Processing %d symbols  workers=%d  mode=%s",
+                 len(all_symbols), max_workers, "paper" if self._paper_mode else "live")
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(self._process_symbol, sym, cls, portfolio): (sym, cls)
+                for sym, cls in all_symbols
+            }
+            for fut in as_completed(futures):
+                sym, cls = futures[fut]
+                try:
+                    fut.result()
+                except Exception as exc:
+                    log.error("Unhandled error processing %s: %s", sym, exc)
 
         log.info("=== Cycle complete ===")
 
@@ -418,10 +445,12 @@ class Orchestrator:
         schedule.every(1).minutes.do(self._refresh_portfolio_metrics)
         schedule.every(1).minutes.do(self._monitor_positions)
 
+        total_symbols = len(STOCK_WATCHLIST) + len(ETF_WATCHLIST) + len(CRYPTO_WATCHLIST)
         log.info(
-            "Orchestrator ready — scanning %d symbols every 15 min, "
-            "position P&L monitor every 1 min  mode=%s",
-            len(STOCK_WATCHLIST) + len(ETF_WATCHLIST) + len(CRYPTO_WATCHLIST),
+            "Orchestrator ready — scanning %d symbols every 15 min "
+            "(%d stocks, %d ETFs, %d crypto)  position monitor: 1 min  mode=%s",
+            total_symbols,
+            len(STOCK_WATCHLIST), len(ETF_WATCHLIST), len(CRYPTO_WATCHLIST),
             "rule-based" if self._paper_mode else "LLM",
         )
         self._monitor_positions()  # check existing positions before first cycle
