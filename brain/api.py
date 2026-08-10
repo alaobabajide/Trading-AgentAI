@@ -603,6 +603,15 @@ def get_all_cached_signals():
     )
 
 
+@app.delete("/signals/cached")
+def clear_all_cached_signals():
+    """Wipe every entry from the in-memory signal cache and the on-disk JSON."""
+    _signal_cache.clear()
+    _save_cache(_signal_cache)
+    _log_audit("signals_cache_clear", {"count": 0})
+    return {"cleared": True}
+
+
 class ExecuteRequest(BaseModel):
     symbol: str
     asset_class: str = Field(..., description="'stock' or 'crypto'")

@@ -97,6 +97,15 @@ export async function fetchCachedSignals(): Promise<Signal[]> {
   return safeJson(res);
 }
 
+export async function clearCachedSignals(): Promise<void> {
+  const res = await fetch(`${BASE}/signals/cached`, {
+    method: "DELETE",
+    signal: AbortSignal.timeout(8000),
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
 // ── Signal persistence helpers ────────────────────────────────────────────────
 
 const SIGNALS_STORAGE_KEY = "ta_signals_cache_v1";
@@ -169,12 +178,14 @@ export function usePortfolio() {
  *   it to the top (newest generated_at sorts first).
  * - Generating a signal for a new symbol appends it without clearing others.
  * - Falls back to mock placeholder cards only when no real signals exist yet.
+ * - clearAll() wipes both localStorage and the backend cache for a clean slate.
  */
-export function useSignals() {
+export function useSignals(pollIntervalMs = 30_000) {
   // liveSignals: only real (non-mock) signals; seed from localStorage
   const [liveSignals, setLiveSignals] = useState<Signal[]>(() => loadStoredSignals());
   const [apiState, setApiState] = useState<ApiState>("loading");
   const [refreshing, setRefreshing] = useState(false);
+  const [clearing, setClearing] = useState(false);
 
   const signals = liveSignals;
 
@@ -203,9 +214,9 @@ export function useSignals() {
     }
 
     poll();
-    const id = setInterval(poll, 30_000);
+    const id = setInterval(poll, pollIntervalMs);
     return () => { cancelled = true; clearInterval(id); };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pollIntervalMs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function load(manual = false) {
     if (manual) setRefreshing(true);
@@ -220,9 +231,20 @@ export function useSignals() {
     }
   }
 
+  async function clearAll() {
+    setClearing(true);
+    try {
+      await clearCachedSignals();
+    } catch { /* backend clear failed — still wipe local */ }
+    localStorage.removeItem(SIGNALS_STORAGE_KEY);
+    setLiveSignals([]);
+    setApiState("live");
+    setClearing(false);
+  }
+
   const refresh = () => load(true);
 
-  return { signals, apiState, refresh, refreshing };
+  return { signals, apiState, refresh, refreshing, clearAll, clearing };
 }
 
 /**

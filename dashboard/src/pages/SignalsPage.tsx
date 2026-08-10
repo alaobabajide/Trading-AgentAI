@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Loader2, RefreshCw, Search, Send, X, Zap } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Clock, Loader2, RefreshCw, Search, Send, Trash2, X, Zap } from "lucide-react";
 import clsx from "clsx";
 import { SignalCard } from "../components/SignalCard";
 import { useSignals, apiHeaders } from "../lib/api";
@@ -361,14 +361,39 @@ function FilterBar({
 const ACTION_ORDER: Record<string, number> = { BUY: 0, SELL: 1, HOLD: 2 };
 const TIER_ORDER:   Record<string, number> = { HOT: 0, WARM: 1, COLD: 2 };
 
+const INTERVAL_OPTIONS = [
+  { label: "15s", ms: 15_000 },
+  { label: "30s", ms: 30_000 },
+  { label: "1m",  ms: 60_000 },
+  { label: "5m",  ms: 300_000 },
+  { label: "Off", ms: 0 },
+] as const;
+
 export function SignalsPage() {
-  const { signals, apiState, refresh, refreshing } = useSignals();
+  const [intervalMs, setIntervalMs] = useState(30_000);
+  const { signals, apiState, refresh, refreshing, clearAll, clearing } = useSignals(
+    intervalMs > 0 ? intervalMs : 999_999_999,
+  );
 
   const [search, setSearch]   = useState("");
   const [asset,  setAsset]    = useState<AssetFilter>("all");
   const [action, setAction]   = useState<ActionFilter>("all");
   const [tier,   setTier]     = useState<TierFilter>("all");
   const [sort,   setSort]     = useState<SortOrder>("newest");
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  const [confirmClear, setConfirmClear]   = useState(false);
+
+  const prevSignalCount = useRef(signals.length);
+  useEffect(() => {
+    if (signals.length !== prevSignalCount.current) {
+      setLastRefreshed(new Date());
+      prevSignalCount.current = signals.length;
+    }
+  }, [signals.length]);
+
+  useEffect(() => {
+    if (apiState === "live") setLastRefreshed(new Date());
+  }, [apiState]);
 
   const filtered = useMemo(() => {
     let list: Signal[] = [...signals];
@@ -397,7 +422,7 @@ export function SignalsPage() {
   return (
     <div className="space-y-5">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-lg font-semibold flex items-center gap-2">
             <Zap className="w-5 h-5 text-brand-400" />
@@ -409,17 +434,71 @@ export function SignalsPage() {
             <span className="text-red-400">{sells} SELL</span>
             <span className="text-slate-600">·</span>
             <span className="text-slate-400">{holds} HOLD</span>
+            {lastRefreshed && (
+              <>
+                <span className="text-slate-600">·</span>
+                <span className="text-slate-600 flex items-center gap-1">
+                  <Clock className="w-2.5 h-2.5" />
+                  {lastRefreshed.toLocaleTimeString()}
+                </span>
+              </>
+            )}
           </div>
         </div>
-        <div className="flex items-center gap-2">
+
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Auto-refresh interval */}
+          <div className="flex items-center gap-1 bg-surface-700 rounded-lg px-2 py-1 border border-white/5">
+            <span className="text-[9px] text-slate-600 uppercase tracking-wider mr-1">Auto</span>
+            {INTERVAL_OPTIONS.map((opt) => (
+              <button
+                key={opt.label}
+                onClick={() => setIntervalMs(opt.ms)}
+                className={clsx(
+                  "px-1.5 py-0.5 rounded text-[10px] font-mono font-medium transition-colors",
+                  intervalMs === opt.ms
+                    ? "bg-brand-500/30 text-brand-300"
+                    : "text-slate-500 hover:text-slate-300",
+                )}
+              >{opt.label}</button>
+            ))}
+          </div>
+
+          {/* Manual refresh */}
           <button
-            onClick={refresh}
+            onClick={() => { refresh(); setLastRefreshed(new Date()); }}
             disabled={refreshing}
             className="p-2 rounded-lg border border-white/10 text-slate-400 hover:text-slate-200 hover:border-white/20 transition-colors disabled:opacity-50"
             title="Refresh signal feed"
           >
             <RefreshCw className={clsx("w-3.5 h-3.5", refreshing && "animate-spin")} />
           </button>
+
+          {/* Clear all */}
+          {confirmClear ? (
+            <div className="flex items-center gap-1">
+              <span className="text-[10px] text-red-400 font-mono">Sure?</span>
+              <button
+                onClick={() => { clearAll(); setConfirmClear(false); }}
+                disabled={clearing}
+                className="px-2 py-1 rounded-lg text-[10px] font-mono bg-red-500/20 border border-red-500/30 text-red-400 hover:bg-red-500/30 transition-colors disabled:opacity-50"
+              >{clearing ? "Clearing…" : "Yes, clear"}</button>
+              <button
+                onClick={() => setConfirmClear(false)}
+                className="px-2 py-1 rounded-lg text-[10px] font-mono border border-white/10 text-slate-500 hover:text-slate-300 transition-colors"
+              >Cancel</button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmClear(true)}
+              disabled={signals.length === 0}
+              className="p-2 rounded-lg border border-white/10 text-slate-500 hover:text-red-400 hover:border-red-500/30 transition-colors disabled:opacity-30"
+              title="Clear all cached signals"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+
           <span className={clsx(
             "text-[10px] font-mono px-2 py-1 rounded border",
             apiState === "live"    ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" :
