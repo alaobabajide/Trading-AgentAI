@@ -10,24 +10,41 @@ import clsx from "clsx";
 // ── Agent row definitions ─────────────────────────────────────────────────────
 
 const ANALYSTS = [
-  { key: "fundamental",  label: "Fundamental",  color: "text-blue-400"   },
-  { key: "technical",    label: "Technical",    color: "text-cyan-400"   },
-  { key: "sentiment",    label: "Sentiment",    color: "text-purple-400" },
-  { key: "macro",        label: "Macro",        color: "text-yellow-400" },
-  { key: "quant",        label: "Quant",        color: "text-teal-400"   },
-  { key: "options_flow", label: "Options Flow", color: "text-orange-400" },
-  { key: "regime",       label: "Regime",       color: "text-pink-400"   },
+  // Original 7 — core lenses
+  { key: "fundamental",    label: "Fundamental",     color: "text-blue-400"    },
+  { key: "technical",      label: "Technical",       color: "text-cyan-400"    },
+  { key: "sentiment",      label: "Sentiment",       color: "text-purple-400"  },
+  { key: "macro",          label: "Macro",           color: "text-yellow-400"  },
+  { key: "quant",          label: "Quant",           color: "text-teal-400"    },
+  { key: "options_flow",   label: "Options Flow",    color: "text-orange-400"  },
+  { key: "regime",         label: "Regime",          color: "text-pink-400"    },
+  // Wave 2 — 4 new specialists
+  { key: "breakout",       label: "Breakout",        color: "text-emerald-400" },
+  { key: "trend_strength", label: "Trend Strength",  color: "text-green-400"   },
+  { key: "sector_rotation",label: "Sector Rotation", color: "text-lime-400"    },
+  { key: "earnings_event", label: "Earnings Event",  color: "text-rose-400"    },
+  // Wave 3 — 4 new specialists
+  { key: "momentum_scorer",label: "Momentum Scorer", color: "text-indigo-400"  },
+  { key: "supply_demand",  label: "Supply & Demand", color: "text-amber-500"   },
+  { key: "volume_analyst", label: "Volume Analyst",  color: "text-sky-300"     },
+  { key: "risk_reward",    label: "Risk / Reward",   color: "text-red-300"     },
 ] as const;
 
 const INVESTORS = [
-  { key: "buffett", label: "Buffett",  color: "text-amber-400"  },
-  { key: "munger",  label: "Munger",   color: "text-amber-300"  },
-  { key: "lynch",   label: "Lynch",    color: "text-lime-400"   },
-  { key: "ackman",  label: "Ackman",   color: "text-sky-400"    },
-  { key: "cohen",   label: "Cohen",    color: "text-violet-400" },
-  { key: "dalio",   label: "Dalio",    color: "text-blue-300"   },
-  { key: "wood",    label: "Wood",     color: "text-fuchsia-400"},
-  { key: "bogle",   label: "Bogle",    color: "text-slate-300"  },
+  // Original 8 — legendary investors
+  { key: "buffett",       label: "Buffett",       color: "text-amber-400"   },
+  { key: "munger",        label: "Munger",        color: "text-amber-300"   },
+  { key: "lynch",         label: "Lynch",         color: "text-lime-400"    },
+  { key: "ackman",        label: "Ackman",        color: "text-sky-400"     },
+  { key: "cohen",         label: "Cohen",         color: "text-violet-400"  },
+  { key: "dalio",         label: "Dalio",         color: "text-blue-300"    },
+  { key: "wood",          label: "Wood",          color: "text-fuchsia-400" },
+  { key: "bogle",         label: "Bogle",         color: "text-slate-300"   },
+  // Wave 3 — 4 new personas
+  { key: "soros",         label: "Soros",         color: "text-emerald-300" },
+  { key: "druckenmiller", label: "Druckenmiller", color: "text-cyan-300"    },
+  { key: "simons",        label: "Simons",        color: "text-purple-300"  },
+  { key: "templeton",     label: "Templeton",     color: "text-orange-300"  },
 ] as const;
 
 // ── Vote tally display ────────────────────────────────────────────────────────
@@ -280,7 +297,7 @@ export function SignalCard({ signal }: { signal: Signal }) {
   const panelB          = signal.panel_b_votes;
   const panelsConflict  = signal.panels_conflict ?? false;
   const conflictNote    = signal.conflict_note ?? "";
-  const totalAgents     = (panelA && panelB) ? 15 : 7;
+  const totalAgents     = (panelA && panelB) ? 27 : ANALYSTS.length;
 
   return (
     <div className={clsx("glass rounded-2xl overflow-hidden border", tierCfg.border)}>
@@ -392,7 +409,7 @@ export function SignalCard({ signal }: { signal: Signal }) {
             >
               <h4 className="text-[10px] text-slate-500 uppercase tracking-widest group-hover:text-slate-400 transition-colors">
                 Analyst Panel
-                <span className="ml-2 text-slate-700 normal-case tracking-normal font-normal">7 agents</span>
+                <span className="ml-2 text-slate-700 normal-case tracking-normal font-normal">15 agents</span>
               </h4>
               <div className="flex items-center gap-2">
                 {panelA && (
@@ -422,7 +439,7 @@ export function SignalCard({ signal }: { signal: Signal }) {
             >
               <h4 className="text-[10px] text-slate-500 uppercase tracking-widest group-hover:text-slate-400 transition-colors">
                 Investor Panel
-                <span className="ml-2 text-slate-700 normal-case tracking-normal font-normal">8 personas</span>
+                <span className="ml-2 text-slate-700 normal-case tracking-normal font-normal">12 personas</span>
               </h4>
               <div className="flex items-center gap-2">
                 {panelB && (
