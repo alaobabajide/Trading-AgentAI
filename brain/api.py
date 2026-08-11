@@ -544,15 +544,46 @@ def generate_signal(req: SignalRequest):
             cash=100_000.0,
         )
 
+    # ── Billing probe: verify Anthropic credits before spawning 27 LLM agents ──
+    # If billing fails, fall back to rule-based paper mode so signals are still
+    # useful rather than returning 27×NEUTRAL and a HOLD/COLD result.
+    effective_paper_mode = req.paper_mode
+    billing_fallback = False
+    if not req.paper_mode and cfg.anthropic_api_key:
+        try:
+            import anthropic as _anthropic
+            _probe = _anthropic.Anthropic(api_key=cfg.anthropic_api_key)
+            _probe.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=1,
+                messages=[{"role": "user", "content": "x"}],
+            )
+        except Exception as _probe_exc:
+            _msg = str(_probe_exc)
+            if "credit balance is too low" in _msg or "insufficient_quota" in _msg or "billing" in _msg.lower():
+                log.warning(
+                    "Anthropic billing insufficient — falling back to rule-based (paper) mode for %s. "
+                    "Top up credits at console.anthropic.com/billing to restore full LLM debate.",
+                    req.symbol,
+                )
+                effective_paper_mode = True
+                billing_fallback = True
+
     # ── Run debate (paper mode = rule-based; live mode = full LLM) ────────
     try:
         signal = orchestrator.run(
             market, sentiment_bundle, onchain_snap, portfolio_state,
-            paper_mode=req.paper_mode,
+            paper_mode=effective_paper_mode,
         )
     except Exception as exc:
         log.error("Debate failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Agent debate failed: {exc}")
+
+    if billing_fallback:
+        signal.rationale = (
+            "[Rule-based fallback — Anthropic credits exhausted, LLM debate unavailable] "
+            + signal.rationale
+        )
 
     # Cache — persist to disk so signals survive process restarts
     _signal_cache[req.symbol] = signal.to_dict()
