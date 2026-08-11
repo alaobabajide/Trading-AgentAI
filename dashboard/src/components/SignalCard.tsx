@@ -49,14 +49,18 @@ const INVESTORS = [
 
 // ── Vote tally display ────────────────────────────────────────────────────────
 
+function fmt1(n: number): string {
+  return Number(n).toFixed(1).replace(/\.0$/, "");
+}
+
 function TallyChips({ tally }: { tally: VoteTally }) {
   return (
     <span className="flex items-center gap-1.5 text-[11px] font-mono">
-      <span className="text-emerald-400">{tally.bullish}B</span>
+      <span className="text-emerald-400">{fmt1(tally.bullish)}B</span>
       <span className="text-slate-600">·</span>
-      <span className="text-red-400">{tally.bearish}Br</span>
+      <span className="text-red-400">{fmt1(tally.bearish)}Br</span>
       <span className="text-slate-600">·</span>
-      <span className="text-slate-400">{tally.neutral}N</span>
+      <span className="text-slate-400">{fmt1(tally.neutral)}N</span>
     </span>
   );
 }
@@ -68,7 +72,7 @@ function VoteTallyRow({ tally, panelA, panelB, action, votesForAction }: {
   action: string;
   votesForAction: number;
 }) {
-  const total = tally.bullish + tally.bearish + tally.neutral;
+  const total = Math.round((tally.bullish + tally.bearish + tally.neutral) * 10) / 10;
   const hasPanels = panelA && panelB;
 
   return (
@@ -89,7 +93,7 @@ function VoteTallyRow({ tally, panelA, panelB, action, votesForAction }: {
               ? "bg-emerald-500/15 text-emerald-300"
               : "bg-red-500/15 text-red-300",
           )}>
-            {votesForAction}/{total} {action === "BUY" ? "BULLISH" : "BEARISH"}
+            {fmt1(votesForAction)}/{fmt1(total)} {action === "BUY" ? "BULLISH" : "BEARISH"}
           </span>
         )}
       </div>

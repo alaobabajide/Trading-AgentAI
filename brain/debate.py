@@ -203,15 +203,15 @@ def _count_votes_weighted(
 
 def _total_b_weight(asset_class: str) -> float:
     """Sum of all Panel B preference weights for the given asset class."""
-    return sum(
+    return round(sum(
         _PERSONA_WEIGHTS.get(p, {}).get(asset_class, 1.0)
         for p in _PANEL_B_VOTERS
-    )
+    ), 1)
 
 
 def _total_system_weight(asset_class: str) -> float:
     """Total weighted vote pool: Panel A (always 15 × 1.0) + weighted Panel B."""
-    return 15.0 + _total_b_weight(asset_class)
+    return round(15.0 + _total_b_weight(asset_class), 1)
 
 
 def _dominant_direction(tally: dict[str, int]) -> str:
@@ -245,9 +245,9 @@ def _aggregate_dual_panel(
     b_votes = _count_votes_weighted(panel_b, _PANEL_B_VOTERS, asset_class)       # float dict
 
     combined = {
-        "bullish": a_votes["bullish"] + b_votes["bullish"],
-        "bearish": a_votes["bearish"] + b_votes["bearish"],
-        "neutral": a_votes["neutral"] + b_votes["neutral"],
+        "bullish": round(a_votes["bullish"] + b_votes["bullish"], 1),
+        "bearish": round(a_votes["bearish"] + b_votes["bearish"], 1),
+        "neutral": round(a_votes["neutral"] + b_votes["neutral"], 1),
     }
 
     a_dom = _dominant_direction(a_votes)
