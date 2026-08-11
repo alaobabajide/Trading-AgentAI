@@ -123,10 +123,31 @@ export async function clearCachedSignals(): Promise<void> {
 
 const SIGNALS_STORAGE_KEY = "ta_signals_cache_v2";
 
+/**
+ * Returns true if a majority of the agent_views in this signal contain error text.
+ * Such signals are produced when the LLM API is misconfigured (bad model ID, quota, etc.)
+ * and should never be stored or shown to the user.
+ */
+function hasAgentErrors(signal: Signal): boolean {
+  const views = signal.agent_views;
+  if (!views) return false;
+  const vals = (Object.values(views) as string[]).filter(Boolean);
+  if (vals.length === 0) return false;
+  const errCount = vals.filter((v) => v.includes("Agent error")).length;
+  return errCount > vals.length / 2;
+}
+
 function loadStoredSignals(): Signal[] {
   try {
     const raw = localStorage.getItem(SIGNALS_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Signal[]) : [];
+    if (!raw) return [];
+    const all    = JSON.parse(raw) as Signal[];
+    const clean  = all.filter((s) => !hasAgentErrors(s));
+    // Self-heal: if any bad signals were removed, persist the cleaned list immediately
+    if (clean.length !== all.length) {
+      try { localStorage.setItem(SIGNALS_STORAGE_KEY, JSON.stringify(clean)); } catch { /* quota */ }
+    }
+    return clean;
   } catch {
     return [];
   }
@@ -141,13 +162,14 @@ function persistSignals(signals: Signal[]) {
  * - Same symbol → server entry replaces local (it's fresher; re-running brings it to top)
  * - New symbol  → appended
  * - Result sorted newest → oldest by generated_at
+ * - Error signals (majority of agent_views contain "Agent error") are silently discarded
  */
 function mergeSignals(local: Signal[], incoming: Signal[]): Signal[] {
   const bySymbol = new Map<string, Signal>(local.map((s) => [s.symbol, s]));
   for (const s of incoming) bySymbol.set(s.symbol, s);
-  return [...bySymbol.values()].sort(
-    (a, b) => new Date(b.generated_at).getTime() - new Date(a.generated_at).getTime(),
-  );
+  return [...bySymbol.values()]
+    .filter((s) => !hasAgentErrors(s))
+    .sort((a, b) => new Date(b.generated_at).getTime() - new Date(a.generated_at).getTime());
 }
 
 // ── React hooks ───────────────────────────────────────────────────────────────

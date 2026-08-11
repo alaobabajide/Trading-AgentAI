@@ -606,11 +606,24 @@ def generate_signal(req: SignalRequest):
             + signal.rationale
         )
 
-    # Cache — persist to disk so signals survive process restarts
-    _signal_cache[req.symbol] = signal.to_dict()
-    _save_cache(_signal_cache)
-
     d = signal.to_dict()
+
+    # Cache — persist to disk so signals survive process restarts.
+    # Skip caching if majority of LLM agents errored (e.g. bad model ID, quota, network).
+    # A broken signal would sit in cache and be shown on every refresh until the next cycle.
+    agent_views = d.get("agent_views", {})
+    all_views   = [v for v in agent_views.values() if isinstance(v, str)]
+    error_views = [v for v in all_views if "Agent error" in v]
+    too_many_errors = not effective_paper_mode and len(all_views) > 0 and len(error_views) > len(all_views) * 0.5
+    if too_many_errors:
+        log.warning(
+            "NOT caching %s — %d/%d agents errored (likely LLM API / model ID issue). "
+            "Signal will not be stored until agents recover.",
+            req.symbol, len(error_views), len(all_views),
+        )
+    else:
+        _signal_cache[req.symbol] = d
+        _save_cache(_signal_cache)
     return SignalResponse(
         symbol=d["symbol"],
         asset_class=d["asset_class"],
