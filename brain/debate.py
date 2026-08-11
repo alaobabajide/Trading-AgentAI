@@ -96,6 +96,23 @@ class _RegimeWeightTracker:
 _regime_tracker = _RegimeWeightTracker()
 
 
+# ── LLM output helpers ───────────────────────────────────────────────────────
+
+def _strip_fences(text: str) -> str:
+    """Remove markdown code fences that some LLMs add despite instructions not to.
+    Handles ```json ... ``` and ``` ... ``` variants."""
+    text = text.strip()
+    if not text.startswith("```"):
+        return text
+    lines = text.splitlines()
+    # Drop opening fence line (```json or ```)
+    lines = lines[1:]
+    # Drop closing fence line if present
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
 # ── Vote-counting helpers ─────────────────────────────────────────────────────
 
 def _parse_direction(view: str) -> Literal["BULLISH", "BEARISH", "NEUTRAL"]:
@@ -2227,7 +2244,7 @@ class DebateOrchestrator:
                     strategy_view = "ALIGNED"
 
         try:
-            parsed = json.loads(risk_raw)
+            parsed = json.loads(_strip_fences(risk_raw))
         except json.JSONDecodeError:
             log.warning("Risk manager non-JSON — using defaults: %s", risk_raw[:120])
             parsed = {
