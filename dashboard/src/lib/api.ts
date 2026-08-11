@@ -108,7 +108,7 @@ export async function clearCachedSignals(): Promise<void> {
 
 // ── Signal persistence helpers ────────────────────────────────────────────────
 
-const SIGNALS_STORAGE_KEY = "ta_signals_cache_v1";
+const SIGNALS_STORAGE_KEY = "ta_signals_cache_v2";
 
 function loadStoredSignals(): Signal[] {
   try {
