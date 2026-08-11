@@ -205,9 +205,9 @@ class SignalResponse(BaseModel):
     take_profit_pct: float
     agent_views: dict[str, str]
     passed_confidence_gate: bool
-    # Vote-based fields — combined 15-agent pool
+    # Vote-based fields — combined 27-agent weighted pool
     vote_tally: dict = {}
-    votes_for_action: int = 0
+    votes_for_action: float = 0.0
     regime_label: str = "UNKNOWN"
     tier: str = "WARM"
     devil_advocate_score: int = 0

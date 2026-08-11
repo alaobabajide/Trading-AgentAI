@@ -238,7 +238,7 @@ class Orchestrator:
         signal_confidence_histogram.observe(confidence)
 
         log.info(
-            "Signal %-6s  %-6s  conf=%.2f  tier=%-4s  votes=%d/27  conflict=%s",
+            "Signal %-6s  %-6s  conf=%.2f  tier=%-4s  votes=%.1f/27  conflict=%s",
             symbol, action, confidence, tier, votes_for, conflict,
         )
 
@@ -256,6 +256,11 @@ class Orchestrator:
         # ── Gate 5: don't add to a position that already exists ───────────────
         if action == "BUY" and self._has_open_position(symbol, asset_class):
             log.info("  → BUY skipped for %s — position already open", symbol)
+            return
+
+        # ── Gate 5b: can't short crypto — skip SELL with no open position ─────
+        if action == "SELL" and asset_class == "crypto" and not self._has_open_position(symbol, asset_class):
+            log.info("  → SELL skipped for %s — no open crypto position (shorting unsupported)", symbol)
             return
 
         log.info("  → Submitting %s %s order (tier=%s) via /execute …", action, symbol, tier)
