@@ -121,7 +121,13 @@ export async function clearCachedSignals(): Promise<void> {
 
 // ── Signal persistence helpers ────────────────────────────────────────────────
 
-const SIGNALS_STORAGE_KEY = "ta_signals_cache_v2";
+const SIGNALS_STORAGE_KEY = "ta_signals_cache_v3";
+
+// On startup, evict any signals left in the old key (e.g. error-contaminated batches)
+try {
+  localStorage.removeItem("ta_signals_cache_v2");
+  localStorage.removeItem("ta_signals_cache_v1");
+} catch { /* ignore */ }
 
 /**
  * Returns true if a majority of the agent_views in this signal contain error text.
