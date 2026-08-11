@@ -5,6 +5,7 @@ import { Signal, VoteTally } from "../lib/types";
 import { SignalBadge } from "./SignalBadge";
 import { TIER_CONFIG, FIT_CONFIG } from "../lib/hitl";
 import { useHITLContext } from "../context/HITLContext";
+import { useConfigStatus } from "../lib/api";
 import clsx from "clsx";
 
 // ── Agent row definitions ─────────────────────────────────────────────────────
@@ -194,9 +195,11 @@ function StrategyFitBadge({ signal }: { signal: Signal }) {
 
 function ExecuteButton({ signal, compact = false }: { signal: Signal; compact?: boolean }) {
   const { profile, receiveSignal, executeSignal, executing, executeErrorRef } = useHITLContext();
+  const cfgStatus = useConfigStatus();
   const [result, setResult] = useState<string | null>(null);
   const [error,  setError]  = useState<string | null>(null);
   const mode = profile.mode;
+  const cycleMin = cfgStatus?.cycle_interval_minutes ?? 15;
 
   if (signal.action === "HOLD") return null;
 
@@ -207,7 +210,7 @@ function ExecuteButton({ signal, compact = false }: { signal: Signal; compact?: 
       <div className="mt-1 space-y-1.5">
         <div className="flex items-center gap-2 text-[11px] font-mono text-slate-500">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-          Auto mode — orchestrator executes every 15 min
+          Auto mode — orchestrator executes every {cycleMin} min
           <button
             className="ml-auto text-slate-600 hover:text-slate-400 underline underline-offset-2 transition-colors"
             onClick={async (e) => {

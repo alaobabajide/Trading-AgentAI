@@ -16,14 +16,24 @@ function Row({ label, ok, note }: { label: string; ok: boolean; note?: string })
 /**
  * Shown at the top of the app when the Brain API is online but some env vars
  * are missing. Hidden once everything is configured.
+ * All labels and variable names come from /api/config-status — nothing is hardcoded here.
  */
 export function SetupBanner() {
   const cfg = useConfigStatus();
 
-  // Don't render until we have a response AND something is missing
   if (!cfg) return null;
-  const allGood = cfg.anthropic && cfg.alpaca;
+  const allGood = cfg.llm_provider && cfg.alpaca;
   if (allGood) return null;
+
+  const llmNote   = cfg.llm_provider ? undefined : `→ get from ${cfg.llm_provider_url ?? "openrouter.ai"}`;
+  const envVarRow = [
+    cfg.llm_env_var ?? "OPENROUTER_API_KEY",
+    "ALPACA_API_KEY",
+    "ALPACA_SECRET_KEY",
+    "ALPACA_BASE_URL",
+    "BINANCE_API_KEY",
+    "BINANCE_SECRET_KEY",
+  ].join(" · ");
 
   return (
     <div className="mx-8 mt-4 glass rounded-2xl border border-amber-500/30 p-4">
@@ -36,8 +46,11 @@ export function SetupBanner() {
             <span className="font-mono text-slate-200">Settings → Variables</span>, then redeploy.
           </p>
           <div className="space-y-1 pt-1">
-            <Row label="Anthropic API key (required for signals)" ok={cfg.anthropic}
-                 note={cfg.anthropic ? undefined : "→ get from console.anthropic.com"} />
+            <Row
+              label={`${cfg.llm_provider_name ?? "LLM"} API key (required for signals)`}
+              ok={cfg.llm_provider}
+              note={llmNote}
+            />
             <Row label="Alpaca credentials (required for portfolio + trading)" ok={cfg.alpaca}
                  note={cfg.alpaca ? undefined : "→ get from alpaca.markets → Paper Trading"} />
             <Row label="Binance credentials (optional, crypto trading)" ok={cfg.binance}
@@ -46,7 +59,7 @@ export function SetupBanner() {
                  note={cfg.telegram ? undefined : "→ message @BotFather on Telegram"} />
           </div>
           <div className="text-[11px] text-slate-500 font-mono pt-1">
-            Variable names: ANTHROPIC_API_KEY · ALPACA_API_KEY · ALPACA_SECRET_KEY · ALPACA_BASE_URL · BINANCE_API_KEY · BINANCE_SECRET_KEY
+            Variable names: {envVarRow}
           </div>
         </div>
       </div>

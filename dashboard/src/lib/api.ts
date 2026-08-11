@@ -39,7 +39,11 @@ export async function fetchHealth(): Promise<{ status: string }> {
 }
 
 export interface ConfigStatus {
-  anthropic:          boolean;
+  // Key presence (boolean — values never exposed by backend)
+  llm_provider:       boolean;
+  llm_provider_name:  string;
+  llm_provider_url:   string;
+  llm_env_var:        string;
   alpaca:             boolean;
   binance:            boolean;
   telegram:           boolean;
@@ -48,6 +52,15 @@ export interface ConfigStatus {
   auto_trade:         boolean;
   ready_for_signals:  boolean;
   ready_for_trading:  boolean;
+  // Engine metadata — use these instead of hardcoding in components
+  agent_count:            number;
+  hot_min_votes:          number;
+  warm_min_votes:         number;
+  cycle_interval_minutes: number;
+  watchlist_stocks:       string[];
+  watchlist_etfs:         string[];
+  watchlist_crypto:       string[];
+  total_symbols:          number;
 }
 
 export async function fetchConfigStatus(): Promise<ConfigStatus> {

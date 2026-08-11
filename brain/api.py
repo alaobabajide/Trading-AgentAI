@@ -473,20 +473,41 @@ def reset_risk_config():
 
 @app.get("/config-status")
 def config_status():
-    """Returns which API keys are configured (true/false only — never exposes values)."""
+    """Returns which API keys are configured (true/false only — never exposes values)
+    plus runtime metadata so the frontend never needs to hardcode facts about the engine."""
     import os
     from config import get_settings
+    from watchlist import (
+        STOCK_WATCHLIST, ETF_WATCHLIST, CRYPTO_WATCHLIST,
+        HOT_MIN_VOTES, WARM_MIN_VOTES, AGENT_COUNT,
+        CYCLE_INTERVAL_MINUTES, LLM_PROVIDER_NAME, LLM_PROVIDER_URL,
+    )
     cfg = get_settings()
+    llm_ok = bool(cfg.openrouter_api_key)
+    alpaca_ok = bool(cfg.alpaca_api_key and cfg.alpaca_secret_key)
     return {
-        "anthropic":       bool(cfg.openrouter_api_key),
-        "alpaca":          bool(cfg.alpaca_api_key and cfg.alpaca_secret_key),
+        # Key presence (boolean only — values never exposed)
+        "llm_provider":    llm_ok,
+        "llm_provider_name": LLM_PROVIDER_NAME,
+        "llm_provider_url":  LLM_PROVIDER_URL,
+        "llm_env_var":     "OPENROUTER_API_KEY",
+        "alpaca":          alpaca_ok,
         "binance":         bool(cfg.binance_api_key and cfg.binance_secret_key),
         "telegram":        bool(cfg.telegram_bot_token),
         "alpaca_base_url": cfg.alpaca_base_url,
         "binance_testnet": cfg.binance_testnet,
         "auto_trade":      os.environ.get("AUTO_TRADE", "true").lower() != "false",
-        "ready_for_signals":  bool(cfg.openrouter_api_key),
-        "ready_for_trading":  bool(cfg.openrouter_api_key and cfg.alpaca_api_key),
+        "ready_for_signals":  llm_ok,
+        "ready_for_trading":  llm_ok and alpaca_ok,
+        # Engine metadata — used by the dashboard instead of hardcoded values
+        "agent_count":            AGENT_COUNT,
+        "hot_min_votes":          HOT_MIN_VOTES,
+        "warm_min_votes":         WARM_MIN_VOTES,
+        "cycle_interval_minutes": CYCLE_INTERVAL_MINUTES,
+        "watchlist_stocks":       STOCK_WATCHLIST,
+        "watchlist_etfs":         ETF_WATCHLIST,
+        "watchlist_crypto":       CRYPTO_WATCHLIST,
+        "total_symbols":          len(STOCK_WATCHLIST) + len(ETF_WATCHLIST) + len(CRYPTO_WATCHLIST),
     }
 
 

@@ -276,8 +276,9 @@ export function SettingsPage() {
             <div className="space-y-1">
               <p className="text-sm font-medium text-emerald-300">Orchestrator running</p>
               <p className="text-[11px] text-slate-400 font-mono">
-                Scanning watchlist every 15 minutes — AAPL, MSFT, NVDA, TSLA, SPY, QQQ, BTCUSDT, ETHUSDT + more.
-                BUY/SELL signals are executed automatically on Alpaca / Binance.
+                Scanning {configStatus?.total_symbols ?? "…"} symbols every {configStatus?.cycle_interval_minutes ?? 15} minutes
+                ({configStatus?.watchlist_stocks?.length ?? "…"} stocks · {configStatus?.watchlist_etfs?.length ?? "…"} ETFs · {configStatus?.watchlist_crypto?.length ?? "…"} crypto).
+                BUY/SELL signals are executed automatically on Alpaca.
               </p>
             </div>
           </div>
@@ -293,7 +294,7 @@ export function SettingsPage() {
                 AUTO_TRADE = true
               </div>
               <p className="text-[11px] text-slate-500 font-mono">
-                Then redeploy. The orchestrator will scan symbols every 15 min and submit orders when signals are HOT or WARM.
+                Then redeploy. The orchestrator will scan symbols every {configStatus?.cycle_interval_minutes ?? 15} min and submit orders when signals are HOT or WARM.
               </p>
             </div>
           </div>
@@ -324,7 +325,9 @@ export function SettingsPage() {
           ))}
         </div>
         <div className="text-[11px] text-slate-500 font-mono bg-surface-700 rounded-xl px-3 py-2">
-          Signal tier logic: HOT = 11+/15 agents aligned · WARM = 8–10/15 aligned · COLD = ≤7 aligned or panels conflict
+          {configStatus
+            ? `Signal tier logic: HOT = ${configStatus.hot_min_votes}+/${configStatus.agent_count} votes aligned · WARM = ${configStatus.warm_min_votes}–${configStatus.hot_min_votes - 1}/${configStatus.agent_count} · COLD = <${configStatus.warm_min_votes} or panels conflict`
+            : "Signal tier logic: loading…"}
         </div>
       </Section>
 

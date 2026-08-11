@@ -94,7 +94,7 @@ export function BrainPage({ paperMode = true }: BrainPageProps) {
           <span className={clsx("w-1.5 h-1.5 rounded-full", paperMode ? "bg-sky-400" : "bg-red-400 animate-pulse")} />
           {paperMode
             ? "Paper mode — rule-based analysis, no API credits needed"
-            : "Live mode — full 27-agent LLM debate (requires Anthropic credits)"}
+            : "Live mode — full 27-agent LLM debate (requires OpenRouter credits)"}
         </div>
       </div>
 

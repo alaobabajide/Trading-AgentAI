@@ -20,6 +20,7 @@ import schedule
 
 from config import get_settings
 from data.portfolio import PortfolioFetcher, PortfolioState
+from watchlist import STOCK_WATCHLIST, ETF_WATCHLIST, CRYPTO_WATCHLIST, CYCLE_INTERVAL_MINUTES
 from monitoring.metrics import (
     brain_latency_histogram,
     circuit_breaker_gauge,
@@ -35,36 +36,6 @@ from monitoring.metrics import (
 )
 
 log = logging.getLogger(__name__)
-
-# Symbols watched every 15-min cycle
-STOCK_WATCHLIST  = [
-    # Mega-cap tech
-    "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META",
-    # Growth tech / cloud / fintech
-    "NFLX", "ADBE", "CRM", "AMD", "COIN", "SHOP", "UBER",
-    # Semiconductors
-    "INTC", "QCOM", "AVGO", "MU", "TXN",
-    # Financials
-    "JPM", "GS", "MS", "BAC", "BX", "V", "MA",
-    # Healthcare / pharma
-    "JNJ", "UNH", "LLY", "ABBV", "AMGN",
-    # Consumer / retail
-    "WMT", "COST", "HD", "NKE", "SBUX", "MCD",
-    # Energy
-    "XOM", "CVX", "OXY",
-]
-ETF_WATCHLIST    = [
-    "SPY", "QQQ", "IWM",             # broad market
-    "GLD", "SLV",                     # metals
-    "TLT", "HYG",                     # fixed income
-    "XLE", "XLF", "XLK",             # sector originals
-    "XLV", "XLP", "XLI", "XLU",      # defensive sectors
-    "VTI",                            # total market
-    "ARKK",                           # thematic innovation
-    "EEM", "VEA",                     # international
-]
-# Alpaca crypto format (BTCUSD, not BTCUSDT) — no Binance geo-block
-CRYPTO_WATCHLIST = ["BTCUSD", "ETHUSD", "SOLUSD", "AVAXUSD", "DOGEUSD", "LTCUSD"]
 
 
 def _wait_for_brain(url: str, timeout_secs: int = 60) -> bool:
@@ -466,15 +437,15 @@ class Orchestrator:
         except Exception as exc:
             log.warning("Metrics server failed to start (non-fatal): %s", exc)
 
-        schedule.every(15).minutes.do(self._run_cycle)
+        schedule.every(CYCLE_INTERVAL_MINUTES).minutes.do(self._run_cycle)
         schedule.every(1).minutes.do(self._refresh_portfolio_metrics)
         schedule.every(1).minutes.do(self._monitor_positions)
 
         total_symbols = len(STOCK_WATCHLIST) + len(ETF_WATCHLIST) + len(CRYPTO_WATCHLIST)
         log.info(
-            "Orchestrator ready — scanning %d symbols every 15 min "
+            "Orchestrator ready — scanning %d symbols every %d min "
             "(%d stocks, %d ETFs, %d crypto)  position monitor: 1 min  mode=%s",
-            total_symbols,
+            total_symbols, CYCLE_INTERVAL_MINUTES,
             len(STOCK_WATCHLIST), len(ETF_WATCHLIST), len(CRYPTO_WATCHLIST),
             "rule-based" if self._paper_mode else "LLM",
         )
