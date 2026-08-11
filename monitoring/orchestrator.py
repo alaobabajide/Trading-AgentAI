@@ -90,8 +90,8 @@ class Orchestrator:
         # Always talk to uvicorn directly on 8000 — cfg.brain_port resolves to
         # Railway's $PORT (nginx's public port) which returns 405 for POST requests.
         self._brain_url = "http://127.0.0.1:8000"
-        # Use LLM debate when Anthropic key is configured, rule-based otherwise
-        self._paper_mode = not bool(cfg.anthropic_api_key)
+        # Use LLM debate when OpenRouter key is configured, rule-based otherwise
+        self._paper_mode = not bool(cfg.openrouter_api_key)
         mode_label = "rule-based (paper)" if self._paper_mode else "LLM debate (live)"
         log.info("Orchestrator signal mode: %s", mode_label)
 
@@ -115,6 +115,11 @@ class Orchestrator:
         # Lock guards concurrent writes from ThreadPoolExecutor workers.
         self._pos_thresholds: dict[str, tuple[float, float]] = {}  # symbol → (sl_pct, tp_pct)
         self._pos_thresholds_lock = threading.Lock()
+        # COLD cooldown: symbols that returned HOLD/COLD last cycle are skipped this cycle.
+        # Saves ~80% of LLM calls on quiet market days. Previous set rotates each cycle.
+        self._prev_cold_symbols: set[str] = set()
+        self._curr_cold_symbols: set[str] = set()
+        self._cold_lock = threading.Lock()
         # Live risk config — refreshed from brain API before every monitor run
         self._stop_loss_pct  = cfg.stop_loss_pct
         self._take_profit_pct = cfg.take_profit_pct
@@ -210,6 +215,13 @@ class Orchestrator:
             log.debug("SKIP %s — market closed (signal cached, will execute at open)", symbol)
             return
 
+        # ── Gate 3.5: COLD cooldown — skip symbols quiet last cycle (LLM mode only) ──
+        if not self._paper_mode:
+            with self._cold_lock:
+                if symbol in self._prev_cold_symbols:
+                    log.debug("SKIP %s — COLD cooldown (quiet last cycle)", symbol)
+                    return
+
         payload = {
             "symbol":        symbol,
             "asset_class":   asset_class,
@@ -251,6 +263,8 @@ class Orchestrator:
         # ── Gate 4: only act on WARM or HOT signals ───────────────────────────
         if action == "HOLD" or tier == "COLD":
             log.info("  → %s for %s (tier=%s) — no order submitted", action, symbol, tier)
+            with self._cold_lock:
+                self._curr_cold_symbols.add(symbol)
             return
 
         # ── Gate 5: don't add to a position that already exists ───────────────
@@ -392,6 +406,12 @@ class Orchestrator:
         log.info("=" * 60)
         log.info("=== Cycle start %s ===", datetime.now(timezone.utc).isoformat())
         log.info("=" * 60)
+        # Rotate COLD cooldown sets: prev← curr, curr← fresh
+        with self._cold_lock:
+            self._prev_cold_symbols = self._curr_cold_symbols
+            self._curr_cold_symbols = set()
+        if self._prev_cold_symbols:
+            log.info("COLD cooldown: skipping %d quiet symbol(s) this cycle", len(self._prev_cold_symbols))
 
         try:
             portfolio = self._refresh_portfolio_metrics()

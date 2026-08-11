@@ -50,4 +50,4 @@ Rules:
 class RiskManager(BaseAnalyst):
     role          = "risk_manager"
     system_prompt = _SYSTEM
-    model         = "claude-sonnet-4-6"   # synthesis — needs stronger reasoning
+    model         = "deepseek/deepseek-chat-v3-0324"   # synthesis — needs stronger reasoning

@@ -325,7 +325,7 @@ def _build_services(cfg):
     )
     eff = _effective_config(cfg)
     orchestrator = DebateOrchestrator(
-        anthropic_api_key=cfg.anthropic_api_key,
+        openrouter_api_key=cfg.openrouter_api_key,
         confidence_threshold=cfg.signal_confidence_threshold,
         max_position_pct=eff["max_position_pct"],
         max_crypto_pct=eff["max_crypto_allocation_pct"],
@@ -478,15 +478,15 @@ def config_status():
     from config import get_settings
     cfg = get_settings()
     return {
-        "anthropic":       bool(cfg.anthropic_api_key),
+        "anthropic":       bool(cfg.openrouter_api_key),
         "alpaca":          bool(cfg.alpaca_api_key and cfg.alpaca_secret_key),
         "binance":         bool(cfg.binance_api_key and cfg.binance_secret_key),
         "telegram":        bool(cfg.telegram_bot_token),
         "alpaca_base_url": cfg.alpaca_base_url,
         "binance_testnet": cfg.binance_testnet,
         "auto_trade":      os.environ.get("AUTO_TRADE", "true").lower() != "false",
-        "ready_for_signals":  bool(cfg.anthropic_api_key),
-        "ready_for_trading":  bool(cfg.anthropic_api_key and cfg.alpaca_api_key),
+        "ready_for_signals":  bool(cfg.openrouter_api_key),
+        "ready_for_trading":  bool(cfg.openrouter_api_key and cfg.alpaca_api_key),
     }
 
 
@@ -497,11 +497,11 @@ def generate_signal(req: SignalRequest):
         raise HTTPException(400, "asset_class must be 'stock' or 'crypto'")
     from config import get_settings
     cfg = get_settings()
-    # Only require Anthropic key for LLM (live) mode — paper mode is rule-based and needs no key
-    if not req.paper_mode and not cfg.anthropic_api_key:
+    # Only require OpenRouter key for LLM (live) mode — paper mode is rule-based and needs no key
+    if not req.paper_mode and not cfg.openrouter_api_key:
         raise HTTPException(
             status_code=503,
-            detail="ANTHROPIC_API_KEY is not configured. Set it in Railway env vars, or enable paper_mode for rule-based signals.",
+            detail="OPENROUTER_API_KEY is not configured. Set it in Railway env vars, or enable paper_mode for rule-based signals.",
         )
     try:
         alpaca, alpaca_crypto, sentiment_fetcher, onchain_fetcher, portfolio_fetcher, orchestrator = (
@@ -544,26 +544,26 @@ def generate_signal(req: SignalRequest):
             cash=100_000.0,
         )
 
-    # ── Billing probe: verify Anthropic credits before spawning 27 LLM agents ──
+    # ── Billing probe: verify OpenRouter credits before spawning 27 LLM agents ──
     # If billing fails, fall back to rule-based paper mode so signals are still
     # useful rather than returning 27×NEUTRAL and a HOLD/COLD result.
     effective_paper_mode = req.paper_mode
     billing_fallback = False
-    if not req.paper_mode and cfg.anthropic_api_key:
+    if not req.paper_mode and cfg.openrouter_api_key:
         try:
-            import anthropic as _anthropic
-            _probe = _anthropic.Anthropic(api_key=cfg.anthropic_api_key)
-            _probe.messages.create(
-                model="claude-haiku-4-5-20251001",
+            from openai import OpenAI as _OpenAI
+            _probe = _OpenAI(base_url="https://openrouter.ai/api/v1", api_key=cfg.openrouter_api_key)
+            _probe.chat.completions.create(
+                model="google/gemini-2.0-flash-001",
                 max_tokens=1,
                 messages=[{"role": "user", "content": "x"}],
             )
         except Exception as _probe_exc:
             _msg = str(_probe_exc)
-            if "credit balance is too low" in _msg or "insufficient_quota" in _msg or "billing" in _msg.lower():
+            if "credit" in _msg.lower() or "insufficient_quota" in _msg or "billing" in _msg.lower() or "402" in _msg:
                 log.warning(
-                    "Anthropic billing insufficient — falling back to rule-based (paper) mode for %s. "
-                    "Top up credits at console.anthropic.com/billing to restore full LLM debate.",
+                    "OpenRouter billing insufficient — falling back to rule-based (paper) mode for %s. "
+                    "Top up credits at openrouter.ai/settings/billing to restore full LLM debate.",
                     req.symbol,
                 )
                 effective_paper_mode = True
@@ -581,7 +581,7 @@ def generate_signal(req: SignalRequest):
 
     if billing_fallback:
         signal.rationale = (
-            "[Rule-based fallback — Anthropic credits exhausted, LLM debate unavailable] "
+            "[Rule-based fallback — OpenRouter credits exhausted, LLM debate unavailable] "
             + signal.rationale
         )
 

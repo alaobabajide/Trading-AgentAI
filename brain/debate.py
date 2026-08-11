@@ -1812,7 +1812,7 @@ class DebateOrchestrator:
 
     def __init__(
         self,
-        anthropic_api_key: str,
+        openrouter_api_key: str,
         confidence_threshold: float = 0.7,   # retained for Risk Manager compat; not used for gating
         max_position_pct: float = 0.05,
         max_crypto_pct: float = 0.30,
@@ -1820,8 +1820,11 @@ class DebateOrchestrator:
         stop_loss_pct: float = 0.02,
         take_profit_pct: float = 0.05,
     ) -> None:
-        import anthropic  # lazy: paper mode works without the package
-        client = anthropic.Anthropic(api_key=anthropic_api_key)
+        from openai import OpenAI  # lazy: paper mode works without the package
+        client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=openrouter_api_key,
+        )
 
         # Panel A — analyst agents
         self._fundamental     = FundamentalAnalyst(client)

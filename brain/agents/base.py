@@ -7,14 +7,14 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-# Tactical agents (fundamental, technical, etc.) use Haiku — fast + cheap.
-# Synthesis agents (risk manager, strategy coach) use Sonnet — better reasoning.
-TACTICAL_MODEL  = "claude-haiku-4-5-20251001"
-SYNTHESIS_MODEL = "claude-sonnet-4-6"
+# Tactical agents (fundamental, technical, etc.) use Gemini Flash — fast + cheap.
+# Synthesis agents (risk manager, strategy coach) use DeepSeek V3 — stronger reasoning.
+TACTICAL_MODEL  = "google/gemini-2.0-flash-001"
+SYNTHESIS_MODEL = "deepseek/deepseek-chat-v3-0324"
 
 
 class BaseAnalyst:
-    """Wraps a single Claude call with a specialist system prompt."""
+    """Wraps a single OpenRouter call with a specialist system prompt."""
 
     role: str    = "analyst"
     system_prompt: str = "You are a financial analyst."
@@ -24,23 +24,25 @@ class BaseAnalyst:
         self._client = client
 
     def analyse(self, context: dict[str, Any]) -> str:
-        """Send context → Claude → return plain-text opinion."""
+        """Send context → OpenRouter → return plain-text opinion."""
         user_msg = json.dumps(context, indent=2, default=str)
         try:
-            response = self._client.messages.create(
+            response = self._client.chat.completions.create(
                 model=self.model,
                 max_tokens=1024,
-                system=self.system_prompt,
-                messages=[{"role": "user", "content": user_msg}],
+                messages=[
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user",   "content": user_msg},
+                ],
             )
         except Exception as exc:
             msg = str(exc)
-            if "credit balance is too low" in msg or "insufficient_quota" in msg:
+            if "credit" in msg.lower() or "insufficient_quota" in msg or "billing" in msg.lower() or "402" in msg:
                 raise RuntimeError(
-                    "BILLING: Anthropic API credit balance is too low. "
-                    "Add credits at console.anthropic.com/billing"
+                    "BILLING: OpenRouter API credit balance is too low. "
+                    "Add credits at openrouter.ai/settings/billing"
                 ) from exc
             raise
-        text = response.content[0].text.strip()
+        text = response.choices[0].message.content.strip()
         log.debug("[%s] opinion: %s", self.role, text[:120])
         return text

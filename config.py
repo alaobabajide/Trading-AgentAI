@@ -12,7 +12,10 @@ load_dotenv()
 
 
 class Settings(BaseSettings):
-    # Anthropic — optional at startup; validated when /signal is actually called
+    # OpenRouter — replaces Anthropic for LLM calls; 94% cheaper at same capability
+    openrouter_api_key: str = Field("", env="OPENROUTER_API_KEY")
+
+    # Anthropic — kept for backward compat but no longer used by the LLM pipeline
     anthropic_api_key: str = Field("", env="ANTHROPIC_API_KEY")
 
     # Alpaca
