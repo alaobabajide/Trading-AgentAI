@@ -1,7 +1,7 @@
 """Risk Manager agent — synthesises analyst opinions and sets position sizing."""
 from __future__ import annotations
 
-from .base import BaseAnalyst
+from .base import BaseAnalyst, SYNTHESIS_MODEL
 
 _SYSTEM = """
 You are a rigorous risk manager for an algorithmic trading fund.
@@ -50,4 +50,4 @@ Rules:
 class RiskManager(BaseAnalyst):
     role          = "risk_manager"
     system_prompt = _SYSTEM
-    model         = "deepseek/deepseek-chat-v3-0324"   # synthesis — needs stronger reasoning
+    model         = SYNTHESIS_MODEL

@@ -575,7 +575,7 @@ def generate_signal(req: SignalRequest):
             from openai import OpenAI as _OpenAI
             _probe = _OpenAI(base_url="https://openrouter.ai/api/v1", api_key=cfg.openrouter_api_key)
             _probe.chat.completions.create(
-                model="google/gemini-2.0-flash-001",
+                model="google/gemini-2.5-flash-lite",
                 max_tokens=1,
                 messages=[{"role": "user", "content": "x"}],
             )

@@ -42,3 +42,7 @@ CYCLE_INTERVAL_MINUTES = 15
 
 LLM_PROVIDER_NAME = "OpenRouter"
 LLM_PROVIDER_URL  = "openrouter.ai/settings/billing"
+
+# Model IDs on OpenRouter (verify at openrouter.ai/models before changing)
+TACTICAL_MODEL  = "google/gemini-2.5-flash-lite"       # 25 tactical agents — $0.10/M in, $0.40/M out
+SYNTHESIS_MODEL = "deepseek/deepseek-chat-v3-0324"     # RiskManager + StrategyCoach — $0.27/M in, $1.12/M out

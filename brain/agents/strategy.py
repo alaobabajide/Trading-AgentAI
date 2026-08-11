@@ -1,7 +1,7 @@
 """Strategy Coach agent — decouples market analysis from trader profile coaching."""
 from __future__ import annotations
 
-from .base import BaseAnalyst
+from .base import BaseAnalyst, SYNTHESIS_MODEL
 
 _SYSTEM = """
 You are a personal trading strategy coach. Your job is SEPARATE from market analysis.
@@ -34,4 +34,4 @@ COACHING: <2-3 honest sentences — cite the specific tension between market sig
 class StrategyCoach(BaseAnalyst):
     role          = "strategy"
     system_prompt = _SYSTEM
-    model         = "deepseek/deepseek-chat-v3-0324"   # synthesis — needs stronger reasoning
+    model         = SYNTHESIS_MODEL

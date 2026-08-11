@@ -5,12 +5,9 @@ import json
 import logging
 from typing import Any
 
-log = logging.getLogger(__name__)
+from watchlist import TACTICAL_MODEL, SYNTHESIS_MODEL  # single source of truth for model IDs
 
-# Tactical agents (fundamental, technical, etc.) use Gemini Flash — fast + cheap.
-# Synthesis agents (risk manager, strategy coach) use DeepSeek V3 — stronger reasoning.
-TACTICAL_MODEL  = "google/gemini-2.0-flash-001"
-SYNTHESIS_MODEL = "deepseek/deepseek-chat-v3-0324"
+log = logging.getLogger(__name__)
 
 
 class BaseAnalyst:
