@@ -113,6 +113,45 @@ def _strip_fences(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _clean_rationale(text: str) -> str:
+    """Strip markdown formatting from a rationale string and return one clean sentence.
+
+    DeepSeek V3 ignores the 'no markdown' instruction ~30% of the time, producing
+    **bold**, ### headers, and numbered lists inside the rationale field.  This
+    sanitiser is applied both when JSON parsing succeeds and in the non-JSON fallback.
+    """
+    if not text or not text.strip():
+        return "Signal generated."
+    t = text.strip()
+    # Strip bold / italic markers  (**text** → text, *text* → text)
+    t = re.sub(r"\*{1,3}([^*\n]+)\*{1,3}", r"\1", t)
+    # Strip markdown headers (## Key Reasons: → Key Reasons:)
+    t = re.sub(r"^#{1,6}\s+", "", t, flags=re.MULTILINE)
+    # Strip bullet / numbered-list markers at line starts
+    t = re.sub(r"^\s*[-*+]\s+", "", t, flags=re.MULTILINE)
+    t = re.sub(r"^\s*\d+[.)]\s+", "", t, flags=re.MULTILINE)
+    # Collapse newlines and extra spaces into a single line
+    t = re.sub(r"[\r\n]+", " ", t)
+    t = re.sub(r"\s{2,}", " ", t).strip()
+    # Drop common LLM preamble that adds no information
+    t = re.sub(
+        r"^(given (the|this|my) analysis[,.]?\s*"
+        r"|the recommendation is \w+(\s+for \w+)?[,.]\s*"
+        r"|here.?s (the|my) (trade |trading )?(decision|recommendation|signal)[^.]*[,.]\s*"
+        r"|based on (the|this|my|our) analysis[,.]?\s*)",
+        "",
+        t,
+        flags=re.IGNORECASE,
+    ).strip()
+    # Extract only the first sentence
+    m = re.search(r"^(.+?[.!?])(?:\s+[A-Z]|$)", t)
+    first = m.group(1).strip() if m else t
+    # Hard cap at 180 chars
+    if len(first) > 180:
+        first = first[:177] + "..."
+    return first or "Signal generated."
+
+
 # ── Vote-counting helpers ─────────────────────────────────────────────────────
 
 def _parse_direction(view: str) -> Literal["BULLISH", "BEARISH", "NEUTRAL"]:
@@ -2245,10 +2284,22 @@ class DebateOrchestrator:
 
         try:
             parsed = json.loads(_strip_fences(risk_raw))
+            # Sanitise rationale — model sometimes adds markdown despite instructions
+            if "rationale" in parsed:
+                parsed["rationale"] = _clean_rationale(parsed["rationale"])
         except json.JSONDecodeError:
             log.warning("Risk manager non-JSON — using defaults: %s", risk_raw[:120])
+            # Generate a clean rationale from vote data instead of storing raw markdown
+            bulls   = combined_tally.get("bullish",  0)
+            bears   = combined_tally.get("bearish",  0)
+            neutral = combined_tally.get("neutral", 0)
+            mood    = "Bullish" if action == "BUY" else "Bearish" if action == "SELL" else "Mixed"
             parsed = {
-                "action": action, "confidence": 0.0, "rationale": risk_raw,
+                "action": action, "confidence": 0.0,
+                "rationale": (
+                    f"{mood} consensus: {bulls:.1f} bullish, {bears:.1f} bearish, "
+                    f"{neutral:.1f} neutral agent votes."
+                ),
                 "devil_advocate_score": 0, "devil_advocate_case": "",
             }
 
