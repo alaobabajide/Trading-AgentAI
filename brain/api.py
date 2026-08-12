@@ -152,6 +152,37 @@ def _effective_config(cfg) -> dict:
 
 _dynamic_config = _load_dynamic_config()
 
+# ── Rationale sanitiser ───────────────────────────────────────────────────────
+
+def _clean_rationale(text: str) -> str:
+    """Strip markdown formatting from a rationale string, return one clean sentence.
+    Mirrors brain/debate.py — applied here so old cached entries are cleaned on read."""
+    if not text or not text.strip():
+        return "Signal generated."
+    t = text.strip()
+    t = re.sub(r"\*{1,3}([^*\n]+)\*{1,3}", r"\1", t)
+    t = re.sub(r"^#{1,6}\s+", "", t, flags=re.MULTILINE)
+    t = re.sub(r"^\s*[-*+]\s+", "", t, flags=re.MULTILINE)
+    t = re.sub(r"^\s*\d+[.)]\s+", "", t, flags=re.MULTILINE)
+    t = re.sub(r"[\r\n]+", " ", t)
+    t = re.sub(r"\s{2,}", " ", t).strip()
+    t = re.sub(
+        r"^(given (the|this|my) analysis[,.]?\s*"
+        r"|the recommendation is \w+(\s+for \w+)?[,.]\s*"
+        r"|here.?s (the|my) (trade |trading )?(decision|recommendation|signal|decision-making process)[^.]*[,.]\s*"
+        r"|based on (the|this|my|our) analysis[,.]?\s*"
+        r"|let.?s analyze[^.]*[,.]\s*)",
+        "",
+        t,
+        flags=re.IGNORECASE,
+    ).strip()
+    m = re.search(r"^(.+?[.!?])(?:\s+[A-Z]|$)", t)
+    first = m.group(1).strip() if m else t
+    if len(first) > 180:
+        first = first[:177] + "..."
+    return first or "Signal generated."
+
+
 # ── Persistent signal cache ────────────────────────────────────────────────────
 # Survives uvicorn/process restarts within the same container.
 # Falls back silently if the filesystem is read-only.
@@ -660,9 +691,17 @@ def get_latest_signal(symbol: str):
 
 @app.get("/signals/cached", response_model=list)
 def get_all_cached_signals():
-    """Return all signals currently in the in-memory cache, newest first."""
+    """Return all signals currently in the in-memory cache, newest first.
+    Rationale fields are sanitised on the way out so old cached entries with
+    markdown formatting are cleaned without waiting for a full re-analysis cycle."""
+    def _clean(s: dict) -> dict:
+        rat = s.get("rationale", "")
+        if rat and any(c in rat for c in ("**", "##", "\n")):
+            s = {**s, "rationale": _clean_rationale(rat)}
+        return s
+
     return sorted(
-        _signal_cache.values(),
+        (_clean(s) for s in _signal_cache.values()),
         key=lambda s: s.get("generated_at", ""),
         reverse=True,
     )
