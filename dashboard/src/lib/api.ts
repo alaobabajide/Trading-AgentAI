@@ -411,14 +411,30 @@ export function useRiskConfig() {
 
   useEffect(() => {
     let cancelled = false;
-    function load() {
+    let retryId: ReturnType<typeof setTimeout> | null = null;
+
+    function load(isRetry = false) {
       fetchRiskConfig()
-        .then((c) => { if (!cancelled) setConfig(c); })
-        .catch(() => { /* backend may not be up yet */ });
+        .then((c) => {
+          if (!cancelled) {
+            setConfig(c);
+            // Once data loads, switch to steady 60s polling
+            if (isRetry && retryId) { clearTimeout(retryId); retryId = null; }
+          }
+        })
+        .catch(() => {
+          // Retry every 5s until the backend responds
+          if (!cancelled) retryId = setTimeout(() => load(true), 5_000);
+        });
     }
+
     load();
-    const id = setInterval(load, 60_000);
-    return () => { cancelled = true; clearInterval(id); };
+    const id = setInterval(() => load(), 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      if (retryId) clearTimeout(retryId);
+    };
   }, []);
 
   async function save(updates: Partial<RiskConfigFields>) {
