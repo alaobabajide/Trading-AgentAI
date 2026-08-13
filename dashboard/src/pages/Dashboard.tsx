@@ -132,17 +132,19 @@ export function Dashboard() {
             <h2 className="text-sm font-semibold mb-3">Risk Controls</h2>
             <div className="space-y-2 text-xs text-slate-400 font-mono">
               {(riskCfg ? [
-                ["Circuit breaker", `${(riskCfg.circuit_breaker_drawdown * 100).toFixed(0)}% drawdown`],
-                ["Max position",    `${(riskCfg.max_position_pct * 100).toFixed(0)}% NAV`],
-                ["Crypto cap",      `${(riskCfg.max_crypto_allocation_pct * 100).toFixed(0)}%`],
-                ["Stop (default)",  `${(riskCfg.stop_loss_pct * 100).toFixed(1)}%`],
-                ["Target (default)",`${(riskCfg.take_profit_pct * 100).toFixed(1)}%`],
+                ["Circuit breaker",   `${(riskCfg.circuit_breaker_drawdown * 100).toFixed(0)}% drawdown`],
+                ["Max pos (warm)",    `${(riskCfg.max_position_pct * 100).toFixed(0)}% NAV`],
+                ["Max pos (hot)",     `${(riskCfg.hot_position_pct * 100).toFixed(0)}% NAV`],
+                ["Crypto cap",        `${(riskCfg.max_crypto_allocation_pct * 100).toFixed(0)}%`],
+                ["Stop (default)",    `${(riskCfg.stop_loss_pct * 100).toFixed(1)}%`],
+                ["Target (default)",  `${(riskCfg.take_profit_pct * 100).toFixed(1)}%`],
               ] : [
-                ["Circuit breaker", "—"],
-                ["Max position",    "—"],
-                ["Crypto cap",      "—"],
-                ["Stop (default)",  "—"],
-                ["Target (default)","—"],
+                ["Circuit breaker",   "—"],
+                ["Max pos (warm)",    "—"],
+                ["Max pos (hot)",     "—"],
+                ["Crypto cap",        "—"],
+                ["Stop (default)",    "—"],
+                ["Target (default)",  "—"],
               ]).map(([k, v]) => (
                 <div key={k} className="flex justify-between">
                   <span>{k}</span>
