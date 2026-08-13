@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     # On-chain
     eth_rpc_url: str = Field("", env="ETH_RPC_URL")
 
+    # Sentiment — Finnhub free tier fallback (optional; used when Yahoo RSS < 5 headlines)
+    finnhub_api_key: str = Field("", env="FINNHUB_API_KEY")
+
     # Brain — Railway injects $PORT; fall back to BRAIN_PORT or 8000
     signal_confidence_threshold: float = Field(0.7, env="SIGNAL_CONFIDENCE_THRESHOLD")
     brain_port: int = Field(default_factory=lambda: int(os.environ.get("PORT") or os.environ.get("BRAIN_PORT") or 8000))

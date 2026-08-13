@@ -89,12 +89,36 @@ class CryptoExecutionEngine:
             log.warning("Could not check crypto cap: %s — allowing BUY", exc)
             return True
 
+    def _get_latest_price(self, symbol: str) -> float:
+        """Fetch current mid-price via Alpaca crypto data API (no auth required)."""
+        try:
+            from alpaca.data.historical import CryptoHistoricalDataClient
+            from alpaca.data.requests import CryptoLatestQuoteRequest
+            client = CryptoHistoricalDataClient()
+            # Alpaca data API expects symbol with slash: BTC/USD
+            data_symbol = symbol[:-3] + "/" + symbol[-3:] if symbol.endswith("USD") else symbol
+            quotes = client.get_crypto_latest_quote(
+                CryptoLatestQuoteRequest(symbol_or_symbols=data_symbol)
+            )
+            if quotes and data_symbol in quotes:
+                q = quotes[data_symbol]
+                ask = float(getattr(q, "ask_price", 0) or 0)
+                bid = float(getattr(q, "bid_price", 0) or 0)
+                if ask > 0 and bid > 0:
+                    return (ask + bid) / 2
+                return ask or bid
+        except Exception as exc:
+            log.debug("Could not fetch latest price for %s: %s", symbol, exc)
+        return 0.0
+
     def execute(
         self,
         signal: TradingSignal,
         portfolio_equity: float = 100_000.0,
     ) -> CryptoOrderResult | None:
-        from alpaca.trading.requests import MarketOrderRequest
+        from alpaca.trading.requests import (
+            MarketOrderRequest, TakeProfitRequest, StopLossRequest,
+        )
         from alpaca.trading.enums import OrderSide, TimeInForce
 
         if signal.action == "HOLD":
@@ -148,32 +172,85 @@ class CryptoExecutionEngine:
             log.warning("Notional too small for %s (%.2f) — skipping BUY", signal.symbol, notional)
             return None
 
+        # Fetch current price to compute qty and bracket levels
+        current_price = self._get_latest_price(signal.symbol)
+        if current_price <= 0:
+            log.warning("Could not determine current price for %s — falling back to plain market order", signal.symbol)
+            try:
+                order_req = MarketOrderRequest(
+                    symbol=signal.symbol,
+                    notional=round(notional, 2),
+                    side=OrderSide.BUY,
+                    time_in_force=TimeInForce.GTC,
+                )
+                order = self._trading.submit_order(order_req)
+                qty   = float(getattr(order, "qty", 0) or 0)
+                price = float(getattr(order, "filled_avg_price", 0) or 0)
+                log.info("Crypto BUY (no bracket): %s notional=%.2f qty=%.8f id=%s",
+                         signal.symbol, notional, qty, order.id)
+                return CryptoOrderResult(
+                    symbol=signal.symbol, order_id=str(order.id), action="BUY",
+                    qty=qty, submitted_price=price, stop_price=0.0, take_profit_price=0.0,
+                    exchange=exchange_label, timestamp=datetime.now(timezone.utc), raw=order,
+                )
+            except Exception as exc:
+                log.error("Crypto BUY (plain) failed for %s: %s", signal.symbol, exc)
+                return None
+
+        # Compute qty from notional and price (bracket orders require qty, not notional)
+        qty = notional / current_price
+        stop_price       = round(current_price * (1 - signal.stop_loss_pct), 8)
+        take_profit_price = round(current_price * (1 + signal.take_profit_pct), 8)
+
         try:
             order_req = MarketOrderRequest(
                 symbol=signal.symbol,
-                notional=round(notional, 2),
+                qty=round(qty, 8),
                 side=OrderSide.BUY,
                 time_in_force=TimeInForce.GTC,
+                order_class="bracket",
+                stop_loss=StopLossRequest(stop_price=stop_price),
+                take_profit=TakeProfitRequest(limit_price=take_profit_price),
             )
             order = self._trading.submit_order(order_req)
-            qty   = float(getattr(order, "qty", 0) or 0)
-            price = float(getattr(order, "filled_avg_price", 0) or 0)
+            filled_qty   = float(getattr(order, "qty", qty) or qty)
+            filled_price = float(getattr(order, "filled_avg_price", current_price) or current_price)
             log.info(
-                "Crypto BUY: %s notional=%.2f qty=%.6f id=%s",
-                signal.symbol, notional, qty, order.id,
+                "Crypto BUY bracket: %s price=%.4f qty=%.8f stop=%.4f tp=%.4f id=%s",
+                signal.symbol, current_price, filled_qty, stop_price, take_profit_price, order.id,
             )
             return CryptoOrderResult(
                 symbol=signal.symbol,
                 order_id=str(order.id),
                 action="BUY",
-                qty=qty,
-                submitted_price=price,
-                stop_price=0.0,
-                take_profit_price=0.0,
+                qty=filled_qty,
+                submitted_price=filled_price,
+                stop_price=stop_price,
+                take_profit_price=take_profit_price,
                 exchange=exchange_label,
                 timestamp=datetime.now(timezone.utc),
                 raw=order,
             )
         except Exception as exc:
-            log.error("Crypto BUY failed for %s: %s", signal.symbol, exc)
-            return None
+            log.error("Crypto BUY bracket failed for %s: %s — retrying without bracket", signal.symbol, exc)
+            # Fallback: plain market order without bracket
+            try:
+                order_req = MarketOrderRequest(
+                    symbol=signal.symbol,
+                    notional=round(notional, 2),
+                    side=OrderSide.BUY,
+                    time_in_force=TimeInForce.GTC,
+                )
+                order = self._trading.submit_order(order_req)
+                qty_out = float(getattr(order, "qty", 0) or 0)
+                price_out = float(getattr(order, "filled_avg_price", 0) or 0)
+                log.info("Crypto BUY (bracket fallback): %s notional=%.2f id=%s",
+                         signal.symbol, notional, order.id)
+                return CryptoOrderResult(
+                    symbol=signal.symbol, order_id=str(order.id), action="BUY",
+                    qty=qty_out, submitted_price=price_out, stop_price=0.0, take_profit_price=0.0,
+                    exchange=exchange_label, timestamp=datetime.now(timezone.utc), raw=order,
+                )
+            except Exception as exc2:
+                log.error("Crypto BUY fallback also failed for %s: %s", signal.symbol, exc2)
+                return None

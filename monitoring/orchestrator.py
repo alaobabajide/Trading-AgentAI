@@ -91,6 +91,13 @@ class Orchestrator:
         self._prev_cold_symbols: set[str] = set()
         self._curr_cold_symbols: set[str] = set()
         self._cold_lock = threading.Lock()
+        # Trailing stop: tracks highest observed price per open symbol (ratchets upward)
+        self._trailing_peaks: dict[str, float] = {}
+        self._trailing_pct: float = 0.015  # 1.5% trail behind peak
+        # Per-symbol loss cooldown: 2 stop-loss hits within 5 days → skip 2 cycles
+        self._loss_history: dict[str, list[float]] = {}   # symbol → list of monotonic timestamps
+        self._loss_cooldown_end: dict[str, float] = {}    # symbol → monotonic time when cooldown expires
+        self._loss_lock = threading.Lock()
         # Live risk config — refreshed from brain API before every monitor run
         self._stop_loss_pct  = cfg.stop_loss_pct
         self._take_profit_pct = cfg.take_profit_pct
@@ -193,6 +200,13 @@ class Orchestrator:
                     log.debug("SKIP %s — COLD cooldown (quiet last cycle)", symbol)
                     return
 
+        # ── Gate 3.6: Loss cooldown — 2 stop-loss hits in 5 days → skip 2 cycles ──
+        with self._loss_lock:
+            cooldown_end = self._loss_cooldown_end.get(symbol, 0)
+        if time.monotonic() < cooldown_end:
+            log.info("SKIP %s — loss cooldown active (too many stop-loss hits recently)", symbol)
+            return
+
         payload = {
             "symbol":        symbol,
             "asset_class":   asset_class,
@@ -248,6 +262,58 @@ class Orchestrator:
             log.info("  → SELL skipped for %s — no open crypto position (shorting unsupported)", symbol)
             return
 
+        # ── Gate 5c: crypto risk-off block (Phase 3-D) ────────────────────────
+        # When the macro regime is HIGH_VOLATILITY or TRENDING_DOWN, don't open
+        # new crypto longs — crypto amplifies drawdowns in risk-off conditions.
+        regime = sig.get("regime_label", "UNKNOWN")
+        if asset_class == "crypto" and action == "BUY":
+            if "HIGH_VOLATILITY" in regime or ("TRENDING" in regime and "DOWN" in regime):
+                log.info(
+                    "  → SKIP crypto BUY for %s — risk-off regime (%s)",
+                    symbol, regime,
+                )
+                return
+
+        # ── Regime-adaptive risk parameters (Phase 3-B) ───────────────────────
+        # Adjust stop/TP based on the macro regime from the signal.
+        exec_sl_pct = float(sig.get("stop_loss_pct",  self._cfg.stop_loss_pct))
+        exec_tp_pct = float(sig.get("take_profit_pct", self._cfg.take_profit_pct))
+        if "TRENDING_UP" in regime:
+            exec_tp_pct = max(exec_tp_pct, 0.08)       # ride the trend longer
+        elif "RANGING" in regime:
+            exec_tp_pct = min(exec_tp_pct, 0.03)       # take profits quickly in choppy market
+        elif "HIGH_VOLATILITY" in regime:
+            exec_sl_pct = max(exec_sl_pct, 0.03)       # wider stop to survive noise
+            exec_tp_pct = min(exec_tp_pct, 0.05)       # moderate target
+
+        # ── Correlation-aware position sizing (Phase 3-A) ─────────────────────
+        # If the target correlates > 0.70 with any existing open position,
+        # halve the size to avoid doubling concentrated risk.
+        exec_pos_pct = float(sig.get("suggested_position_pct", self._cfg.max_position_pct))
+        if action == "BUY" and self._alpaca_client:
+            try:
+                open_positions = self._alpaca_client.get_all_positions()
+                open_syms = [p.symbol for p in open_positions if p.symbol != symbol]
+                if open_syms:
+                    import yfinance as yf
+                    all_syms = [symbol] + open_syms[:6]   # cap at 6 to bound latency
+                    hist = yf.download(
+                        all_syms, period="60d", progress=False, auto_adjust=True, threads=False
+                    )
+                    close_df = hist["Close"] if "Close" in hist.columns.get_level_values(0) else hist
+                    if symbol in close_df.columns:
+                        corr = close_df.corr()
+                        peer_corrs = corr[symbol].drop(symbol, errors="ignore").abs()
+                        max_corr = float(peer_corrs.max()) if not peer_corrs.empty else 0.0
+                        if max_corr > 0.70:
+                            exec_pos_pct *= 0.5
+                            log.info(
+                                "Correlation gate: %s max_corr=%.2f → position halved to %.1f%%",
+                                symbol, max_corr, exec_pos_pct * 100,
+                            )
+            except Exception as exc:
+                log.debug("Correlation check failed for %s: %s", symbol, exc)
+
         log.info("  → Submitting %s %s order (tier=%s) via /execute …", action, symbol, tier)
 
         try:
@@ -257,9 +323,9 @@ class Orchestrator:
                     "symbol":                 symbol,
                     "asset_class":            asset_class,
                     "action":                 action,
-                    "suggested_position_pct": sig.get("suggested_position_pct", self._cfg.max_position_pct),
-                    "stop_loss_pct":          sig.get("stop_loss_pct",          self._cfg.stop_loss_pct),
-                    "take_profit_pct":        sig.get("take_profit_pct",        self._cfg.take_profit_pct),
+                    "suggested_position_pct": exec_pos_pct,
+                    "stop_loss_pct":          exec_sl_pct,
+                    "take_profit_pct":        exec_tp_pct,
                 },
                 timeout=30,
                 headers=self._brain_headers(),
@@ -356,6 +422,24 @@ class Orchestrator:
                     log.info("  ✓ Position closed: %s id=%s", symbol, order.id)
                     with self._pos_thresholds_lock:
                         self._pos_thresholds.pop(symbol, None)
+                    self._trailing_peaks.pop(symbol, None)
+                    # Record stop-loss hit for loss-cooldown gate (Phase 3-C)
+                    if "STOP LOSS" in reason:
+                        now = time.monotonic()
+                        with self._loss_lock:
+                            history = self._loss_history.get(symbol, [])
+                            history.append(now)
+                            five_days = 5 * 86400
+                            history = [t for t in history if now - t < five_days]
+                            self._loss_history[symbol] = history
+                            if len(history) >= 2:
+                                cooldown_secs = 2 * CYCLE_INTERVAL_MINUTES * 60
+                                self._loss_cooldown_end[symbol] = now + cooldown_secs
+                                log.info(
+                                    "Loss cooldown activated: %s — %d stop-loss hits in 5d"
+                                    " → skip next 2 cycles",
+                                    symbol, len(history),
+                                )
                 except Exception as exc:
                     log.error("  ✗ Failed to close %s: %s", symbol, exc)
             else:
@@ -363,6 +447,37 @@ class Orchestrator:
                     "Position monitor: %s plpc=%.2f%% (sl=%.1f%% tp=%.1f%%)",
                     symbol, plpc * 100, sl_pct * 100, tp_pct * 100,
                 )
+                # Trailing stop ratchet — update peak and replace open stop order if price climbs
+                try:
+                    current_price = float(pos.current_price or 0)
+                except (TypeError, ValueError):
+                    current_price = 0.0
+
+                if current_price > 0:
+                    peak = self._trailing_peaks.get(symbol, current_price)
+                    if current_price > peak:
+                        self._trailing_peaks[symbol] = current_price
+                        new_stop = round(current_price * (1 - self._trailing_pct), 2)
+                        try:
+                            orders = self._alpaca_client.get_orders()
+                            for order in orders:
+                                if (str(order.symbol) == symbol
+                                        and str(order.order_type) in ("stop", "stop_limit")
+                                        and str(order.status) in ("new", "held")):
+                                    from alpaca.trading.requests import ReplaceOrderRequest
+                                    self._alpaca_client.replace_order_by_id(
+                                        order.id,
+                                        ReplaceOrderRequest(stop_price=new_stop),
+                                    )
+                                    log.info(
+                                        "Trailing stop updated: %s peak=%.2f new_stop=%.2f",
+                                        symbol, current_price, new_stop,
+                                    )
+                                    break
+                        except Exception as exc:
+                            log.debug("Trailing stop update failed for %s: %s", symbol, exc)
+                    else:
+                        self._trailing_peaks.setdefault(symbol, current_price)
 
     # ── Retrain trigger ───────────────────────────────────────────────────────
 

@@ -15,7 +15,9 @@ from data.market_data import MarketSnapshot
 from data.sentiment import SentimentBundle
 from data.onchain import OnChainSnapshot
 from data.portfolio import PortfolioState
+from data.macro_data import fetch_macro_context
 from brain.signal import TradingSignal
+from watchlist import HOT_MIN_VOTES, WARM_MIN_VOTES
 from brain.agents.fundamental import FundamentalAnalyst
 from brain.agents.technical import TechnicalAnalyst
 from brain.agents.sentiment import SentimentAnalyst
@@ -94,6 +96,92 @@ class _RegimeWeightTracker:
 
 
 _regime_tracker = _RegimeWeightTracker()
+
+
+# ── Real-data helpers for Phase 2 agents ────────────────────────────────────
+
+# Options flow cache: symbol → (fetch_time, {put_call_ratio, iv_estimate})
+_OPTIONS_CACHE: dict[str, tuple[float, dict]] = {}
+_OPTIONS_CACHE_TTL = 1800  # 30-minute TTL — options data changes during trading day
+
+def _fetch_options_data(symbol: str) -> dict:
+    """Fetch put/call ratio and ATM IV from yfinance options chain.
+    Returns empty dict on failure — agent treats missing data as unavailable."""
+    cached = _OPTIONS_CACHE.get(symbol)
+    if cached and (time.monotonic() - cached[0]) < _OPTIONS_CACHE_TTL:
+        return cached[1]
+    try:
+        import yfinance as yf
+        ticker = yf.Ticker(symbol)
+        dates = ticker.options
+        if not dates:
+            _OPTIONS_CACHE[symbol] = (time.monotonic(), {})
+            return {}
+        chain = ticker.option_chain(dates[0])
+        calls = chain.calls
+        puts  = chain.puts
+        call_vol = max(float(calls["volume"].fillna(0).sum()), 1.0)
+        put_vol  = float(puts["volume"].fillna(0).sum())
+        pc_ratio = round(put_vol / call_vol, 3)
+
+        # ATM IV: average impliedVolatility of calls within 5% of current price
+        info = ticker.info
+        price = float(info.get("regularMarketPrice") or info.get("currentPrice") or 0)
+        atm_iv = 0.0
+        if price > 0:
+            atm_calls = calls[(calls["strike"] - price).abs() < price * 0.05]
+            if not atm_calls.empty:
+                atm_iv = round(float(atm_calls["impliedVolatility"].mean()), 4)
+
+        result = {
+            "put_call_ratio":   pc_ratio,
+            "atm_iv_est":       atm_iv,
+            "options_available": True,
+        }
+        _OPTIONS_CACHE[symbol] = (time.monotonic(), result)
+        log.debug("Options %s: pc=%.3f atm_iv=%.3f", symbol, pc_ratio, atm_iv)
+        return result
+    except Exception as exc:
+        log.debug("Options fetch failed for %s: %s", symbol, exc)
+        _OPTIONS_CACHE[symbol] = (time.monotonic(), {})
+        return {}
+
+
+# Sector ETF momentum cache: (fetch_time, {ETF → 20d ROC%})
+_SECTOR_CACHE: tuple[float, dict] | None = None
+_SECTOR_CACHE_TTL = 3600  # 1 hour — sector leadership shifts slowly
+
+_SECTOR_ETFS = ["XLC", "XLY", "XLP", "XLE", "XLF", "XLV", "XLI", "XLB", "XLRE", "XLK", "XLU"]
+
+def _fetch_sector_momentum() -> dict:
+    """Return 20-day ROC% for all 11 SPDR sector ETFs plus the ranked top-3 and bottom-3."""
+    global _SECTOR_CACHE
+    if _SECTOR_CACHE and (time.monotonic() - _SECTOR_CACHE[0]) < _SECTOR_CACHE_TTL:
+        return _SECTOR_CACHE[1]
+    try:
+        import yfinance as yf
+        raw = yf.download(_SECTOR_ETFS, period="35d", progress=False, auto_adjust=True)
+        close = raw["Close"] if "Close" in raw else raw
+        rocs: dict[str, float] = {}
+        for etf in _SECTOR_ETFS:
+            if etf in close.columns:
+                series = close[etf].dropna()
+                n = min(21, len(series))
+                if n >= 2:
+                    rocs[etf] = round((float(series.iloc[-1]) / float(series.iloc[-n]) - 1) * 100, 2)
+        sorted_etfs = sorted(rocs.items(), key=lambda x: x[1], reverse=True)
+        result = {
+            "sector_roc_20d": rocs,
+            "leading_sectors":  [e for e, _ in sorted_etfs[:3]],
+            "lagging_sectors":  [e for e, _ in sorted_etfs[-3:]],
+            "sector_data_available": len(rocs) >= 6,
+        }
+        _SECTOR_CACHE = (time.monotonic(), result)
+        log.debug("Sector momentum fetched: %d ETFs", len(rocs))
+        return result
+    except Exception as exc:
+        log.debug("Sector momentum fetch failed: %s", exc)
+        return {}
 
 
 # ── LLM output helpers ───────────────────────────────────────────────────────
@@ -342,11 +430,11 @@ def _aggregate_dual_panel(
 def _action_from_votes(
     tally: dict[str, int],
     panels_conflict: bool = False,
-    threshold: int = 11,
+    threshold: int = WARM_MIN_VOTES,
 ) -> Literal["BUY", "SELL", "HOLD"]:
     """
     Dual-panel majority-vote arbiter.  27 total agents (15 Panel A + 12 Panel B).
-    Default threshold = 11 (≈41% of pool — same ratio as old 8/19).
+    Default threshold = WARM_MIN_VOTES (11, ≈41% of pool — same ratio as old 8/19).
     Panel conflict only forces HOLD when BOTH panels are strongly directional
     and opposing (≥4 votes each).  Weak/neutral panel conflict is advisory only.
     """
@@ -384,7 +472,7 @@ def _compute_tier(
     aligned  = tally["bullish"] if action == "BUY" else tally["bearish"] if action == "SELL" else 0
     strong_conflict = panels_conflict and tally.get("bullish", 0) >= 4 and tally.get("bearish", 0) >= 4
     # Hard blockers: not enough votes, action is HOLD, strong bi-directional conflict, or unanimous abstention
-    hard_blocked = action == "HOLD" or strong_conflict or b_abstaining or aligned < 11
+    hard_blocked = action == "HOLD" or strong_conflict or b_abstaining or aligned < WARM_MIN_VOTES
 
     if hard_blocked:
         return "COLD"
@@ -396,7 +484,7 @@ def _compute_tier(
     )
     soft_cap = high_vol or "RANGING" in regime_label
 
-    if aligned >= 17 and not soft_cap:
+    if aligned >= HOT_MIN_VOTES and not soft_cap:
         return "HOT"
     return "WARM"
 
@@ -2020,11 +2108,28 @@ class DebateOrchestrator:
             cached_strategic = _cache.get(cache_key)
 
             regime_ctx = {"symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators}
+
+            # Quick deterministic regime estimate for Dalio context (before agents fire)
+            _roc20 = indicators.get("roc_20", 0) or 0
+            _atr14 = indicators.get("atr_14", 0) or 0
+            _price = max(indicators.get("price", 1) or 1, 1e-9)
+            _quick_regime = (
+                "HIGH_VOLATILITY" if (_atr14 / _price) > 0.04
+                else "TRENDING_UP"   if _roc20 > 3
+                else "TRENDING_DOWN" if _roc20 < -3
+                else "RANGING"
+            )
+
+            # FRED macro indicators (cached 1h — shared across all parallel workers)
+            _fred_ctx = fetch_macro_context()
+
             macro_ctx  = {
                 "symbol": symbol, "asset_class": asset_class,
                 "bars_last_60": bars_dicts, "indicators": indicators,
                 "portfolio_equity": portfolio.equity,
                 "daily_pnl_pct": portfolio.daily_pnl_pct,
+                # Real macro data from FRED
+                **_fred_ctx,
             }
 
             # Helper: extract only declared keys from indicators (asymmetric information partition)
@@ -2039,27 +2144,35 @@ class DebateOrchestrator:
                     yf_fundamentals = cached_entry[1]
                     log.debug("yfinance cache hit for %s (%d fields)", symbol, len(yf_fundamentals))
                 else:
-                    try:
-                        import yfinance as yf
-                        _info = yf.Ticker(symbol).info
-                        yf_fundamentals = {
-                            "pe_ratio":       _info.get("trailingPE"),
-                            "forward_pe":     _info.get("forwardPE"),
-                            "eps_ttm":        _info.get("trailingEps"),
-                            "revenue_growth": _info.get("revenueGrowth"),
-                            "profit_margin":  _info.get("profitMargins"),
-                            "debt_to_equity": _info.get("debtToEquity"),
-                            "market_cap":     _info.get("marketCap"),
-                            "sector":         _info.get("sector"),
-                            "industry":       _info.get("industry"),
-                            "52w_high":       _info.get("fiftyTwoWeekHigh"),
-                            "52w_low":        _info.get("fiftyTwoWeekLow"),
-                        }
-                        yf_fundamentals = {k: v for k, v in yf_fundamentals.items() if v is not None}
-                        _YF_CACHE[symbol] = (time.monotonic(), yf_fundamentals)
-                        log.debug("yfinance fundamentals for %s: %d fields (fetched)", symbol, len(yf_fundamentals))
-                    except Exception as exc:
-                        log.debug("yfinance fetch failed for %s (non-fatal): %s", symbol, exc)
+                    import yfinance as yf
+                    _info: dict = {}
+                    for _attempt in range(3):
+                        try:
+                            _info = yf.Ticker(symbol).info
+                            break
+                        except Exception as exc:
+                            if _attempt == 2:
+                                log.debug("yfinance fetch failed after 3 attempts for %s: %s", symbol, exc)
+                            else:
+                                time.sleep(0.5 * (_attempt + 1))
+                    yf_fundamentals = {
+                        "pe_ratio":       _info.get("trailingPE"),
+                        "forward_pe":     _info.get("forwardPE"),
+                        "eps_ttm":        _info.get("trailingEps"),
+                        "revenue_growth": _info.get("revenueGrowth"),
+                        "profit_margin":  _info.get("profitMargins"),
+                        "debt_to_equity": _info.get("debtToEquity"),
+                        "market_cap":     _info.get("marketCap"),
+                        "sector":         _info.get("sector"),
+                        "industry":       _info.get("industry"),
+                        "52w_high":       _info.get("fiftyTwoWeekHigh"),
+                        "52w_low":        _info.get("fiftyTwoWeekLow"),
+                    }
+                    yf_fundamentals = {k: v for k, v in yf_fundamentals.items() if v is not None}
+                    # Flag for the fundamental agent: if < 3 real fields, data quality is low
+                    yf_fundamentals["data_available"] = len(yf_fundamentals) >= 3
+                    _YF_CACHE[symbol] = (time.monotonic(), yf_fundamentals)
+                    log.debug("yfinance fundamentals for %s: %d fields (fetched)", symbol, len(yf_fundamentals))
 
             # Panel A tactical contexts
             panel_a_tasks: dict[str, tuple[Any, dict]] = {
@@ -2085,6 +2198,8 @@ class DebateOrchestrator:
                 }),
                 "options_flow": (self._options_flow.analyse, {
                     "symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators,
+                    # Real options chain data: put/call ratio + ATM IV (cached 30 min)
+                    **_fetch_options_data(symbol),
                 }),
                 # New Panel A specialists — each receives only its declared indicator slice
                 "breakout": (self._breakout.analyse, {
@@ -2098,7 +2213,10 @@ class DebateOrchestrator:
                 "sector_rotation": (self._sector_rotation.analyse, {
                     "symbol": symbol,
                     **_ind_str(["price", "roc_20", "roc_60", "volume_ratio",
-                                "sma_50", "high_proximity"])}),
+                                "sma_50", "high_proximity"]),
+                    # Real cross-sector ETF momentum (11 SPDR ETFs, cached 1h)
+                    **_fetch_sector_momentum(),
+                }),
                 "earnings_event": (self._earnings_event.analyse, {
                     "symbol": symbol,
                     **_ind_str(["price", "atr_14", "atr_trend", "bb_width",
@@ -2135,8 +2253,10 @@ class DebateOrchestrator:
                 "cohen": (self._cohen.analyse, _ind_str(
                     ["symbol", "price", "rsi_14", "macd", "macd_signal", "roc_5", "roc_10",
                      "volume_ratio", "stoch_k", "atr_14", "bb_upper", "bb_lower"])),
-                "dalio": (self._dalio.analyse, _ind_str(
-                    ["symbol", "price", "roc_60", "sma_200", "atr_14", "roc_20"])),
+                "dalio": (self._dalio.analyse, {
+                    **_ind_str(["symbol", "price", "roc_60", "sma_200", "atr_14", "roc_20"]),
+                    "regime_label": _quick_regime,  # deterministic estimate — replaced by regime agent after
+                }),
                 "wood": (self._wood.analyse, _ind_str(
                     ["symbol", "price", "roc_20", "roc_60", "high_proximity",
                      "sma_200", "volume_ratio", "atr_14"])),
@@ -2197,7 +2317,7 @@ class DebateOrchestrator:
         panel_a_tally, panel_b_tally, combined_tally, panels_conflict, conflict_note, b_abstaining = (
             _aggregate_dual_panel(analyst_views, investor_views, asset_class)
         )
-        action           = _action_from_votes(combined_tally, panels_conflict=panels_conflict, threshold=11)
+        action           = _action_from_votes(combined_tally, panels_conflict=panels_conflict, threshold=WARM_MIN_VOTES)
         regime_view      = analyst_views.get("regime", "")
         regime_label     = _parse_regime_label(regime_view)
         votes_for_action = (
@@ -2322,11 +2442,34 @@ class DebateOrchestrator:
             b_abstaining=b_abstaining,
         )
 
+        # ── Strategy Coach veto: MISALIGNED on a WARM signal → COLD ─────────
+        # HOT signals survive MISALIGNED (consensus too strong to override).
+        # COLD signals are already blocked and need no further downgrade.
+        if strategy_fit == "MISALIGNED" and tier == "WARM":
+            log.info(
+                "Strategy coach veto: %s MISALIGNED — WARM downgraded to COLD for %s",
+                action, symbol,
+            )
+            tier = "COLD"
+
+        # ── Confidence-scaled position sizing (Phase 1-F) ────────────────────
+        # Linear scale: conf=0.60→60% of base size, conf≥0.85→100%.
+        # Prevents the system from going full-size on low-confidence signals.
+        _conf = float(parsed.get("confidence", 0.0))
+        _base_pos_pct = float(parsed.get("suggested_position_pct", 0.0))
+        if _base_pos_pct > 0 and _conf > 0:
+            _scale = (_conf - 0.60) / (0.85 - 0.60)         # 0.0 at conf=0.60, 1.0 at conf=0.85
+            _scale = max(0.0, min(1.0, _scale))               # clamp to [0, 1]
+            _size_factor = 0.60 + _scale * 0.40              # maps to [0.60, 1.00]
+            _base_pos_pct = _base_pos_pct * _size_factor
+            log.debug("Confidence sizing: conf=%.2f scale=%.2f pos_pct=%.3f",
+                      _conf, _size_factor, _base_pos_pct)
+
         signal = TradingSignal(
             symbol=symbol,
             asset_class=asset_class,
             action=action,
-            confidence=float(parsed.get("confidence", 0.0)),  # kept for display only
+            confidence=_conf,
             rationale=parsed.get("rationale", f"Vote: {combined_tally}"),
             tier=tier,
             vote_tally=combined_tally,
@@ -2337,7 +2480,7 @@ class DebateOrchestrator:
             panel_b_votes=panel_b_tally,
             panels_conflict=panels_conflict,
             conflict_note=conflict_note,
-            suggested_position_pct=float(parsed.get("suggested_position_pct", 0.0)),
+            suggested_position_pct=_base_pos_pct,
             stop_loss_pct=float(parsed.get("stop_loss_pct", 0.02)),
             take_profit_pct=float(parsed.get("take_profit_pct", 0.05)),
             devil_advocate_score=int(parsed.get("devil_advocate_score", 0)),

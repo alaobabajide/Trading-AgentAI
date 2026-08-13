@@ -348,7 +348,7 @@ def _build_services(cfg):
 
     alpaca        = AlpacaMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)
     alpaca_crypto = AlpacaCryptoMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)
-    sentiment = SentimentFetcher()
+    sentiment = SentimentFetcher(finnhub_api_key=cfg.finnhub_api_key)
     onchain = OnChainFetcher(eth_rpc_url=cfg.eth_rpc_url)
     portfolio = PortfolioFetcher(
         cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,

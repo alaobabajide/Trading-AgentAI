@@ -63,12 +63,11 @@ class RiskControls:
         signal_position_pct: float,
         stop_loss_pct: float = 0.02,
         take_profit_pct: float = 0.05,
-        atr_multiplier: float = 2.0,
     ) -> SizingResult:
         """ATR-based position sizing.
 
-        Uses 2× ATR as the stop distance.  Notional is capped at
-        max_position_pct × equity.
+        Uses 1.5× ATR as the primary stop distance, floored at 0.5% and
+        capped at 4.0% of price.  Notional is capped at max_position_pct × equity.
         """
         if self._triggered:
             log.warning("Circuit breaker active — sizing to 0 for %s", symbol)
@@ -83,9 +82,12 @@ class RiskControls:
             atr_series = ta.volatility.AverageTrueRange(h, l, c, window=14).average_true_range()
             atr = float(atr_series.iloc[-1])
 
-        # Stop distance: max of ATR-based or fixed percentage
-        atr_stop = atr_multiplier * atr if atr > 0 else current_price * stop_loss_pct
-        stop_distance = max(atr_stop, current_price * stop_loss_pct)
+        # ATR-primary stop: 1.5× ATR, bounded to [0.5%, 4.0%] of price.
+        # Tighter than the old max(2×ATR, flat%) which over-widened for high-vol stocks.
+        atr_stop_raw = 1.5 * atr if atr > 0 else current_price * stop_loss_pct
+        atr_stop_pct = atr_stop_raw / max(current_price, 1e-9)
+        atr_stop_pct = max(0.005, min(0.04, atr_stop_pct))  # floor=0.5%, cap=4.0%
+        stop_distance = current_price * atr_stop_pct
         stop_price = max(round(current_price - stop_distance, 2), 0.01)  # Alpaca requires whole cents
         take_profit_price = round(current_price + current_price * take_profit_pct, 2)
 
