@@ -14,9 +14,50 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { HITLProvider, useHITLContext } from "./context/HITLContext";
 import { SetupBanner } from "./components/SetupBanner";
 import { MODE_CONFIG } from "./lib/hitl";
+import { useCreditStatus } from "./lib/api";
+import { AlertTriangle, X } from "lucide-react";
 
 type Page = "dashboard" | "signals" | "positions" | "technical" | "fundamental" | "charts" | "indices" | "brain" | "settings";
 type TradingEnv = "paper" | "live";
+
+function CreditWarningBanner() {
+  const status = useCreditStatus();
+  const [dismissed, setDismissed] = useState(false);
+
+  if (!status || !status.warning || dismissed) return null;
+
+  const balance = status.balance_usd ?? 0;
+  const urgent  = balance < 2.0;
+
+  return (
+    <div className={clsx(
+      "shrink-0 flex items-center gap-3 px-8 py-2.5 border-b text-sm font-medium",
+      urgent
+        ? "bg-red-500/15 border-red-500/30 text-red-300"
+        : "bg-amber-500/15 border-amber-500/30 text-amber-300",
+    )}>
+      <AlertTriangle className="w-4 h-4 shrink-0 animate-pulse" />
+      <span className="flex-1">
+        <strong>API credit low:</strong> ${balance.toFixed(2)} remaining on OpenRouter.
+        {urgent ? " Trading may stop soon — " : " "}
+        <a
+          href="https://openrouter.ai/settings/billing"
+          target="_blank" rel="noreferrer"
+          className="underline underline-offset-2 hover:opacity-80"
+        >
+          Top up now
+        </a>
+      </span>
+      <button
+        onClick={() => setDismissed(true)}
+        className="opacity-60 hover:opacity-100 transition-opacity"
+        aria-label="Dismiss"
+      >
+        <X className="w-4 h-4" />
+      </button>
+    </div>
+  );
+}
 
 const PAGE_TITLE: Partial<Record<Page, string>> = {
   fundamental: "Fundamental Analysis",
@@ -157,6 +198,9 @@ function AppInner() {
 
         {/* Setup banner — only visible when Brain API is online but keys are missing */}
         <SetupBanner />
+
+        {/* Credit warning — shown when OpenRouter balance drops below $5 */}
+        <CreditWarningBanner />
 
         <div className={page === "charts" ? "flex-1 min-h-0 flex flex-col" : "p-8"}>
           {page === "dashboard"   && <Dashboard />}

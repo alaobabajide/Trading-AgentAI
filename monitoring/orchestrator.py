@@ -107,6 +107,8 @@ class Orchestrator:
         # Live risk config — refreshed from brain API before every monitor run
         self._stop_loss_pct  = cfg.stop_loss_pct
         self._take_profit_pct = cfg.take_profit_pct
+        # Credit alert — monotonic timestamp of last Telegram notification (avoids spam)
+        self._last_credit_alert_ts: float = 0.0
 
     # ── Portfolio refresh ──────────────────────────────────────────────────────
 
@@ -501,6 +503,56 @@ class Orchestrator:
             log.info("Retrain trigger: daily P&L = %.2f%%", portfolio.daily_pnl_pct)
             retrain_counter.inc()
 
+    # ── API credit monitoring ─────────────────────────────────────────────────
+
+    def _check_api_credits(self) -> None:
+        """Poll /credits every 30 min; send Telegram alert if balance < $5."""
+        if self._paper_mode:
+            return  # paper mode uses no OpenRouter credits
+        try:
+            r = httpx.get(
+                f"{self._brain_url}/credits",
+                timeout=10,
+                headers=self._brain_headers(),
+            )
+            if r.status_code != 200:
+                return
+            data = r.json()
+            balance = data.get("balance_usd")
+            if balance is not None and float(balance) < 5.0:
+                self._send_credit_alert(float(balance))
+        except Exception as exc:
+            log.warning("Credit check failed: %s", exc)
+
+    def _send_credit_alert(self, balance: float) -> None:
+        """Send Telegram message about low credits (at most once per hour)."""
+        now = time.monotonic()
+        if now - self._last_credit_alert_ts < 3600:
+            return
+        self._last_credit_alert_ts = now
+        cfg = self._cfg
+        token      = getattr(cfg, "telegram_bot_token", "") or ""
+        allowed_ids = getattr(cfg, "telegram_allowed_ids", []) or []
+        if not token or not allowed_ids:
+            log.warning("Credit alert: Telegram not configured, cannot send notification")
+            return
+        msg = (
+            "⚠️ <b>OpenRouter API Credit Alert</b>\n\n"
+            f"Remaining balance: <b>${balance:.2f}</b>\n"
+            "Balance is below the <b>$5.00</b> warning threshold.\n\n"
+            "Top up at openrouter.ai/settings/billing to keep live trading running."
+        )
+        for chat_id in allowed_ids:
+            try:
+                httpx.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"},
+                    timeout=10,
+                )
+                log.info("Credit alert sent to Telegram chat %s (balance $%.2f)", chat_id, balance)
+            except Exception as exc:
+                log.warning("Telegram credit alert failed for %s: %s", chat_id, exc)
+
     # ── Scheduled jobs ────────────────────────────────────────────────────────
 
     def _run_cycle(self) -> None:
@@ -570,6 +622,7 @@ class Orchestrator:
         schedule.every(CYCLE_INTERVAL_MINUTES).minutes.do(self._run_cycle)
         schedule.every(1).minutes.do(self._refresh_portfolio_metrics)
         schedule.every(1).minutes.do(self._monitor_positions)
+        schedule.every(30).minutes.do(self._check_api_credits)
 
         total_symbols = len(STOCK_WATCHLIST) + len(ETF_WATCHLIST) + len(CRYPTO_WATCHLIST)
         log.info(

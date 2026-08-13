@@ -1687,6 +1687,87 @@ def get_fundamentals(symbol: str, asset_class: str = "stock"):
         raise HTTPException(503, "Fundamental data temporarily unavailable")
 
 
+@app.get("/usage")
+def get_api_usage():
+    """Return daily LLM token usage and cost statistics.
+    Data accumulates in-process since last restart; resets to zero on deploy.
+    All costs are estimates based on OpenRouter published pricing.
+    """
+    from brain.agents.base import get_usage_stats
+    return get_usage_stats()
+
+
+_CREDITS_CACHE: dict = {}
+_CREDITS_TTL   = 120  # seconds — check balance every 2 minutes max
+
+
+@app.get("/credits")
+def get_credit_status():
+    """Query OpenRouter for remaining API credit balance.
+    Returns current balance, used amount, and whether balance is below the $5 warning threshold.
+    """
+    import time as _time
+    cached = _CREDITS_CACHE.get("last")
+    if cached and _time.time() - cached["ts"] < _CREDITS_TTL:
+        return cached["data"]
+
+    cfg = get_settings()
+    api_key = cfg.openrouter_api_key or ""
+
+    if not api_key:
+        result = {
+            "provider": "openrouter",
+            "configured": False,
+            "balance_usd": None,
+            "used_usd": None,
+            "limit_usd": None,
+            "warning": False,
+            "warning_threshold": 5.0,
+            "error": "OPENROUTER_API_KEY not configured — running in paper mode",
+        }
+        return result
+
+    try:
+        import httpx as _httpx
+        r = _httpx.get(
+            "https://openrouter.ai/api/v1/auth/key",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            raise ValueError(f"OpenRouter returned HTTP {r.status_code}")
+        body = r.json().get("data") or r.json()
+        used_usd   = float(body.get("usage", 0) or 0)
+        limit_usd  = body.get("limit")
+        limit_usd  = float(limit_usd) if limit_usd is not None else None
+        balance_usd = round((limit_usd - used_usd), 4) if limit_usd is not None else None
+        result = {
+            "provider": "openrouter",
+            "configured": True,
+            "balance_usd": balance_usd,
+            "used_usd": round(used_usd, 4),
+            "limit_usd": limit_usd,
+            "warning": balance_usd is not None and balance_usd < 5.0,
+            "warning_threshold": 5.0,
+            "error": None,
+        }
+    except Exception as exc:
+        log.warning("credits check failed: %s", exc)
+        result = {
+            "provider": "openrouter",
+            "configured": True,
+            "balance_usd": None,
+            "used_usd": None,
+            "limit_usd": None,
+            "warning": False,
+            "warning_threshold": 5.0,
+            "error": str(exc),
+        }
+
+    _CREDITS_CACHE["last"] = {"ts": _time.time(), "data": result}
+    return result
+
+
 @app.get("/audit")
 def get_audit_log(limit: int = 50):
     """Return the last N trade audit log entries (newest first)."""

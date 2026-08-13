@@ -510,6 +510,88 @@ export function useOrders(statusFilter: "open" | "all" | "closed" = "open") {
   return { orders, fetchError, loading };
 }
 
+// ── API usage & credit tracking ───────────────────────────────────────────────
+
+export interface ModelUsage {
+  input_tokens:  number;
+  output_tokens: number;
+  cost_usd:      number;
+  calls:         number;
+}
+
+export interface DailyUsage {
+  date:          string;
+  input_tokens:  number;
+  output_tokens: number;
+  cost_usd:      number;
+  calls:         number;
+  by_model:      Record<string, ModelUsage>;
+}
+
+export interface ApiUsageResponse {
+  today:   DailyUsage;
+  history: DailyUsage[];
+}
+
+export interface CreditStatus {
+  provider:          string;
+  configured:        boolean;
+  balance_usd:       number | null;
+  used_usd:          number | null;
+  limit_usd:         number | null;
+  warning:           boolean;
+  warning_threshold: number;
+  error:             string | null;
+}
+
+export function useCreditStatus() {
+  const [status, setStatus] = useState<CreditStatus | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function check() {
+      try {
+        const res = await fetch(`${BASE}/credits`, {
+          headers: apiHeaders(),
+          signal: AbortSignal.timeout(12000),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await safeJson<CreditStatus>(res);
+        if (!cancelled) setStatus(data);
+      } catch { /* backend not up yet */ }
+    }
+    check();
+    const id = setInterval(check, 5 * 60_000); // every 5 minutes
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  return status;
+}
+
+export function useApiUsage() {
+  const [usage, setUsage] = useState<ApiUsageResponse | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const res = await fetch(`${BASE}/usage`, {
+          headers: apiHeaders(),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await safeJson<ApiUsageResponse>(res);
+        if (!cancelled) setUsage(data);
+      } catch { /* backend not up yet */ }
+    }
+    load();
+    const id = setInterval(load, 60_000); // every 60s
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  return usage;
+}
+
 /**
  * Polls /api/health every 30s to drive the "Brain live" indicator.
  */
