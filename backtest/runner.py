@@ -142,11 +142,14 @@ def _compute_indicators(closes: list[float], highs: list[float], lows: list[floa
 # ── Signal generation (paper-mode rules, no LLM) ─────────────────────────────
 
 def _paper_signal(indicators: dict, asset_class: str) -> tuple[str, str, float, float, float]:
-    """Return (action, tier, position_pct, stop_loss_pct, take_profit_pct)."""
-    # Import paper-mode rule functions from debate.py
+    """Return (action, tier, position_pct, stop_loss_pct, take_profit_pct).
+
+    Calls the same deterministic paper-mode rule functions as the live debate.py
+    paper path.  Uses RegimeDetector directly (no LLM needed).
+    """
     from brain.debate import (
-        _paper_technical, _paper_quant, _paper_regime,
-        _paper_fundamental, _paper_sentiment, _paper_options_flow,
+        _paper_technical, _paper_quant, _paper_fundamental,
+        _paper_sentiment, _paper_options_flow, _paper_macro,
         _paper_investor_buffett, _paper_investor_munger, _paper_investor_lynch,
         _paper_investor_ackman, _paper_investor_cohen, _paper_investor_dalio,
         _paper_investor_wood, _paper_investor_bogle,
@@ -155,17 +158,24 @@ def _paper_signal(indicators: dict, asset_class: str) -> tuple[str, str, float, 
         _paper_breakout, _paper_trend_strength, _paper_sector_rotation,
         _paper_earnings_event, _paper_momentum_scorer, _paper_supply_demand,
         _paper_volume_analyst, _paper_risk_reward,
-        _parse_direction, _compute_panel_tallies, _action_from_votes,
-        _compute_tier, _parse_regime_label, HOT_MIN_VOTES, WARM_MIN_VOTES,
+        _aggregate_dual_panel, _action_from_votes, _compute_tier,
+        _parse_regime_label, WARM_MIN_VOTES,
     )
+    from brain.agents.regime import RegimeDetector
+
+    # Build indicator-only context for the regime detector
+    regime_detector = RegimeDetector()
+    regime_view = regime_detector.analyse({"indicators": indicators})
+    regime_label = _parse_regime_label(regime_view)
 
     views: dict[str, str] = {}
-    # Panel A
+    views["regime"]         = regime_view
     views["technical"]      = _paper_technical(indicators)
     views["quant"]          = _paper_quant(indicators)
-    views["fundamental"]    = _paper_fundamental(indicators, asset_class)
+    views["fundamental"]    = _paper_fundamental(indicators)
     views["sentiment"]      = _paper_sentiment(indicators)
     views["options_flow"]   = _paper_options_flow(indicators)
+    views["macro"]          = _paper_macro(indicators)
     views["breakout"]       = _paper_breakout(indicators)
     views["trend_strength"] = _paper_trend_strength(indicators)
     views["sector_rotation"]= _paper_sector_rotation(indicators)
@@ -175,44 +185,35 @@ def _paper_signal(indicators: dict, asset_class: str) -> tuple[str, str, float, 
     views["volume_analyst"] = _paper_volume_analyst(indicators)
     views["risk_reward"]    = _paper_risk_reward(indicators)
 
-    regime_view = _paper_regime(indicators)
-    views["regime"] = regime_view
-    regime_label = _parse_regime_label(regime_view)
-
-    # Panel B
     inv_views: dict[str, str] = {
-        "buffett": _paper_investor_buffett(indicators),
-        "munger":  _paper_investor_munger(indicators),
-        "lynch":   _paper_investor_lynch(indicators),
-        "ackman":  _paper_investor_ackman(indicators),
-        "cohen":   _paper_investor_cohen(indicators),
-        "dalio":   _paper_investor_dalio(indicators),
-        "wood":    _paper_investor_wood(indicators),
-        "bogle":   _paper_investor_bogle(indicators),
+        "buffett":        _paper_investor_buffett(indicators),
+        "munger":         _paper_investor_munger(indicators),
+        "lynch":          _paper_investor_lynch(indicators),
+        "ackman":         _paper_investor_ackman(indicators),
+        "cohen":          _paper_investor_cohen(indicators),
+        "dalio":          _paper_investor_dalio(indicators),
+        "wood":           _paper_investor_wood(indicators),
+        "bogle":          _paper_investor_bogle(indicators),
         "soros":          _paper_investor_soros(indicators),
         "druckenmiller":  _paper_investor_druckenmiller(indicators),
         "simons":         _paper_investor_simons(indicators),
         "templeton":      _paper_investor_templeton(indicators),
     }
 
-    a_tally, b_tally, combined, conflict, conflict_note, b_abstaining = _compute_panel_tallies(
+    a_tally, b_tally, combined, conflict, conflict_note, b_abstaining = _aggregate_dual_panel(
         views, inv_views, asset_class,
     )
 
-    action = _action_from_votes(combined, conflict)
+    action = _action_from_votes(combined, conflict, threshold=WARM_MIN_VOTES)
     tier   = _compute_tier(combined, action, regime_label, indicators,
                            panels_conflict=conflict, b_abstaining=b_abstaining)
 
-    # Simple risk params derived from ATR
-    price    = indicators.get("price", 1.0)
-    atr14    = indicators.get("atr_14", 0.0)
+    # ATR-primary risk params (mirrors Phase 1-B sizing)
+    price    = float(indicators.get("price", 1.0))
+    atr14    = float(indicators.get("atr_14", 0.0))
     atr_pct  = atr14 / max(price, 1e-9)
     stop_pct = max(0.005, min(0.04, 1.5 * atr_pct))
-    tp_pct   = 0.05
-    if "TRENDING_UP" in regime_label:
-        tp_pct = 0.08
-    elif "RANGING" in regime_label:
-        tp_pct = 0.03
+    tp_pct   = 0.08 if "TRENDING_UP" in regime_label else 0.03 if "RANGING" in regime_label else 0.05
     pos_pct  = 0.05
 
     return action, tier, pos_pct, stop_pct, tp_pct
