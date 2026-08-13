@@ -1551,6 +1551,39 @@ def get_fundamentals(symbol: str, asset_class: str = "stock"):
                 pass
             return "N/A"
 
+        # ── ETF early path — return ETF-specific metrics and skip stock fields ──
+        if asset_class == "etf":
+            avg_vol = info.get("averageVolume") or info.get("averageDailyVolume3Month") or 0
+            def _fmt_vol(v: int) -> str:
+                if v >= 1_000_000: return f"{v / 1_000_000:.1f}M"
+                if v >= 1_000:    return f"{v / 1_000:.0f}K"
+                return str(v) if v else "N/A"
+            etf_result = {
+                "symbol":             sym,
+                "asset_class":        "etf",
+                "name":               info.get("longName") or info.get("shortName") or sym,
+                "current_price":      _sf(info.get("regularMarketPrice") or info.get("navPrice"), decimals=2),
+                "week52_high":        _sf(info.get("fiftyTwoWeekHigh"), decimals=2),
+                "week52_low":         _sf(info.get("fiftyTwoWeekLow"), decimals=2),
+                # ETF-specific live fields
+                "aum":                _fmt_cap(info.get("totalAssets")),
+                "nav":                _sf(info.get("navPrice") or info.get("regularMarketPrice"), decimals=2),
+                "distribution_yield": round(float(info.get("yield") or 0) * 100, 2),
+                "beta":               _sf(info.get("beta") or info.get("beta3Year"), decimals=2),
+                "pe_underlying":      _sf(info.get("trailingPE"), decimals=1),
+                "expense_ratio":      round(float(info.get("expenseRatio") or 0), 4),
+                "avg_volume":         _fmt_vol(int(avg_vol)),
+                # Stock fields empty — required by frontend interface shape
+                "market_cap": "N/A", "pe": 0.0, "forward_pe": 0.0, "eps": 0.0,
+                "revenue_growth_yoy": 0.0, "gross_margin": 0.0,
+                "debt_to_equity": 0.0, "roe": 0.0,
+                "analyst_target": 0.0, "analyst_rating": "N/A",
+                "buy_count": 0, "hold_count": 0, "sell_count": 0,
+                "earnings": [],
+            }
+            _FUND_CACHE[cache_key] = (_time.time(), etf_result)
+            return etf_result
+
         # ── Analyst consensus ─────────────────────────────────────────────────
         buy_ct = hold_ct = sell_ct = 0
         try:

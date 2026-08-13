@@ -20,6 +20,7 @@ interface RealFundamentals {
   symbol: string;
   asset_class: string;
   name: string;
+  // Stock / crypto fields
   market_cap: string;
   pe: number;
   forward_pe: number;
@@ -44,6 +45,13 @@ interface RealFundamentals {
     revenue_est: number;
     revenue_actual: number;
   }[];
+  // ETF-specific live fields (present when asset_class === "etf")
+  aum?: string;
+  nav?: number;
+  distribution_yield?: number;
+  pe_underlying?: number;
+  expense_ratio?: number;
+  avg_volume?: string;
 }
 
 function useFundamentals(symbol: string, assetClass: string) {
@@ -149,62 +157,148 @@ function MetricCell({ label, value, color }: { label: string; value: string; col
   );
 }
 
-// ── ETF panel ─────────────────────────────────────────────────────────────────
+// ── Live ETF panel (replaces stale-static EtfPanel for all ETFs) ─────────────
 
-function EtfPanel({ etf, priceLive }: { etf: EtfMetrics; priceLive: number }) {
-  const upside = ((etf.nav - priceLive) / priceLive) * 100;
+function LiveEtfPanel({
+  f, etfDetail, priceLive, loading, error,
+}: {
+  f: RealFundamentals | null;
+  etfDetail: EtfMetrics | null;
+  priceLive: number;
+  loading: boolean;
+  error: string | null;
+}) {
+  if (loading) {
+    return (
+      <div className="glass rounded-2xl p-8 text-center text-slate-500 text-sm">
+        <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2" />
+        Fetching live ETF data…
+      </div>
+    );
+  }
+  if (error || !f) {
+    return (
+      <div className="glass rounded-2xl p-6 flex items-center gap-3 text-amber-400">
+        <AlertCircle className="w-5 h-5 shrink-0" />
+        <div>
+          <div className="text-sm font-semibold">ETF data unavailable</div>
+          <div className="text-xs text-slate-400 mt-0.5">{error ?? "No data returned"}</div>
+        </div>
+      </div>
+    );
+  }
+
+  const navDiscount = f.nav && f.nav > 0 && priceLive > 0
+    ? ((priceLive - f.nav) / f.nav) * 100
+    : null;
+
+  const expDisplay = f.expense_ratio && f.expense_ratio > 0
+    ? `${f.expense_ratio.toFixed(4)}%`
+    : "N/A";
+  const expColor = !f.expense_ratio ? undefined
+    : f.expense_ratio < 0.2 ? "text-emerald-400"
+    : f.expense_ratio > 0.5 ? "text-red-400"
+    : "text-yellow-400";
+
   return (
     <div className="space-y-5">
       <div className="glass rounded-2xl p-5 space-y-3">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h3 className="text-sm font-semibold text-slate-100">{etf.fullName}</h3>
-            <p className="text-xs text-slate-500 mt-0.5">{etf.category} · {etf.issuer} · est. {etf.inceptionDate}</p>
+            <h3 className="text-sm font-semibold text-slate-100">{f.name}</h3>
+            {etfDetail && (
+              <p className="text-xs text-slate-500 mt-0.5">
+                {etfDetail.category} · {etfDetail.issuer} · est. {etfDetail.inceptionDate}
+              </p>
+            )}
           </div>
-          <div className="text-right shrink-0">
-            <div className="text-xs text-slate-500 font-mono">Benchmark</div>
-            <div className="text-xs text-slate-300 font-mono">{etf.benchmark}</div>
-          </div>
+          {etfDetail && (
+            <div className="text-right shrink-0">
+              <div className="text-xs text-slate-500 font-mono">Benchmark</div>
+              <div className="text-xs text-slate-300 font-mono">{etfDetail.benchmark}</div>
+            </div>
+          )}
         </div>
+
         <div className="grid grid-cols-4 gap-2 pt-1">
-          <MetricCell label="AUM" value={etf.aum} />
-          <MetricCell label="Expense Ratio" value={`${etf.expenseRatio.toFixed(4)}%`}
-            color={etf.expenseRatio < 0.2 ? "text-emerald-400" : etf.expenseRatio > 0.5 ? "text-red-400" : "text-yellow-400"} />
-          <MetricCell label="Dist. Yield" value={etf.distributionYield > 0 ? `${etf.distributionYield.toFixed(2)}%` : "N/A"}
-            color="text-emerald-400" />
-          <MetricCell label="Avg Volume" value={etf.avgVolume} />
-          <MetricCell label="NAV" value={`$${etf.nav.toFixed(2)}`} />
-          <MetricCell label="NAV Discount" value={`${upside >= 0 ? "+" : ""}${upside.toFixed(2)}%`}
-            color={Math.abs(upside) < 0.2 ? "text-emerald-400" : "text-yellow-400"} />
-          <MetricCell label="P/E (Underlying)" value={etf.peUnderlying > 0 ? etf.peUnderlying.toFixed(1) : "N/A"} />
-          <MetricCell label="Beta" value={etf.beta.toFixed(2)}
-            color={Math.abs(etf.beta) < 0.3 ? "text-emerald-400" : etf.beta > 1.2 ? "text-red-400" : "text-slate-200"} />
+          <MetricCell label="AUM" value={f.aum ?? "N/A"} />
+          <MetricCell label="Expense Ratio" value={expDisplay} color={expColor} />
+          <MetricCell
+            label="Dist. Yield"
+            value={(f.distribution_yield ?? 0) > 0 ? `${f.distribution_yield!.toFixed(2)}%` : "N/A"}
+            color="text-emerald-400"
+          />
+          <MetricCell
+            label="Avg Volume"
+            value={f.avg_volume ?? etfDetail?.avgVolume ?? "N/A"}
+          />
+          <MetricCell
+            label="NAV"
+            value={(f.nav ?? 0) > 0 ? `$${f.nav!.toFixed(2)}` : "N/A"}
+          />
+          <MetricCell
+            label="NAV Premium"
+            value={navDiscount !== null
+              ? `${navDiscount >= 0 ? "+" : ""}${navDiscount.toFixed(2)}%`
+              : "N/A"}
+            color={navDiscount !== null && Math.abs(navDiscount) < 0.2
+              ? "text-emerald-400" : "text-yellow-400"}
+          />
+          <MetricCell
+            label="P/E (Portfolio)"
+            value={(f.pe_underlying ?? 0) > 0 ? f.pe_underlying!.toFixed(1) : "N/A"}
+          />
+          <MetricCell
+            label="Beta (3-Yr)"
+            value={(f.beta ?? 0) > 0 ? f.beta!.toFixed(2) : "N/A"}
+            color={(f.beta ?? 0) < 0.3 ? "text-emerald-400"
+              : (f.beta ?? 0) > 1.2 ? "text-red-400" : undefined}
+          />
         </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div className="bg-surface-700 rounded-xl p-3 flex items-center justify-between">
-            <span className="text-xs text-slate-500">YTD Return</span>
-            <span className={clsx("text-sm font-mono font-semibold", etf.ytdReturn >= 0 ? "text-emerald-400" : "text-red-400")}>
-              {etf.ytdReturn >= 0 ? "+" : ""}{etf.ytdReturn.toFixed(1)}%
-            </span>
+
+        {etfDetail && (
+          <div className="grid grid-cols-2 gap-2">
+            <div className="bg-surface-700 rounded-xl p-3 flex items-center justify-between">
+              <span className="text-xs text-slate-500">YTD Return</span>
+              <span className={clsx("text-sm font-mono font-semibold",
+                etfDetail.ytdReturn >= 0 ? "text-emerald-400" : "text-red-400")}>
+                {etfDetail.ytdReturn >= 0 ? "+" : ""}{etfDetail.ytdReturn.toFixed(1)}%
+              </span>
+            </div>
+            <div className="bg-surface-700 rounded-xl p-3 flex items-center justify-between">
+              <span className="text-xs text-slate-500">1-Year Return</span>
+              <span className={clsx("text-sm font-mono font-semibold",
+                etfDetail.oneYearReturn >= 0 ? "text-emerald-400" : "text-red-400")}>
+                {etfDetail.oneYearReturn >= 0 ? "+" : ""}{etfDetail.oneYearReturn.toFixed(1)}%
+              </span>
+            </div>
           </div>
-          <div className="bg-surface-700 rounded-xl p-3 flex items-center justify-between">
-            <span className="text-xs text-slate-500">1-Year Return</span>
-            <span className={clsx("text-sm font-mono font-semibold", etf.oneYearReturn >= 0 ? "text-emerald-400" : "text-red-400")}>
-              {etf.oneYearReturn >= 0 ? "+" : ""}{etf.oneYearReturn.toFixed(1)}%
-            </span>
+        )}
+      </div>
+
+      {etfDetail ? (
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+          <div className="lg:col-span-3 glass rounded-2xl p-5">
+            <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-4">
+              Top Holdings by Weight
+            </h2>
+            <EtfHoldingsChart
+              holdings={etfDetail.topHoldings}
+              height={etfDetail.topHoldings.length * 32 + 16}
+            />
+          </div>
+          <div className="lg:col-span-2 glass rounded-2xl p-5">
+            <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-4">
+              Sector Allocation
+            </h2>
+            <SectorDonut sectors={etfDetail.sectorWeights} />
           </div>
         </div>
-      </div>
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
-        <div className="lg:col-span-3 glass rounded-2xl p-5">
-          <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-4">Top Holdings by Weight</h2>
-          <EtfHoldingsChart holdings={etf.topHoldings} height={etf.topHoldings.length * 32 + 16} />
+      ) : (
+        <div className="glass rounded-2xl p-5 text-center text-sm text-slate-500">
+          Detailed holdings and sector breakdown not available for this ETF via free data feed.
         </div>
-        <div className="lg:col-span-2 glass rounded-2xl p-5">
-          <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-4">Sector Allocation</h2>
-          <SectorDonut sectors={etf.sectorWeights} />
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -327,12 +421,13 @@ export function FundamentalPage() {
 
   const isEtf      = ETF_LIST.includes(symbol);
   const isCrypto   = symbol.endsWith("USDT");
-  const assetClass = isCrypto ? "crypto" : "stock";
+  // Pass "etf" so the backend returns ETF-specific fields (AUM, NAV, yield, beta3yr, P/E, expenseRatio)
+  const assetClass = isCrypto ? "crypto" : isEtf ? "etf" : "stock";
 
-  // Static ETF holdings/sector data (only for the 7 ETFs with detail records)
+  // Static holdings/sector data — only available for 7 ETFs with hardcoded records
   const etfDetail  = isEtf ? getEtfData(symbol) : null;
 
-  // Real fundamentals from Yahoo Finance (used for stocks + ETFs without detail)
+  // Live fundamentals from Yahoo Finance via /api/fundamentals
   const { data: fundamentals, loading: fundLoading, error: fundError } =
     useFundamentals(symbol, assetClass);
 
@@ -363,8 +458,9 @@ export function FundamentalPage() {
   }, [symbol, staticPrice, assetClass]);
 
   const displayPrice   = priceLive || staticPrice;
-  const week52Low      = fundamentals?.week52_low  ?? etfDetail?.week52Low  ?? 0;
-  const week52High     = fundamentals?.week52_high ?? etfDetail?.week52High ?? 0;
+  // Live 52W range — ETF data comes from live API now (not stale static ETF_DATA)
+  const week52Low      = fundamentals?.week52_low  ?? 0;
+  const week52High     = fundamentals?.week52_high ?? 0;
   const analystTarget  = !isEtf ? (fundamentals?.analyst_target ?? 0) : 0;
   const upside         = analystTarget && displayPrice ? ((analystTarget - displayPrice) / displayPrice) * 100 : null;
 
@@ -412,13 +508,17 @@ export function FundamentalPage() {
               </span>
             </div>
           )}
-          {isEtf && etfDetail && (
+          {isEtf && fundamentals && (
             <div className="flex items-center gap-4 text-xs text-slate-400 font-mono">
-              <span>NAV <span className="text-slate-200">${etfDetail.nav.toFixed(2)}</span></span>
-              <span>ER <span className="text-slate-200">{etfDetail.expenseRatio}%</span></span>
-              <span>Yield <span className="text-emerald-400">
-                {etfDetail.distributionYield > 0 ? `${etfDetail.distributionYield.toFixed(2)}%` : "–"}
-              </span></span>
+              {(fundamentals.nav ?? 0) > 0 && (
+                <span>NAV <span className="text-slate-200">${fundamentals.nav!.toFixed(2)}</span></span>
+              )}
+              {(fundamentals.expense_ratio ?? 0) > 0 && (
+                <span>ER <span className="text-slate-200">{fundamentals.expense_ratio!.toFixed(4)}%</span></span>
+              )}
+              {(fundamentals.distribution_yield ?? 0) > 0 && (
+                <span>Yield <span className="text-emerald-400">{fundamentals.distribution_yield!.toFixed(2)}%</span></span>
+              )}
             </div>
           )}
         </div>
@@ -428,9 +528,15 @@ export function FundamentalPage() {
         </div>
       </div>
 
-      {/* ETF with holdings detail OR stock/crypto panel */}
-      {isEtf && etfDetail
-        ? <EtfPanel etf={etfDetail} priceLive={displayPrice} />
+      {/* ETF: live metrics panel (with static holdings if available) OR stock/crypto panel */}
+      {isEtf
+        ? <LiveEtfPanel
+            f={fundamentals}
+            etfDetail={etfDetail}
+            priceLive={displayPrice}
+            loading={fundLoading}
+            error={fundError}
+          />
         : <StockPanel
             isCrypto={isCrypto}
             fundamentals={fundamentals}
