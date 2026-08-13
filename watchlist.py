@@ -2,31 +2,48 @@
 from __future__ import annotations
 
 STOCK_WATCHLIST = [
-    # Mega-cap tech
-    "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META",
-    # Growth tech / cloud / fintech
-    "NFLX", "ADBE", "CRM", "AMD", "COIN", "SHOP", "UBER",
-    # Semiconductors
-    "INTC", "QCOM", "AVGO", "MU", "TXN",
-    # Financials
-    "JPM", "GS", "MS", "BAC", "BX", "V", "MA",
-    # Healthcare / pharma
-    "JNJ", "UNH", "LLY", "ABBV", "AMGN",
-    # Consumer / retail
-    "WMT", "COST", "HD", "NKE", "SBUX", "MCD",
-    # Energy
-    "XOM", "CVX", "OXY",
+    # ── Mega-cap tech / AI (>$1T market cap) ──────────────────────────────────
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AVGO", "ORCL",
+    # ── Growth tech / cloud / SaaS ────────────────────────────────────────────
+    "NFLX", "ADBE", "CRM", "NOW", "SNOW", "SHOP", "UBER", "WDAY",
+    # ── Semiconductors / hardware ──────────────────────────────────────────────
+    "AMD", "MU", "TXN", "QCOM", "INTC", "AMAT", "KLAC", "DELL",
+    # ── Cybersecurity / AI infra ──────────────────────────────────────────────
+    "PANW", "CRWD", "PLTR", "DDOG", "NET", "ZS", "COIN",
+    # ── Financials ────────────────────────────────────────────────────────────
+    "JPM", "V", "MA", "BAC", "GS", "MS", "WFC", "C", "AXP", "BX", "BLK",
+    "SCHW", "MCO", "SPGI", "KKR",
+    # ── Healthcare / pharma / biotech ─────────────────────────────────────────
+    "LLY", "JNJ", "UNH", "ABBV", "MRK", "AMGN", "TMO", "ISRG", "PFE", "MDT",
+    # ── Consumer discretionary ────────────────────────────────────────────────
+    "WMT", "COST", "HD", "LOW", "MCD", "SBUX", "NKE", "TGT",
+    # ── Consumer staples ──────────────────────────────────────────────────────
+    "PG", "KO", "PEP", "PM", "CVS",
+    # ── Energy ────────────────────────────────────────────────────────────────
+    "XOM", "CVX", "OXY", "SLB", "COP",
+    # ── Industrials / aerospace / defence ─────────────────────────────────────
+    "GE", "CAT", "DE", "HON", "RTX", "LMT", "GD", "BA", "UPS", "FDX", "ETN",
+    # ── Telecom / media ───────────────────────────────────────────────────────
+    "VZ", "T", "CMCSA",
+    # ── REITs / real estate ───────────────────────────────────────────────────
+    "PLD", "AMT", "DLR", "WELL",
+    # ── Diversified / conglomerate ────────────────────────────────────────────
+    "IBM", "MMM", "LIN", "NEE", "ADP", "F", "GM",
 ]
 
 ETF_WATCHLIST = [
-    "SPY", "QQQ", "IWM",              # broad market
-    "GLD", "SLV",                      # metals
-    "TLT", "HYG",                      # fixed income
-    "XLE", "XLF", "XLK",              # sector originals
-    "XLV", "XLP", "XLI", "XLU",       # defensive sectors
-    "VTI",                             # total market
-    "ARKK",                            # thematic innovation
-    "EEM", "VEA",                      # international
+    # ── Broad US market ────────────────────────────────────────────────────────
+    "SPY", "VOO", "IVV", "QQQ", "VTI", "IWM", "DIA", "MDY",
+    # ── International ─────────────────────────────────────────────────────────
+    "VEA", "EEM", "IEMG", "VWO", "EWJ", "EWZ", "FXI",
+    # ── Fixed income ──────────────────────────────────────────────────────────
+    "BND", "AGG", "TLT", "LQD", "HYG", "JNK", "TIP", "SHY",
+    # ── Commodities ───────────────────────────────────────────────────────────
+    "GLD", "IAU", "SLV", "USO", "DBC",
+    # ── All 11 SPDR sector ETFs ────────────────────────────────────────────────
+    "XLC", "XLY", "XLP", "XLE", "XLF", "XLV", "XLI", "XLB", "XLRE", "XLK", "XLU",
+    # ── Thematic / specialty ───────────────────────────────────────────────────
+    "ARKK", "SOXX", "SMH", "IBB", "CIBR", "VNQ", "SCHD", "KWEB", "ICLN", "BOTZ", "GDX",
 ]
 
 # Alpaca crypto format (BTCUSD, not BTCUSDT) — no Binance geo-block
