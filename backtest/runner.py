@@ -221,7 +221,7 @@ def _paper_signal(
     tier   = _compute_tier(combined, action, regime_label, indicators,
                            panels_conflict=conflict, b_abstaining=b_abstaining)
 
-    # ATR-primary stop (Phase 1-B sizing — unchanged)
+    # ATR-primary stop — uses atr_multiplier from config if available
     price    = float(indicators.get("price", 1.0))
     atr14    = float(indicators.get("atr_14", 0.0))
     atr_pct  = atr14 / max(price, 1e-9)
@@ -281,14 +281,20 @@ class PortfolioSimulator:
         self,
         initial_equity: float = 100_000.0,
         max_position_pct: float = 0.05,
+        hot_position_pct: float = 0.08,
         max_concurrent: int = 15,
         max_exposure_pct: float = 0.50,
+        drawdown_scale_threshold: float = 0.08,
+        drawdown_scale_factor: float = 0.80,
     ) -> None:
         self._initial        = initial_equity
         self._cash           = initial_equity
         self._max_pos        = max_position_pct
+        self._hot_max_pos    = hot_position_pct
         self._max_concurrent = max_concurrent
         self._max_exposure   = max_exposure_pct
+        self._dd_threshold   = drawdown_scale_threshold
+        self._dd_factor      = drawdown_scale_factor
         self._open:  dict[str, Trade] = {}
         self._closed: list[Trade]     = []
         self._equity_curve: list[dict] = []
@@ -311,12 +317,12 @@ class PortfolioSimulator:
 
     # ── Position sizing scale factor (drawdown protection) ────────────────────
     def _size_scale(self) -> float:
-        """Reduce position sizes 20% during drawdowns >8% from equity peak."""
+        """Reduce position sizes when equity has drawn down beyond the configured threshold."""
         current = self._cash + sum(
             t.qty * t.entry_price for t in self._open.values()
         )
         dd = (self._peak - current) / max(self._peak, 1)
-        return 0.80 if dd > 0.08 else 1.0
+        return self._dd_factor if dd > self._dd_threshold else 1.0
 
     def try_open(
         self,
@@ -341,7 +347,8 @@ class PortfolioSimulator:
         if invested / max(self._initial, 1) >= self._max_exposure:
             return False
 
-        notional = self._initial * min(pos_pct, self._max_pos) * self._size_scale()
+        effective_max = self._hot_max_pos if tier == "HOT" else self._max_pos
+        notional = self._initial * min(pos_pct, effective_max) * self._size_scale()
         if notional < 10 or notional > self._cash:
             return False
 
@@ -503,8 +510,11 @@ def run_backtest(
     years: int = 3,
     initial_equity: float = 100_000.0,
     max_position_pct: float = 0.05,
+    hot_position_pct: float = 0.08,
     max_concurrent_positions: int = 15,
     max_portfolio_exposure: float = 0.50,
+    drawdown_scale_threshold: float = 0.08,
+    drawdown_scale_factor: float = 0.80,
     market_regime_filter: bool = True,
     min_bars: int = 60,
 ) -> BacktestResult:
@@ -569,8 +579,11 @@ def run_backtest(
     sim = PortfolioSimulator(
         initial_equity=initial_equity,
         max_position_pct=max_position_pct,
+        hot_position_pct=hot_position_pct,
         max_concurrent=max_concurrent_positions,
         max_exposure_pct=max_portfolio_exposure,
+        drawdown_scale_threshold=drawdown_scale_threshold,
+        drawdown_scale_factor=drawdown_scale_factor,
     )
 
     for i, bar_date in enumerate(dates):

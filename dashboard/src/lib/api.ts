@@ -329,15 +329,45 @@ export function useEquitySeries(period: "1D" | "1M" | "1Y" = "1D") {
 
 // ── Dynamic risk config ───────────────────────────────────────────────────────
 
-export interface RiskConfig {
-  stop_loss_pct:             number;
-  take_profit_pct:           number;
-  max_position_pct:          number;
-  circuit_breaker_drawdown:  number;
-  max_crypto_allocation_pct: number;
+export interface RiskConfigFields {
+  // Entry / exit
+  stop_loss_pct:                  number;
+  take_profit_pct:                number;
+  trailing_stop_pct:              number;
+  partial_exit_pct:               number;
+  runner_trail_pct:               number;
+  // Position sizing
+  max_position_pct:               number;
+  hot_position_pct:               number;
+  max_crypto_allocation_pct:      number;
+  // Portfolio exposure
+  max_exposure_pct:               number;
+  max_concurrent_positions:       number;
+  // Circuit breaker / drawdown
+  circuit_breaker_drawdown:       number;
+  drawdown_scale_threshold:       number;
+  drawdown_scale_factor:          number;
+  // Correlation
+  correlation_halving_threshold:  number;
+  // Signal quality
+  signal_confidence_threshold:    number;
+  lookback_days:                  number;
+  // ATR stop sizing
+  atr_multiplier:                 number;
+  atr_stop_floor:                 number;
+  atr_stop_cap:                   number;
+  // Loss cooldown
+  loss_cooldown_hits:             number;
+  loss_cooldown_window_days:      number;
+  loss_cooldown_skip_cycles:      number;
+  // Telegram
+  max_telegram_order_usd:         number;
+}
+
+export interface RiskConfig extends RiskConfigFields {
   source:    "dynamic" | "env";
-  overrides: Partial<Omit<RiskConfig, "source" | "overrides" | "defaults">>;
-  defaults:  Omit<RiskConfig, "source" | "overrides" | "defaults">;
+  overrides: Partial<RiskConfigFields>;
+  defaults:  RiskConfigFields;
 }
 
 export async function fetchRiskConfig(): Promise<RiskConfig> {
@@ -349,7 +379,7 @@ export async function fetchRiskConfig(): Promise<RiskConfig> {
   return safeJson(res);
 }
 
-export async function patchRiskConfig(updates: Partial<Omit<RiskConfig, "source" | "overrides" | "defaults">>): Promise<{ updated: object; current: object }> {
+export async function patchRiskConfig(updates: Partial<RiskConfigFields>): Promise<{ updated: object; current: object }> {
   const res = await fetch(`${BASE}/config`, {
     method:  "PATCH",
     headers: apiHeaders({ "Content-Type": "application/json" }),
@@ -391,7 +421,7 @@ export function useRiskConfig() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  async function save(updates: Partial<Omit<RiskConfig, "source" | "overrides" | "defaults">>) {
+  async function save(updates: Partial<RiskConfigFields>) {
     setSaving(true);
     setError(null);
     try {

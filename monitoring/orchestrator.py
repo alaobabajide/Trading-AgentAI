@@ -93,11 +93,17 @@ class Orchestrator:
         self._cold_lock = threading.Lock()
         # Trailing stop: tracks highest observed price per open symbol (ratchets upward)
         self._trailing_peaks: dict[str, float] = {}
-        self._trailing_pct: float = 0.015  # 1.5% trail behind peak
-        # Per-symbol loss cooldown: 2 stop-loss hits within 5 days → skip 2 cycles
+        self._trailing_pct: float = cfg.trailing_stop_pct
+        # Per-symbol loss cooldown — parameters are refreshed from brain API
         self._loss_history: dict[str, list[float]] = {}   # symbol → list of monotonic timestamps
         self._loss_cooldown_end: dict[str, float] = {}    # symbol → monotonic time when cooldown expires
         self._loss_lock = threading.Lock()
+        self._loss_cooldown_hits: int = cfg.loss_cooldown_hits
+        self._loss_cooldown_window_days: int = cfg.loss_cooldown_window_days
+        self._loss_cooldown_skip_cycles: int = cfg.loss_cooldown_skip_cycles
+        # Signal parameters — refreshed from brain API
+        self._lookback_days: int = cfg.lookback_days
+        self._correlation_threshold: float = cfg.correlation_halving_threshold
         # Live risk config — refreshed from brain API before every monitor run
         self._stop_loss_pct  = cfg.stop_loss_pct
         self._take_profit_pct = cfg.take_profit_pct
@@ -210,7 +216,7 @@ class Orchestrator:
         payload = {
             "symbol":        symbol,
             "asset_class":   asset_class,
-            "lookback_days": 300,   # 300 cal days ≈ 210 trading days — enough for SMA200 + ROC60
+            "lookback_days": self._lookback_days,
             "paper_mode":    self._paper_mode,
         }
         start = time.monotonic()
@@ -305,11 +311,11 @@ class Orchestrator:
                         corr = close_df.corr()
                         peer_corrs = corr[symbol].drop(symbol, errors="ignore").abs()
                         max_corr = float(peer_corrs.max()) if not peer_corrs.empty else 0.0
-                        if max_corr > 0.70:
+                        if max_corr > self._correlation_threshold:
                             exec_pos_pct *= 0.5
                             log.info(
-                                "Correlation gate: %s max_corr=%.2f → position halved to %.1f%%",
-                                symbol, max_corr, exec_pos_pct * 100,
+                                "Correlation gate: %s max_corr=%.2f > threshold=%.2f → position halved to %.1f%%",
+                                symbol, max_corr, self._correlation_threshold, exec_pos_pct * 100,
                             )
             except Exception as exc:
                 log.debug("Correlation check failed for %s: %s", symbol, exc)
@@ -362,11 +368,18 @@ class Orchestrator:
             r = httpx.get(f"{self._brain_url}/config", timeout=3, headers=self._brain_headers())
             if r.status_code == 200:
                 data = r.json()
-                self._stop_loss_pct   = float(data.get("stop_loss_pct",   self._stop_loss_pct))
-                self._take_profit_pct = float(data.get("take_profit_pct", self._take_profit_pct))
+                self._stop_loss_pct             = float(data.get("stop_loss_pct",              self._stop_loss_pct))
+                self._take_profit_pct           = float(data.get("take_profit_pct",            self._take_profit_pct))
+                self._trailing_pct              = float(data.get("trailing_stop_pct",          self._trailing_pct))
+                self._lookback_days             = int(data.get("lookback_days",                self._lookback_days))
+                self._correlation_threshold     = float(data.get("correlation_halving_threshold", self._correlation_threshold))
+                self._loss_cooldown_hits        = int(data.get("loss_cooldown_hits",            self._loss_cooldown_hits))
+                self._loss_cooldown_window_days = int(data.get("loss_cooldown_window_days",     self._loss_cooldown_window_days))
+                self._loss_cooldown_skip_cycles = int(data.get("loss_cooldown_skip_cycles",     self._loss_cooldown_skip_cycles))
                 log.debug(
-                    "Risk config refreshed: sl=%.1f%%  tp=%.1f%%  source=%s",
+                    "Risk config refreshed: sl=%.1f%%  tp=%.1f%%  trail=%.1f%%  lookback=%dd  source=%s",
                     self._stop_loss_pct * 100, self._take_profit_pct * 100,
+                    self._trailing_pct * 100, self._lookback_days,
                     data.get("source", "?"),
                 )
         except Exception as exc:
@@ -429,16 +442,18 @@ class Orchestrator:
                         with self._loss_lock:
                             history = self._loss_history.get(symbol, [])
                             history.append(now)
-                            five_days = 5 * 86400
-                            history = [t for t in history if now - t < five_days]
+                            window_secs = self._loss_cooldown_window_days * 86400
+                            history = [t for t in history if now - t < window_secs]
                             self._loss_history[symbol] = history
-                            if len(history) >= 2:
-                                cooldown_secs = 2 * CYCLE_INTERVAL_MINUTES * 60
+                            if len(history) >= self._loss_cooldown_hits:
+                                cooldown_secs = self._loss_cooldown_skip_cycles * CYCLE_INTERVAL_MINUTES * 60
                                 self._loss_cooldown_end[symbol] = now + cooldown_secs
                                 log.info(
-                                    "Loss cooldown activated: %s — %d stop-loss hits in 5d"
-                                    " → skip next 2 cycles",
+                                    "Loss cooldown activated: %s — %d stop-loss hits in %dd"
+                                    " → skip next %d cycles",
                                     symbol, len(history),
+                                    self._loss_cooldown_window_days,
+                                    self._loss_cooldown_skip_cycles,
                                 )
                 except Exception as exc:
                     log.error("  ✗ Failed to close %s: %s", symbol, exc)

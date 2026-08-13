@@ -90,12 +90,42 @@ def _write_audit(
 
 
 # Hard bounds for risk config — enforced on both load and PATCH
+# Float fields
 _CONFIG_BOUNDS: dict[str, tuple[float, float]] = {
-    "stop_loss_pct":            (0.005, 0.20),
-    "take_profit_pct":          (0.01,  0.50),
-    "max_position_pct":         (0.005, 0.10),
-    "circuit_breaker_drawdown": (0.01,  0.20),
-    "max_crypto_allocation_pct":(0.0,   0.50),
+    # Entry / exit
+    "stop_loss_pct":                (0.005, 0.20),
+    "take_profit_pct":              (0.01,  0.50),
+    "trailing_stop_pct":            (0.005, 0.15),
+    "partial_exit_pct":             (0.10,  1.0),
+    "runner_trail_pct":             (0.01,  0.30),
+    # Position sizing
+    "max_position_pct":             (0.005, 0.20),
+    "hot_position_pct":             (0.01,  0.20),
+    "max_crypto_allocation_pct":    (0.0,   0.50),
+    # Portfolio exposure
+    "max_exposure_pct":             (0.10,  1.0),
+    # Circuit breaker / drawdown
+    "circuit_breaker_drawdown":     (0.01,  0.50),
+    "drawdown_scale_threshold":     (0.01,  0.30),
+    "drawdown_scale_factor":        (0.50,  1.0),
+    # Correlation
+    "correlation_halving_threshold":(0.20,  1.0),
+    # Signal quality
+    "signal_confidence_threshold":  (0.30,  1.0),
+    # ATR
+    "atr_multiplier":               (0.5,   5.0),
+    "atr_stop_floor":               (0.001, 0.05),
+    "atr_stop_cap":                 (0.01,  0.20),
+    # Telegram
+    "max_telegram_order_usd":       (10.0,  100_000.0),
+}
+# Integer fields stored as float in the JSON config, cast to int when read
+_CONFIG_INT_BOUNDS: dict[str, tuple[int, int]] = {
+    "max_concurrent_positions":  (1,   50),
+    "lookback_days":             (30,  730),
+    "loss_cooldown_hits":        (1,   10),
+    "loss_cooldown_window_days": (1,   30),
+    "loss_cooldown_skip_cycles": (1,   20),
 }
 
 # ── Dynamic risk config (frontend-editable, persisted to file) ────────────────
@@ -122,6 +152,16 @@ def _load_dynamic_config() -> dict:
                     validated[key] = val
                 else:
                     log.warning("Dynamic config %s=%.4f out of bounds [%.4f, %.4f] — rejected", key, val, lo, hi)
+        for key, (lo, hi) in _CONFIG_INT_BOUNDS.items():
+            if key in raw:
+                try:
+                    val = int(float(raw[key]))
+                except (TypeError, ValueError):
+                    continue
+                if lo <= val <= hi:
+                    validated[key] = val
+                else:
+                    log.warning("Dynamic config %s=%d out of bounds [%d, %d] — rejected", key, val, lo, hi)
         return validated
     except FileNotFoundError:
         return {}
@@ -141,12 +181,43 @@ def _save_dynamic_config(data: dict) -> None:
 
 def _effective_config(cfg) -> dict:
     """Merge env-var defaults with any dynamic overrides."""
+    def _f(key: str, default: float) -> float:
+        return float(_dynamic_config.get(key, default))
+    def _i(key: str, default: int) -> int:
+        return int(_dynamic_config.get(key, default))
     return {
-        "stop_loss_pct":            _dynamic_config.get("stop_loss_pct",            cfg.stop_loss_pct),
-        "take_profit_pct":          _dynamic_config.get("take_profit_pct",          cfg.take_profit_pct),
-        "max_position_pct":         _dynamic_config.get("max_position_pct",         cfg.max_position_pct),
-        "circuit_breaker_drawdown": _dynamic_config.get("circuit_breaker_drawdown", cfg.circuit_breaker_drawdown),
-        "max_crypto_allocation_pct": _dynamic_config.get("max_crypto_allocation_pct", cfg.max_crypto_allocation_pct),
+        # Entry / exit
+        "stop_loss_pct":                _f("stop_loss_pct",                cfg.stop_loss_pct),
+        "take_profit_pct":              _f("take_profit_pct",              cfg.take_profit_pct),
+        "trailing_stop_pct":            _f("trailing_stop_pct",            cfg.trailing_stop_pct),
+        "partial_exit_pct":             _f("partial_exit_pct",             cfg.partial_exit_pct),
+        "runner_trail_pct":             _f("runner_trail_pct",             cfg.runner_trail_pct),
+        # Position sizing
+        "max_position_pct":             _f("max_position_pct",             cfg.max_position_pct),
+        "hot_position_pct":             _f("hot_position_pct",             cfg.hot_position_pct),
+        "max_crypto_allocation_pct":    _f("max_crypto_allocation_pct",    cfg.max_crypto_allocation_pct),
+        # Portfolio exposure
+        "max_exposure_pct":             _f("max_exposure_pct",             cfg.max_exposure_pct),
+        "max_concurrent_positions":     _i("max_concurrent_positions",     cfg.max_concurrent_positions),
+        # Circuit breaker / drawdown
+        "circuit_breaker_drawdown":     _f("circuit_breaker_drawdown",     cfg.circuit_breaker_drawdown),
+        "drawdown_scale_threshold":     _f("drawdown_scale_threshold",     cfg.drawdown_scale_threshold),
+        "drawdown_scale_factor":        _f("drawdown_scale_factor",        cfg.drawdown_scale_factor),
+        # Correlation
+        "correlation_halving_threshold":_f("correlation_halving_threshold",cfg.correlation_halving_threshold),
+        # Signal quality
+        "signal_confidence_threshold":  _f("signal_confidence_threshold",  cfg.signal_confidence_threshold),
+        "lookback_days":                _i("lookback_days",                cfg.lookback_days),
+        # ATR stop sizing
+        "atr_multiplier":               _f("atr_multiplier",               cfg.atr_multiplier),
+        "atr_stop_floor":               _f("atr_stop_floor",               cfg.atr_stop_floor),
+        "atr_stop_cap":                 _f("atr_stop_cap",                 cfg.atr_stop_cap),
+        # Loss cooldown
+        "loss_cooldown_hits":           _i("loss_cooldown_hits",           cfg.loss_cooldown_hits),
+        "loss_cooldown_window_days":    _i("loss_cooldown_window_days",    cfg.loss_cooldown_window_days),
+        "loss_cooldown_skip_cycles":    _i("loss_cooldown_skip_cycles",    cfg.loss_cooldown_skip_cycles),
+        # Telegram
+        "max_telegram_order_usd":       _f("max_telegram_order_usd",       cfg.max_telegram_order_usd),
     }
 
 
@@ -437,11 +508,38 @@ def health():
 # ── Dynamic risk config endpoints ─────────────────────────────────────────────
 
 class RiskConfigUpdate(BaseModel):
-    stop_loss_pct:             float | None = Field(None, ge=0.005, le=0.20)
-    take_profit_pct:           float | None = Field(None, ge=0.01,  le=0.50)
-    max_position_pct:          float | None = Field(None, ge=0.005, le=0.10)   # hard cap: 10% NAV
-    circuit_breaker_drawdown:  float | None = Field(None, ge=0.01,  le=0.20)   # hard cap: 20% drawdown
-    max_crypto_allocation_pct: float | None = Field(None, ge=0.0,   le=0.50)   # hard cap: 50% crypto
+    # Entry / exit
+    stop_loss_pct:                  float | None = Field(None, ge=0.005, le=0.20)
+    take_profit_pct:                float | None = Field(None, ge=0.01,  le=0.50)
+    trailing_stop_pct:              float | None = Field(None, ge=0.005, le=0.15)
+    partial_exit_pct:               float | None = Field(None, ge=0.10,  le=1.0)
+    runner_trail_pct:               float | None = Field(None, ge=0.01,  le=0.30)
+    # Position sizing
+    max_position_pct:               float | None = Field(None, ge=0.005, le=0.20)
+    hot_position_pct:               float | None = Field(None, ge=0.01,  le=0.20)
+    max_crypto_allocation_pct:      float | None = Field(None, ge=0.0,   le=0.50)
+    # Portfolio exposure
+    max_exposure_pct:               float | None = Field(None, ge=0.10,  le=1.0)
+    max_concurrent_positions:       int   | None = Field(None, ge=1,     le=50)
+    # Circuit breaker / drawdown
+    circuit_breaker_drawdown:       float | None = Field(None, ge=0.01,  le=0.50)
+    drawdown_scale_threshold:       float | None = Field(None, ge=0.01,  le=0.30)
+    drawdown_scale_factor:          float | None = Field(None, ge=0.50,  le=1.0)
+    # Correlation
+    correlation_halving_threshold:  float | None = Field(None, ge=0.20,  le=1.0)
+    # Signal quality
+    signal_confidence_threshold:    float | None = Field(None, ge=0.30,  le=1.0)
+    lookback_days:                  int   | None = Field(None, ge=30,    le=730)
+    # ATR stop sizing
+    atr_multiplier:                 float | None = Field(None, ge=0.5,   le=5.0)
+    atr_stop_floor:                 float | None = Field(None, ge=0.001, le=0.05)
+    atr_stop_cap:                   float | None = Field(None, ge=0.01,  le=0.20)
+    # Loss cooldown
+    loss_cooldown_hits:             int   | None = Field(None, ge=1,     le=10)
+    loss_cooldown_window_days:      int   | None = Field(None, ge=1,     le=30)
+    loss_cooldown_skip_cycles:      int   | None = Field(None, ge=1,     le=20)
+    # Telegram
+    max_telegram_order_usd:         float | None = Field(None, ge=10.0,  le=100_000.0)
 
 
 @app.get("/config")
@@ -455,11 +553,29 @@ def get_risk_config():
         "source": "dynamic" if _dynamic_config else "env",
         "overrides": dict(_dynamic_config),
         "defaults": {
-            "stop_loss_pct":            cfg.stop_loss_pct,
-            "take_profit_pct":          cfg.take_profit_pct,
-            "max_position_pct":         cfg.max_position_pct,
-            "circuit_breaker_drawdown": cfg.circuit_breaker_drawdown,
-            "max_crypto_allocation_pct": cfg.max_crypto_allocation_pct,
+            "stop_loss_pct":                cfg.stop_loss_pct,
+            "take_profit_pct":              cfg.take_profit_pct,
+            "trailing_stop_pct":            cfg.trailing_stop_pct,
+            "partial_exit_pct":             cfg.partial_exit_pct,
+            "runner_trail_pct":             cfg.runner_trail_pct,
+            "max_position_pct":             cfg.max_position_pct,
+            "hot_position_pct":             cfg.hot_position_pct,
+            "max_crypto_allocation_pct":    cfg.max_crypto_allocation_pct,
+            "max_exposure_pct":             cfg.max_exposure_pct,
+            "max_concurrent_positions":     cfg.max_concurrent_positions,
+            "circuit_breaker_drawdown":     cfg.circuit_breaker_drawdown,
+            "drawdown_scale_threshold":     cfg.drawdown_scale_threshold,
+            "drawdown_scale_factor":        cfg.drawdown_scale_factor,
+            "correlation_halving_threshold":cfg.correlation_halving_threshold,
+            "signal_confidence_threshold":  cfg.signal_confidence_threshold,
+            "lookback_days":                cfg.lookback_days,
+            "atr_multiplier":               cfg.atr_multiplier,
+            "atr_stop_floor":               cfg.atr_stop_floor,
+            "atr_stop_cap":                 cfg.atr_stop_cap,
+            "loss_cooldown_hits":           cfg.loss_cooldown_hits,
+            "loss_cooldown_window_days":    cfg.loss_cooldown_window_days,
+            "loss_cooldown_skip_cycles":    cfg.loss_cooldown_skip_cycles,
+            "max_telegram_order_usd":       cfg.max_telegram_order_usd,
         },
     }
 
@@ -481,6 +597,9 @@ def update_risk_config(body: RiskConfigUpdate):
         if key in _CONFIG_BOUNDS:
             lo, hi = _CONFIG_BOUNDS[key]
             updates[key] = max(lo, min(hi, float(val)))
+        elif key in _CONFIG_INT_BOUNDS:
+            lo, hi = _CONFIG_INT_BOUNDS[key]
+            updates[key] = max(lo, min(hi, int(val)))
     _dynamic_config.update(updates)
     _save_dynamic_config(_dynamic_config)
     # Invalidate service singleton so DebateOrchestrator rebuilds with new values
@@ -810,6 +929,10 @@ def execute_trade(req: ExecuteRequest):
                 alpaca_base_url=cfg.alpaca_base_url,
                 max_position_pct=eff["max_position_pct"],
                 circuit_breaker_drawdown=eff["circuit_breaker_drawdown"],
+                trailing_stop_pct=eff["trailing_stop_pct"],
+                atr_multiplier=eff["atr_multiplier"],
+                atr_stop_floor=eff["atr_stop_floor"],
+                atr_stop_cap=eff["atr_stop_cap"],
             )
             result = engine.execute(signal, bars_highs, bars_lows, bars_closes)
 

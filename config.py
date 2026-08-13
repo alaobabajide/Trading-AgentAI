@@ -38,18 +38,48 @@ class Settings(BaseSettings):
     signal_confidence_threshold: float = Field(0.7, env="SIGNAL_CONFIDENCE_THRESHOLD")
     brain_port: int = Field(default_factory=lambda: int(os.environ.get("PORT") or os.environ.get("BRAIN_PORT") or 8000))
 
-    # Risk
-    max_position_pct: float = Field(0.05, env="MAX_POSITION_PCT")
+    # ── Position sizing ───────────────────────────────────────────────────────
+    max_position_pct: float = Field(0.05, env="MAX_POSITION_PCT")          # WARM signal max, % of equity
+    hot_position_pct: float = Field(0.08, env="HOT_POSITION_PCT")          # HOT signal max (overrides max_position_pct)
     max_crypto_allocation_pct: float = Field(0.30, env="MAX_CRYPTO_ALLOCATION_PCT")
-    circuit_breaker_drawdown: float = Field(0.10, env="CIRCUIT_BREAKER_DRAWDOWN")
-    stop_loss_pct: float = Field(0.02, env="STOP_LOSS_PCT")
-    take_profit_pct: float = Field(0.05, env="TAKE_PROFIT_PCT")
 
-    # Security
+    # ── Portfolio exposure ────────────────────────────────────────────────────
+    max_exposure_pct: float = Field(0.50, env="MAX_EXPOSURE_PCT")          # max % of equity deployed at once
+    max_concurrent_positions: int = Field(15, env="MAX_CONCURRENT_POSITIONS")
+
+    # ── Entry / exit thresholds ───────────────────────────────────────────────
+    stop_loss_pct: float = Field(0.02, env="STOP_LOSS_PCT")                # fallback when ATR data unavailable
+    take_profit_pct: float = Field(0.05, env="TAKE_PROFIT_PCT")
+    trailing_stop_pct: float = Field(0.015, env="TRAILING_STOP_PCT")       # trailing stop % for runners
+    partial_exit_pct: float = Field(0.50, env="PARTIAL_EXIT_PCT")          # Layer 1 exit fraction
+    runner_trail_pct: float = Field(0.10, env="RUNNER_TRAIL_PCT")          # default runner trailing %
+
+    # ── ATR stop sizing ───────────────────────────────────────────────────────
+    atr_multiplier: float = Field(1.5, env="ATR_MULTIPLIER")               # stop = atr_multiplier × ATR14
+    atr_stop_floor: float = Field(0.005, env="ATR_STOP_FLOOR")             # minimum stop distance (0.5%)
+    atr_stop_cap: float = Field(0.04, env="ATR_STOP_CAP")                  # maximum stop distance (4.0%)
+
+    # ── Circuit breaker / drawdown ────────────────────────────────────────────
+    circuit_breaker_drawdown: float = Field(0.10, env="CIRCUIT_BREAKER_DRAWDOWN")
+    drawdown_scale_threshold: float = Field(0.08, env="DRAWDOWN_SCALE_THRESHOLD")  # reduce sizes above this
+    drawdown_scale_factor: float = Field(0.80, env="DRAWDOWN_SCALE_FACTOR")        # scale factor when triggered
+
+    # ── Correlation protection ────────────────────────────────────────────────
+    correlation_halving_threshold: float = Field(0.70, env="CORRELATION_HALVING_THRESHOLD")
+
+    # ── Signal analysis ───────────────────────────────────────────────────────
+    lookback_days: int = Field(300, env="LOOKBACK_DAYS")                   # historical bars window
+
+    # ── Loss cooldown ─────────────────────────────────────────────────────────
+    loss_cooldown_hits: int = Field(2, env="LOSS_COOLDOWN_HITS")           # stop-loss hits to trigger cooldown
+    loss_cooldown_window_days: int = Field(5, env="LOSS_COOLDOWN_WINDOW_DAYS")
+    loss_cooldown_skip_cycles: int = Field(2, env="LOSS_COOLDOWN_SKIP_CYCLES")
+
+    # ── Security ──────────────────────────────────────────────────────────────
     brain_api_key: str = Field("", env="BRAIN_API_KEY")  # required — set in Railway
     allowed_origins: str = Field("", env="ALLOWED_ORIGINS")  # comma-separated CORS origins
 
-    # Telegram
+    # ── Telegram ──────────────────────────────────────────────────────────────
     telegram_bot_token: str = Field("", env="TELEGRAM_BOT_TOKEN")
     telegram_allowed_ids: str = Field("", env="TELEGRAM_ALLOWED_IDS")  # comma-separated chat IDs
     max_telegram_order_usd: float = Field(1000.0, env="MAX_TELEGRAM_ORDER_USD")

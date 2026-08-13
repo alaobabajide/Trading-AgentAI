@@ -42,15 +42,22 @@ class StockExecutionEngine:
         alpaca_base_url: str,
         max_position_pct: float = 0.05,
         circuit_breaker_drawdown: float = 0.10,
+        trailing_stop_pct: float = 0.015,
+        atr_multiplier: float = 1.5,
+        atr_stop_floor: float = 0.005,
+        atr_stop_cap: float = 0.04,
     ) -> None:
         from alpaca.trading.client import TradingClient
 
         is_paper = "paper" in alpaca_base_url.lower()
         self._trading = TradingClient(alpaca_api_key, alpaca_secret_key, paper=is_paper)
-        self._trailing = TrailingStopManager()
+        self._trailing = TrailingStopManager(trail_pct=trailing_stop_pct)
         self._risk: RiskControls | None = None
         self._max_pos = max_position_pct
         self._cb_drawdown = circuit_breaker_drawdown
+        self._atr_multiplier = atr_multiplier
+        self._atr_stop_floor = atr_stop_floor
+        self._atr_stop_cap = atr_stop_cap
 
     def _get_risk(self) -> RiskControls:
         """Lazily refresh equity-based risk controls."""
@@ -102,6 +109,9 @@ class StockExecutionEngine:
             signal_position_pct=signal.suggested_position_pct,
             stop_loss_pct=signal.stop_loss_pct,
             take_profit_pct=signal.take_profit_pct,
+            atr_multiplier=self._atr_multiplier,
+            atr_stop_floor=self._atr_stop_floor,
+            atr_stop_cap=self._atr_stop_cap,
         )
 
         if sizing.shares == 0:
