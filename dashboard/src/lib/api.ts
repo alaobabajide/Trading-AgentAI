@@ -403,8 +403,33 @@ export async function resetRiskConfig(): Promise<{ reset: boolean; current: obje
   return safeJson(res);
 }
 
-// Single shared event bus: when any hook instance saves or resets,
-// all other instances (e.g. Dashboard) re-fetch immediately.
+// ── Config persistence across Railway redeploys ───────────────────────────────
+// Railway wipes /tmp on every deploy, resetting _dynamic_config to env defaults.
+// Solution: mirror user overrides in localStorage. On page load, if the backend
+// is at env defaults (source="env") but localStorage has saved overrides,
+// automatically re-apply them — restoring the user's settings within seconds.
+
+const _CONFIG_STORAGE_KEY = "ta_risk_config_v1";
+let _autoRestoreAttempted = false; // module-level guard: restore at most once per tab
+
+function _saveConfigLocally(overrides: Partial<RiskConfigFields>): void {
+  try {
+    if (Object.keys(overrides).length > 0)
+      localStorage.setItem(_CONFIG_STORAGE_KEY, JSON.stringify(overrides));
+    else
+      localStorage.removeItem(_CONFIG_STORAGE_KEY);
+  } catch { /* storage quota */ }
+}
+
+function _loadConfigLocally(): Partial<RiskConfigFields> | null {
+  try {
+    const raw = localStorage.getItem(_CONFIG_STORAGE_KEY);
+    return raw ? JSON.parse(raw) as Partial<RiskConfigFields> : null;
+  } catch { return null; }
+}
+
+// ── Shared event bus ──────────────────────────────────────────────────────────
+// When any hook instance saves or resets, all others (Dashboard, etc.) re-fetch.
 const _configBus = new EventTarget();
 
 export function useRiskConfig() {
@@ -415,16 +440,38 @@ export function useRiskConfig() {
 
   useEffect(() => {
     let cancelled = false;
+
     function load() {
       fetchRiskConfig()
-        .then((c) => { if (!cancelled) setConfig(c); })
+        .then((c) => {
+          if (cancelled) return;
+          setConfig(c);
+
+          if (c.source === "dynamic") {
+            // Backend already has live overrides — no restore needed
+            _autoRestoreAttempted = true;
+          } else if (!_autoRestoreAttempted) {
+            // Backend restarted (source="env"): re-apply locally saved overrides
+            const local = _loadConfigLocally();
+            if (local && Object.keys(local).length > 0) {
+              _autoRestoreAttempted = true; // set before async to prevent double-fire
+              patchRiskConfig(local)
+                .then(() => fetchRiskConfig())
+                .then((fresh) => {
+                  if (!cancelled) {
+                    setConfig(fresh);
+                    _configBus.dispatchEvent(new Event("updated"));
+                  }
+                })
+                .catch(() => { /* silent — next poll will retry */ });
+            }
+          }
+        })
         .catch(() => { /* backend may not be up yet */ });
     }
 
-    // Re-fetch whenever Settings (or any consumer) saves/resets
     const onUpdate = () => { if (!cancelled) load(); };
     _configBus.addEventListener("updated", onUpdate);
-
     load();
     const id = setInterval(load, 60_000);
     return () => {
@@ -441,6 +488,7 @@ export function useRiskConfig() {
       await patchRiskConfig(updates);
       const fresh = await fetchRiskConfig();
       setConfig(fresh);
+      _saveConfigLocally(fresh.overrides); // mirror to localStorage for redeploy survival
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
       _configBus.dispatchEvent(new Event("updated"));
@@ -458,6 +506,7 @@ export function useRiskConfig() {
       await resetRiskConfig();
       const fresh = await fetchRiskConfig();
       setConfig(fresh);
+      _saveConfigLocally({}); // clear saved overrides — user explicitly reset
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
       _configBus.dispatchEvent(new Event("updated"));
