@@ -370,8 +370,20 @@ export interface RiskConfig extends RiskConfigFields {
   defaults:  RiskConfigFields;
 }
 
+const _RISK_FIELD_KEYS = new Set([
+  "stop_loss_pct","take_profit_pct","trailing_stop_pct","partial_exit_pct",
+  "runner_trail_pct","max_position_pct","hot_position_pct",
+  "max_crypto_allocation_pct","max_exposure_pct","max_concurrent_positions",
+  "circuit_breaker_drawdown","drawdown_scale_threshold","drawdown_scale_factor",
+  "correlation_halving_threshold","signal_confidence_threshold","lookback_days",
+  "atr_multiplier","atr_stop_floor","atr_stop_cap",
+  "loss_cooldown_hits","loss_cooldown_window_days","loss_cooldown_skip_cycles",
+  "max_telegram_order_usd",
+]);
+
 export async function fetchRiskConfig(): Promise<RiskConfig> {
   const res = await fetch(`${BASE}/config`, {
+    cache: "no-store",
     signal: AbortSignal.timeout(5000),
     headers: apiHeaders(),
   });
@@ -380,10 +392,15 @@ export async function fetchRiskConfig(): Promise<RiskConfig> {
 }
 
 export async function patchRiskConfig(updates: Partial<RiskConfigFields>): Promise<{ updated: object; current: object }> {
+  // Strip any non-RiskConfigField keys (source, overrides, defaults) before sending
+  const clean: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(updates as Record<string, unknown>)) {
+    if (_RISK_FIELD_KEYS.has(k) && v !== null && v !== undefined) clean[k] = v;
+  }
   const res = await fetch(`${BASE}/config`, {
     method:  "PATCH",
     headers: apiHeaders({ "Content-Type": "application/json" }),
-    body:    JSON.stringify(updates),
+    body:    JSON.stringify(clean),
     signal:  AbortSignal.timeout(8000),
   });
   if (!res.ok) {
@@ -414,20 +431,9 @@ let _restoreApplied = false; // run restore at most once per page load
 
 function _saveConfigLocally(fields: Record<string, unknown>): void {
   try {
-    // Only keep known RiskConfigFields keys — strip source/overrides/defaults
-    const KNOWN_KEYS = new Set([
-      "stop_loss_pct","take_profit_pct","trailing_stop_pct","partial_exit_pct",
-      "runner_trail_pct","max_position_pct","hot_position_pct",
-      "max_crypto_allocation_pct","max_exposure_pct","max_concurrent_positions",
-      "circuit_breaker_drawdown","drawdown_scale_threshold","drawdown_scale_factor",
-      "correlation_halving_threshold","signal_confidence_threshold","lookback_days",
-      "atr_multiplier","atr_stop_floor","atr_stop_cap",
-      "loss_cooldown_hits","loss_cooldown_window_days","loss_cooldown_skip_cycles",
-      "max_telegram_order_usd",
-    ]);
     const clean: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(fields)) {
-      if (KNOWN_KEYS.has(k) && v !== null && v !== undefined) clean[k] = v;
+      if (_RISK_FIELD_KEYS.has(k) && v !== null && v !== undefined) clean[k] = v;
     }
     if (Object.keys(clean).length > 0)
       localStorage.setItem(_CONFIG_STORAGE_KEY, JSON.stringify(clean));

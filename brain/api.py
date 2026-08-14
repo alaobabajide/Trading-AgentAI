@@ -24,7 +24,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 log = logging.getLogger(__name__)
 
@@ -508,6 +508,7 @@ def health():
 # ── Dynamic risk config endpoints ─────────────────────────────────────────────
 
 class RiskConfigUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")  # silently drop source/overrides/defaults sent by frontend
     # Entry / exit
     stop_loss_pct:                  float | None = Field(None, ge=0.005, le=0.20)
     take_profit_pct:                float | None = Field(None, ge=0.01,  le=0.50)
