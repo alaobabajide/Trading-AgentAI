@@ -403,6 +403,9 @@ export async function resetRiskConfig(): Promise<{ reset: boolean; current: obje
   return safeJson(res);
 }
 
+// Shared event bus — when any hook instance saves or resets, all instances re-fetch immediately.
+const _configBus = new EventTarget();
+
 export function useRiskConfig() {
   const [config, setConfig]   = useState<RiskConfig | null>(null);
   const [saving,  setSaving]  = useState(false);
@@ -418,15 +421,17 @@ export function useRiskConfig() {
         .then((c) => {
           if (!cancelled) {
             setConfig(c);
-            // Once data loads, switch to steady 60s polling
             if (isRetry && retryId) { clearTimeout(retryId); retryId = null; }
           }
         })
         .catch(() => {
-          // Retry every 5s until the backend responds
           if (!cancelled) retryId = setTimeout(() => load(true), 5_000);
         });
     }
+
+    // Re-fetch whenever another hook instance saves/resets
+    const onExternalUpdate = () => { if (!cancelled) load(); };
+    _configBus.addEventListener("updated", onExternalUpdate);
 
     load();
     const id = setInterval(() => load(), 60_000);
@@ -434,6 +439,7 @@ export function useRiskConfig() {
       cancelled = true;
       clearInterval(id);
       if (retryId) clearTimeout(retryId);
+      _configBus.removeEventListener("updated", onExternalUpdate);
     };
   }, []);
 
@@ -446,6 +452,7 @@ export function useRiskConfig() {
       setConfig(fresh);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
+      _configBus.dispatchEvent(new Event("updated")); // notify Dashboard et al.
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -462,6 +469,7 @@ export function useRiskConfig() {
       setConfig(fresh);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
+      _configBus.dispatchEvent(new Event("updated")); // notify Dashboard et al.
     } catch (e) {
       setError((e as Error).message);
     } finally {
