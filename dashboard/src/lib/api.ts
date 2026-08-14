@@ -469,8 +469,41 @@ function _loadConfigLocally(): Partial<RiskConfigFields> | null {
 // ── Shared event bus ──────────────────────────────────────────────────────────
 const _configBus = new EventTarget();
 
+// Hard-coded field defaults — used to build a synthetic RiskConfig from saved
+// localStorage values before the first backend response arrives, so there is
+// zero flash of incorrect defaults on page load.
+const _FIELD_DEFAULTS: RiskConfigFields = {
+  stop_loss_pct: 0.02, take_profit_pct: 0.05, trailing_stop_pct: 0.015,
+  partial_exit_pct: 0.50, runner_trail_pct: 0.10,
+  max_position_pct: 0.05, hot_position_pct: 0.08, max_crypto_allocation_pct: 0.30,
+  max_exposure_pct: 0.50, max_concurrent_positions: 15,
+  circuit_breaker_drawdown: 0.10, drawdown_scale_threshold: 0.08, drawdown_scale_factor: 0.80,
+  correlation_halving_threshold: 0.70, signal_confidence_threshold: 0.70, lookback_days: 300,
+  atr_multiplier: 1.5, atr_stop_floor: 0.005, atr_stop_cap: 0.04,
+  loss_cooldown_hits: 2, loss_cooldown_window_days: 5, loss_cooldown_skip_cycles: 2,
+  max_telegram_order_usd: 1000,
+};
+
+function _mergeWithSaved(base: RiskConfig): RiskConfig {
+  const saved = _loadConfigLocally();
+  if (!saved || Object.keys(saved).length === 0) return base;
+  return { ...base, ...(saved as Partial<RiskConfig>), source: "dynamic" };
+}
+
 export function useRiskConfig() {
-  const [config, setConfig]   = useState<RiskConfig | null>(null);
+  // Initialise synchronously from localStorage so saved values show instantly
+  // on every page load — no async fetch needed before the correct value appears.
+  const [config, setConfig] = useState<RiskConfig | null>(() => {
+    const saved = _loadConfigLocally();
+    if (!saved || Object.keys(saved).length === 0) return null;
+    return {
+      ..._FIELD_DEFAULTS,
+      ...(saved as Partial<RiskConfigFields>),
+      source: "dynamic",
+      overrides: saved as Partial<RiskConfigFields>,
+      defaults:  _FIELD_DEFAULTS,
+    };
+  });
   const [saving,  setSaving]  = useState(false);
   const [error,   setError]   = useState<string | null>(null);
   const [saved,   setSaved]   = useState(false);
@@ -483,27 +516,19 @@ export function useRiskConfig() {
       fetchRiskConfig()
         .then((c) => {
           if (cancelled) return;
+          // Always merge saved localStorage values on top of the backend response.
+          setConfig(_mergeWithSaved(c));
 
-          // Merge localStorage/cookie values on top of the backend response.
-          // The UI always shows what the user last saved, even when Railway
-          // redeployed and wiped /tmp (reverting the backend to env-var defaults).
-          const savedLocally = _loadConfigLocally();
-          const display: RiskConfig = (savedLocally && Object.keys(savedLocally).length > 0)
-            ? { ...c, ...(savedLocally as Partial<RiskConfig>), source: "dynamic" }
-            : c;
-          setConfig(display);
-
-          // Re-sync the backend every 5 minutes so the trading engine runs with
-          // the user's saved parameters even after a Railway container restart.
+          // Re-sync backend every 5 minutes after a Railway container restart.
+          const saved = _loadConfigLocally();
           const now = Date.now();
-          if (savedLocally && Object.keys(savedLocally).length > 0
+          if (saved && Object.keys(saved).length > 0
               && now - _lastRestoreAttempt > 5 * 60 * 1000) {
             _lastRestoreAttempt = now;
-            patchRiskConfig(savedLocally).catch(() => { /* will retry next cycle */ });
+            patchRiskConfig(saved).catch(() => { /* will retry next cycle */ });
           }
         })
         .catch(() => {
-          // Backend not up yet — retry in 5 s, then fall back to 60 s poll
           if (!cancelled && !retryTimer) {
             retryTimer = setTimeout(() => { retryTimer = null; if (!cancelled) load(); }, 5000);
           }
@@ -527,11 +552,14 @@ export function useRiskConfig() {
     setError(null);
     try {
       await patchRiskConfig(updates);
-      // Save to localStorage using only known field names — no source/overrides/defaults leaking in
+      // Persist to localStorage immediately after a confirmed backend PATCH.
       const existing = _loadConfigLocally() ?? {};
       _saveConfigLocally({ ...existing, ...(updates as Record<string, unknown>) });
-      const fresh = await fetchRiskConfig();
-      setConfig(fresh);
+      // Apply the merge directly — no extra round-trip GET needed.
+      const base: RiskConfig = config ?? {
+        ..._FIELD_DEFAULTS, source: "env", overrides: {}, defaults: _FIELD_DEFAULTS,
+      };
+      setConfig(_mergeWithSaved(base));
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
       _configBus.dispatchEvent(new Event("updated"));
@@ -547,9 +575,9 @@ export function useRiskConfig() {
     setError(null);
     try {
       await resetRiskConfig();
+      _saveConfigLocally({}); // clear saved overrides — user explicitly reset
       const fresh = await fetchRiskConfig();
       setConfig(fresh);
-      _saveConfigLocally({}); // clear saved overrides — user explicitly reset
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
       _configBus.dispatchEvent(new Event("updated"));
