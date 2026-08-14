@@ -464,36 +464,30 @@ export function useRiskConfig() {
 
     function load() {
       fetchRiskConfig()
-        .then(async (c) => {
+        .then((c) => {
           if (cancelled) return;
 
-          // On first page load: re-apply localStorage before showing anything.
-          // This prevents the user seeing a stale backend value (e.g. env defaults
-          // after a Railway redeploy wiped /tmp) before the restore kicks in.
+          // localStorage is the display source of truth.
+          // Merge saved user values on top of the backend response every time,
+          // so the UI always reflects what the user last saved — even when Railway
+          // redeploys wiped /tmp and the backend reverted to env-var defaults.
+          const savedLocally = _loadConfigLocally();
+          const display: RiskConfig = (savedLocally && Object.keys(savedLocally).length > 0)
+            ? { ...c, ...(savedLocally as Partial<RiskConfig>), source: "dynamic" }
+            : c;
+          setConfig(display);
+
+          // On first page load: push localStorage to backend so the trading
+          // engine runs with the user's saved parameters (fire-and-forget).
           if (!_restoreApplied) {
             _restoreApplied = true;
-            const savedLocally = _loadConfigLocally();
             if (savedLocally && Object.keys(savedLocally).length > 0) {
-              try {
-                await patchRiskConfig(savedLocally);
-                if (cancelled) return;
-                const fresh = await fetchRiskConfig();
-                if (!cancelled) {
-                  setConfig(fresh);
-                  _configBus.dispatchEvent(new Event("updated"));
-                }
-              } catch {
-                // Restore failed — show whatever the backend has
-                if (!cancelled) setConfig(c);
-              }
-              return;
+              patchRiskConfig(savedLocally).catch(() => { /* will retry on next 60 s poll */ });
             }
           }
-
-          setConfig(c);
         })
         .catch(() => {
-          // Backend not up yet — retry quickly, then fall back to the 60 s poll
+          // Backend not up yet — retry in 5 s, then fall back to 60 s poll
           if (!cancelled && !retryTimer) {
             retryTimer = setTimeout(() => { retryTimer = null; if (!cancelled) load(); }, 5000);
           }
