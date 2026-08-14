@@ -421,32 +421,49 @@ export async function resetRiskConfig(): Promise<{ reset: boolean; current: obje
 }
 
 // ── Config persistence ────────────────────────────────────────────────────────
-// localStorage is the source of truth for user-saved overrides.
-// On every page load we re-apply whatever is in localStorage to the backend.
-// This handles: Railway /tmp wipes on redeploy, multi-worker GET inconsistency,
-// and any other case where the backend loses its dynamic config.
+// User-saved overrides are stored in BOTH localStorage AND a cookie so that
+// at least one survives browser privacy wipes, ITP, or extension interference.
+// On every load() the saved values are merged on top of the backend response
+// before display, so the UI is always correct regardless of backend state.
+// The backend is re-synced in the background every 5 minutes so the trading
+// engine picks up the user's values even after a Railway container restart.
 
 const _CONFIG_STORAGE_KEY = "ta_risk_config_v1";
-let _restoreApplied = false; // run restore at most once per page load
+const _CONFIG_COOKIE_KEY  = "ta_rc_v1";
+let _lastRestoreAttempt = 0; // epoch ms; 0 = never
 
 function _saveConfigLocally(fields: Record<string, unknown>): void {
+  const clean: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(fields)) {
+    if (_RISK_FIELD_KEYS.has(k) && v !== null && v !== undefined) clean[k] = v;
+  }
+  const json = Object.keys(clean).length > 0 ? JSON.stringify(clean) : "";
+  // localStorage
   try {
-    const clean: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(fields)) {
-      if (_RISK_FIELD_KEYS.has(k) && v !== null && v !== undefined) clean[k] = v;
-    }
-    if (Object.keys(clean).length > 0)
-      localStorage.setItem(_CONFIG_STORAGE_KEY, JSON.stringify(clean));
-    else
-      localStorage.removeItem(_CONFIG_STORAGE_KEY);
-  } catch { /* storage quota */ }
+    json
+      ? localStorage.setItem(_CONFIG_STORAGE_KEY, json)
+      : localStorage.removeItem(_CONFIG_STORAGE_KEY);
+  } catch { /* quota / blocked */ }
+  // Cookie backup — survives localStorage being cleared by browser / ITP
+  try {
+    const val = json ? encodeURIComponent(json) : "";
+    document.cookie = `${_CONFIG_COOKIE_KEY}=${val};max-age=${60 * 60 * 24 * 365};path=/;SameSite=Strict`;
+  } catch { /* ignore */ }
 }
 
 function _loadConfigLocally(): Partial<RiskConfigFields> | null {
-  try {
-    const raw = localStorage.getItem(_CONFIG_STORAGE_KEY);
-    return raw ? JSON.parse(raw) as Partial<RiskConfigFields> : null;
-  } catch { return null; }
+  // Try localStorage first, then cookie
+  let raw: string | null = null;
+  try { raw = localStorage.getItem(_CONFIG_STORAGE_KEY); } catch { /* ignore */ }
+  if (!raw) {
+    try {
+      const m = document.cookie.match(new RegExp("(?:^|; )" + _CONFIG_COOKIE_KEY + "=([^;]*)"));
+      const v = m ? decodeURIComponent(m[1]) : "";
+      raw = v || null;
+    } catch { /* ignore */ }
+  }
+  if (!raw) return null;
+  try { return JSON.parse(raw) as Partial<RiskConfigFields>; } catch { return null; }
 }
 
 // ── Shared event bus ──────────────────────────────────────────────────────────
@@ -467,23 +484,22 @@ export function useRiskConfig() {
         .then((c) => {
           if (cancelled) return;
 
-          // localStorage is the display source of truth.
-          // Merge saved user values on top of the backend response every time,
-          // so the UI always reflects what the user last saved — even when Railway
-          // redeploys wiped /tmp and the backend reverted to env-var defaults.
+          // Merge localStorage/cookie values on top of the backend response.
+          // The UI always shows what the user last saved, even when Railway
+          // redeployed and wiped /tmp (reverting the backend to env-var defaults).
           const savedLocally = _loadConfigLocally();
           const display: RiskConfig = (savedLocally && Object.keys(savedLocally).length > 0)
             ? { ...c, ...(savedLocally as Partial<RiskConfig>), source: "dynamic" }
             : c;
           setConfig(display);
 
-          // On first page load: push localStorage to backend so the trading
-          // engine runs with the user's saved parameters (fire-and-forget).
-          if (!_restoreApplied) {
-            _restoreApplied = true;
-            if (savedLocally && Object.keys(savedLocally).length > 0) {
-              patchRiskConfig(savedLocally).catch(() => { /* will retry on next 60 s poll */ });
-            }
+          // Re-sync the backend every 5 minutes so the trading engine runs with
+          // the user's saved parameters even after a Railway container restart.
+          const now = Date.now();
+          if (savedLocally && Object.keys(savedLocally).length > 0
+              && now - _lastRestoreAttempt > 5 * 60 * 1000) {
+            _lastRestoreAttempt = now;
+            patchRiskConfig(savedLocally).catch(() => { /* will retry next cycle */ });
           }
         })
         .catch(() => {
