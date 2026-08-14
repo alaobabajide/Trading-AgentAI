@@ -1707,7 +1707,6 @@ def get_credit_status():
     Returns current balance, used amount, and whether balance is below the $5 warning threshold.
     """
     import time as _time
-    from config import get_settings
     cached = _CREDITS_CACHE.get("last")
     if cached and _time.time() - cached["ts"] < _CREDITS_TTL:
         return cached["data"]
