@@ -403,19 +403,34 @@ export async function resetRiskConfig(): Promise<{ reset: boolean; current: obje
   return safeJson(res);
 }
 
-// ── Config persistence across Railway redeploys ───────────────────────────────
-// Railway wipes /tmp on every deploy, resetting _dynamic_config to env defaults.
-// Solution: mirror user overrides in localStorage. On page load, if the backend
-// is at env defaults (source="env") but localStorage has saved overrides,
-// automatically re-apply them — restoring the user's settings within seconds.
+// ── Config persistence ────────────────────────────────────────────────────────
+// localStorage is the source of truth for user-saved overrides.
+// On every page load we re-apply whatever is in localStorage to the backend.
+// This handles: Railway /tmp wipes on redeploy, multi-worker GET inconsistency,
+// and any other case where the backend loses its dynamic config.
 
 const _CONFIG_STORAGE_KEY = "ta_risk_config_v1";
-let _autoRestoreAttempted = false; // module-level guard: restore at most once per tab
+let _restoreApplied = false; // run restore at most once per page load
 
-function _saveConfigLocally(overrides: Partial<RiskConfigFields>): void {
+function _saveConfigLocally(fields: Record<string, unknown>): void {
   try {
-    if (Object.keys(overrides).length > 0)
-      localStorage.setItem(_CONFIG_STORAGE_KEY, JSON.stringify(overrides));
+    // Only keep known RiskConfigFields keys — strip source/overrides/defaults
+    const KNOWN_KEYS = new Set([
+      "stop_loss_pct","take_profit_pct","trailing_stop_pct","partial_exit_pct",
+      "runner_trail_pct","max_position_pct","hot_position_pct",
+      "max_crypto_allocation_pct","max_exposure_pct","max_concurrent_positions",
+      "circuit_breaker_drawdown","drawdown_scale_threshold","drawdown_scale_factor",
+      "correlation_halving_threshold","signal_confidence_threshold","lookback_days",
+      "atr_multiplier","atr_stop_floor","atr_stop_cap",
+      "loss_cooldown_hits","loss_cooldown_window_days","loss_cooldown_skip_cycles",
+      "max_telegram_order_usd",
+    ]);
+    const clean: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(fields)) {
+      if (KNOWN_KEYS.has(k) && v !== null && v !== undefined) clean[k] = v;
+    }
+    if (Object.keys(clean).length > 0)
+      localStorage.setItem(_CONFIG_STORAGE_KEY, JSON.stringify(clean));
     else
       localStorage.removeItem(_CONFIG_STORAGE_KEY);
   } catch { /* storage quota */ }
@@ -429,7 +444,6 @@ function _loadConfigLocally(): Partial<RiskConfigFields> | null {
 }
 
 // ── Shared event bus ──────────────────────────────────────────────────────────
-// When any hook instance saves or resets, all others (Dashboard, etc.) re-fetch.
 const _configBus = new EventTarget();
 
 export function useRiskConfig() {
@@ -446,62 +460,45 @@ export function useRiskConfig() {
         .then((c) => {
           if (cancelled) return;
           setConfig(c);
-          console.log("[config] GET /config →", c.source, "crypto_cap=", c.max_crypto_allocation_pct, "overrides=", c.overrides);
 
-          if (c.source === "dynamic") {
-            _autoRestoreAttempted = true;
-          } else if (!_autoRestoreAttempted) {
-            const local = _loadConfigLocally();
-            console.log("[config] source=env, localStorage=", local);
-            if (local && Object.keys(local).length > 0) {
-              _autoRestoreAttempted = true;
-              patchRiskConfig(local)
+          // On first load: always re-apply localStorage to the backend.
+          // We don't check c.source — even if the backend reports "dynamic",
+          // it may be missing fields the user saved (partial override, wrong worker, etc.).
+          if (!_restoreApplied) {
+            _restoreApplied = true;
+            const saved = _loadConfigLocally();
+            if (saved && Object.keys(saved).length > 0) {
+              patchRiskConfig(saved)
                 .then(() => fetchRiskConfig())
-                .then((fresh) => {
-                  console.log("[config] auto-restore complete →", fresh.max_crypto_allocation_pct);
-                  if (!cancelled) {
-                    setConfig(fresh);
-                    _configBus.dispatchEvent(new Event("updated"));
-                  }
-                })
-                .catch((e) => { console.error("[config] auto-restore FAILED:", e); });
-            } else {
-              console.warn("[config] source=env but localStorage empty — no restore possible");
+                .then((fresh) => { if (!cancelled) { setConfig(fresh); _configBus.dispatchEvent(new Event("updated")); } })
+                .catch(() => { /* silent — user sees current backend value */ });
             }
           }
         })
-        .catch((e) => { console.warn("[config] GET /config failed:", e); });
+        .catch(() => { /* backend not up yet */ });
     }
 
     const onUpdate = () => { if (!cancelled) load(); };
     _configBus.addEventListener("updated", onUpdate);
     load();
     const id = setInterval(load, 60_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-      _configBus.removeEventListener("updated", onUpdate);
-    };
+    return () => { cancelled = true; clearInterval(id); _configBus.removeEventListener("updated", onUpdate); };
   }, []);
 
   async function save(updates: Partial<RiskConfigFields>) {
     setSaving(true);
     setError(null);
     try {
-      console.log("[config] PATCH sending:", JSON.stringify(updates).slice(0, 200));
       await patchRiskConfig(updates);
+      // Save to localStorage using only known field names — no source/overrides/defaults leaking in
       const existing = _loadConfigLocally() ?? {};
-      const merged = { ...existing, ...updates };
-      _saveConfigLocally(merged);
-      console.log("[config] localStorage saved, keys=", Object.keys(merged).length, "crypto_cap=", (merged as Record<string, unknown>).max_crypto_allocation_pct);
+      _saveConfigLocally({ ...existing, ...(updates as Record<string, unknown>) });
       const fresh = await fetchRiskConfig();
-      console.log("[config] GET after save →", fresh.source, "crypto_cap=", fresh.max_crypto_allocation_pct);
       setConfig(fresh);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
       _configBus.dispatchEvent(new Event("updated"));
     } catch (e) {
-      console.error("[config] save FAILED:", e);
       setError((e as Error).message);
     } finally {
       setSaving(false);
