@@ -460,35 +460,56 @@ export function useRiskConfig() {
 
   useEffect(() => {
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
     function load() {
       fetchRiskConfig()
-        .then((c) => {
+        .then(async (c) => {
           if (cancelled) return;
-          setConfig(c);
 
-          // On first load: always re-apply localStorage to the backend.
-          // We don't check c.source — even if the backend reports "dynamic",
-          // it may be missing fields the user saved (partial override, wrong worker, etc.).
+          // On first page load: re-apply localStorage before showing anything.
+          // This prevents the user seeing a stale backend value (e.g. env defaults
+          // after a Railway redeploy wiped /tmp) before the restore kicks in.
           if (!_restoreApplied) {
             _restoreApplied = true;
-            const saved = _loadConfigLocally();
-            if (saved && Object.keys(saved).length > 0) {
-              patchRiskConfig(saved)
-                .then(() => fetchRiskConfig())
-                .then((fresh) => { if (!cancelled) { setConfig(fresh); _configBus.dispatchEvent(new Event("updated")); } })
-                .catch(() => { /* silent — user sees current backend value */ });
+            const savedLocally = _loadConfigLocally();
+            if (savedLocally && Object.keys(savedLocally).length > 0) {
+              try {
+                await patchRiskConfig(savedLocally);
+                if (cancelled) return;
+                const fresh = await fetchRiskConfig();
+                if (!cancelled) {
+                  setConfig(fresh);
+                  _configBus.dispatchEvent(new Event("updated"));
+                }
+              } catch {
+                // Restore failed — show whatever the backend has
+                if (!cancelled) setConfig(c);
+              }
+              return;
             }
           }
+
+          setConfig(c);
         })
-        .catch(() => { /* backend not up yet */ });
+        .catch(() => {
+          // Backend not up yet — retry quickly, then fall back to the 60 s poll
+          if (!cancelled && !retryTimer) {
+            retryTimer = setTimeout(() => { retryTimer = null; if (!cancelled) load(); }, 5000);
+          }
+        });
     }
 
     const onUpdate = () => { if (!cancelled) load(); };
     _configBus.addEventListener("updated", onUpdate);
     load();
     const id = setInterval(load, 60_000);
-    return () => { cancelled = true; clearInterval(id); _configBus.removeEventListener("updated", onUpdate); };
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      if (retryTimer) clearTimeout(retryTimer);
+      _configBus.removeEventListener("updated", onUpdate);
+    };
   }, []);
 
   async function save(updates: Partial<RiskConfigFields>) {
