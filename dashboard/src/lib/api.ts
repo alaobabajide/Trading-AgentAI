@@ -446,28 +446,31 @@ export function useRiskConfig() {
         .then((c) => {
           if (cancelled) return;
           setConfig(c);
+          console.log("[config] GET /config →", c.source, "crypto_cap=", c.max_crypto_allocation_pct, "overrides=", c.overrides);
 
           if (c.source === "dynamic") {
-            // Backend already has live overrides — no restore needed
             _autoRestoreAttempted = true;
           } else if (!_autoRestoreAttempted) {
-            // Backend restarted (source="env"): re-apply locally saved overrides
             const local = _loadConfigLocally();
+            console.log("[config] source=env, localStorage=", local);
             if (local && Object.keys(local).length > 0) {
-              _autoRestoreAttempted = true; // set before async to prevent double-fire
+              _autoRestoreAttempted = true;
               patchRiskConfig(local)
                 .then(() => fetchRiskConfig())
                 .then((fresh) => {
+                  console.log("[config] auto-restore complete →", fresh.max_crypto_allocation_pct);
                   if (!cancelled) {
                     setConfig(fresh);
                     _configBus.dispatchEvent(new Event("updated"));
                   }
                 })
-                .catch(() => { /* silent — next poll will retry */ });
+                .catch((e) => { console.error("[config] auto-restore FAILED:", e); });
+            } else {
+              console.warn("[config] source=env but localStorage empty — no restore possible");
             }
           }
         })
-        .catch(() => { /* backend may not be up yet */ });
+        .catch((e) => { console.warn("[config] GET /config failed:", e); });
     }
 
     const onUpdate = () => { if (!cancelled) load(); };
@@ -485,18 +488,20 @@ export function useRiskConfig() {
     setSaving(true);
     setError(null);
     try {
+      console.log("[config] PATCH sending:", JSON.stringify(updates).slice(0, 200));
       await patchRiskConfig(updates);
-      // Persist to localStorage BEFORE the GET so we always capture what was sent,
-      // not fresh.overrides which can be empty/stale if the GET lands on a different
-      // worker process that hasn't seen this PATCH yet.
       const existing = _loadConfigLocally() ?? {};
-      _saveConfigLocally({ ...existing, ...updates });
+      const merged = { ...existing, ...updates };
+      _saveConfigLocally(merged);
+      console.log("[config] localStorage saved, keys=", Object.keys(merged).length, "crypto_cap=", (merged as Record<string, unknown>).max_crypto_allocation_pct);
       const fresh = await fetchRiskConfig();
+      console.log("[config] GET after save →", fresh.source, "crypto_cap=", fresh.max_crypto_allocation_pct);
       setConfig(fresh);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
       _configBus.dispatchEvent(new Event("updated"));
     } catch (e) {
+      console.error("[config] save FAILED:", e);
       setError((e as Error).message);
     } finally {
       setSaving(false);
