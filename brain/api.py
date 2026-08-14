@@ -546,7 +546,13 @@ class RiskConfigUpdate(BaseModel):
 def get_risk_config():
     """Return current effective risk config (env defaults merged with dynamic overrides)."""
     from config import get_settings
+    global _dynamic_config
     cfg = get_settings()
+    # Always reload from disk so a PATCH to any worker is immediately visible here.
+    # The file is small; this read is cheap and guarantees cross-worker consistency.
+    disk = _load_dynamic_config()
+    if disk:
+        _dynamic_config = disk
     eff = _effective_config(cfg)
     return {
         **eff,

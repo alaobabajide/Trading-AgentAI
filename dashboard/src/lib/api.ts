@@ -486,9 +486,13 @@ export function useRiskConfig() {
     setError(null);
     try {
       await patchRiskConfig(updates);
+      // Persist to localStorage BEFORE the GET so we always capture what was sent,
+      // not fresh.overrides which can be empty/stale if the GET lands on a different
+      // worker process that hasn't seen this PATCH yet.
+      const existing = _loadConfigLocally() ?? {};
+      _saveConfigLocally({ ...existing, ...updates });
       const fresh = await fetchRiskConfig();
       setConfig(fresh);
-      _saveConfigLocally(fresh.overrides); // mirror to localStorage for redeploy survival
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
       _configBus.dispatchEvent(new Event("updated"));
