@@ -550,21 +550,32 @@ export function useRiskConfig() {
   async function save(updates: Partial<RiskConfigFields>) {
     setSaving(true);
     setError(null);
+
+    // 1. Write to localStorage/cookie immediately — independent of backend.
+    //    This guarantees the display persists after refresh even if the network
+    //    call fails (auth error, Railway cold start, timeout, etc.).
+    const existing = _loadConfigLocally() ?? {};
+    _saveConfigLocally({ ...existing, ...(updates as Record<string, unknown>) });
+
+    // 2. Update display immediately from the now-saved local values.
+    const base: RiskConfig = config ?? {
+      ..._FIELD_DEFAULTS, source: "env", overrides: {}, defaults: _FIELD_DEFAULTS,
+    };
+    setConfig(_mergeWithSaved(base));
+
     try {
+      // 3. Sync to backend so the trading engine picks up the new values.
       await patchRiskConfig(updates);
-      // Persist to localStorage immediately after a confirmed backend PATCH.
-      const existing = _loadConfigLocally() ?? {};
-      _saveConfigLocally({ ...existing, ...(updates as Record<string, unknown>) });
-      // Apply the merge directly — no extra round-trip GET needed.
-      const base: RiskConfig = config ?? {
-        ..._FIELD_DEFAULTS, source: "env", overrides: {}, defaults: _FIELD_DEFAULTS,
-      };
-      setConfig(_mergeWithSaved(base));
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
       _configBus.dispatchEvent(new Event("updated"));
     } catch (e) {
-      setError((e as Error).message);
+      // Backend sync failed — localStorage already has the value, so the UI
+      // will be correct after refresh. The background re-sync in load() will
+      // retry the PATCH on the next polling cycle.
+      setError(`Saved locally — backend sync failed: ${(e as Error).message}`);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
     } finally {
       setSaving(false);
     }
