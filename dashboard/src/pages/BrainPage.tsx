@@ -15,11 +15,13 @@ function UsagePanel() {
   const today   = usage?.today;
   const history = usage?.history ?? [];
 
+  const critThresh = credits?.critical_threshold ?? 2;
+  const warnThresh = credits?.warning_threshold  ?? 5;
   const creditColor =
     !credits || !credits.configured  ? "text-slate-400" :
     credits.balance_usd === null      ? "text-slate-400" :
-    credits.balance_usd < 2           ? "text-red-400"   :
-    credits.balance_usd < 5           ? "text-amber-400" :
+    credits.balance_usd < critThresh  ? "text-red-400"   :
+    credits.balance_usd < warnThresh  ? "text-amber-400" :
                                         "text-emerald-400";
 
   function fmtTokens(n: number): string {
@@ -66,8 +68,8 @@ function UsagePanel() {
                   <div
                     className={clsx(
                       "h-full rounded-full transition-all",
-                      credits.balance_usd < 2  ? "bg-red-500"   :
-                      credits.balance_usd < 5  ? "bg-amber-500" : "bg-emerald-500",
+                      credits.balance_usd < critThresh ? "bg-red-500"   :
+                      credits.balance_usd < warnThresh ? "bg-amber-500" : "bg-emerald-500",
                     )}
                     style={{ width: `${Math.max(2, (credits.balance_usd / credits.limit_usd) * 100).toFixed(1)}%` }}
                   />

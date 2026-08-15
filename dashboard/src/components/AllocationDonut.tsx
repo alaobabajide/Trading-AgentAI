@@ -8,7 +8,8 @@ interface Props {
   cash: number;
 }
 
-const COLORS = ["#6366f1", "#a855f7", "#f97316", "#22c55e"];
+const COLORS    = ["#6366f1", "#a855f7", "#f97316", "#22c55e"];
+const CHART_BG  = "#131629";
 
 export function AllocationDonut({ positions, equity, cash }: Props) {
   const stockMv = positions
@@ -39,7 +40,7 @@ export function AllocationDonut({ positions, equity, cash }: Props) {
           <Tooltip
             formatter={(v) => `${v}%`}
             contentStyle={{
-              background: "#131629", border: "1px solid rgba(255,255,255,0.05)",
+              background: CHART_BG, border: "1px solid rgba(255,255,255,0.05)",
               borderRadius: 12, fontSize: 11, fontFamily: "JetBrains Mono",
             }}
           />

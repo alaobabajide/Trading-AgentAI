@@ -48,11 +48,11 @@ echo "Keys are sent directly to Railway and never stored locally."
 echo "Press Enter to skip any optional key."
 echo ""
 
-# Anthropic (required)
-echo -e "${CYAN}Anthropic API key${NC} (required — from console.anthropic.com)"
-echo -n "  ANTHROPIC_API_KEY: "
-read -r ANTHROPIC_API_KEY
-if [ -z "$ANTHROPIC_API_KEY" ]; then
+# OpenRouter (required for LLM signal generation)
+echo -e "${CYAN}OpenRouter API key${NC} (required — from openrouter.ai/settings/keys)"
+echo -n "  OPENROUTER_API_KEY: "
+read -r OPENROUTER_API_KEY
+if [ -z "$OPENROUTER_API_KEY" ]; then
   echo -e "  ${RED}Skipped — signal generation will not work without this.${NC}"
 fi
 
@@ -81,6 +81,17 @@ fi
 
 echo ""
 
+# Telegram (optional)
+echo -e "${CYAN}Telegram Bot credentials${NC} (optional — from @BotFather)"
+echo -n "  TELEGRAM_BOT_TOKEN (press Enter to skip): "
+read -r TELEGRAM_BOT_TOKEN
+if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
+  echo -n "  TELEGRAM_ALLOWED_IDS (comma-separated chat IDs): "
+  read -r TELEGRAM_ALLOWED_IDS
+fi
+
+echo ""
+
 # ── Step 4: Push to Railway ───────────────────────────────────────────────────
 echo -e "${YELLOW}Step 4/4 — Setting environment variables on Railway${NC}"
 echo ""
@@ -95,7 +106,7 @@ set_var() {
 }
 
 # Required
-set_var "ANTHROPIC_API_KEY"        "$ANTHROPIC_API_KEY"
+set_var "OPENROUTER_API_KEY"       "$OPENROUTER_API_KEY"
 
 # Alpaca
 set_var "ALPACA_API_KEY"           "$ALPACA_API_KEY"
@@ -111,11 +122,11 @@ if [ -n "$BINANCE_API_KEY" ]; then
   echo -e "  ${GREEN}✓${NC} BINANCE_TESTNET=true"
 fi
 
-# Telegram (already configured)
-railway variables set "TELEGRAM_BOT_TOKEN=8536382077:AAHQZq9Ui8QL98rvPUX6ljATOX-uMqf4DE0" > /dev/null 2>&1
-echo -e "  ${GREEN}✓${NC} TELEGRAM_BOT_TOKEN"
-railway variables set "TELEGRAM_ALLOWED_IDS=8299051459" > /dev/null 2>&1
-echo -e "  ${GREEN}✓${NC} TELEGRAM_ALLOWED_IDS"
+# Telegram (optional — skip both to disable)
+if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
+  set_var "TELEGRAM_BOT_TOKEN"     "$TELEGRAM_BOT_TOKEN"
+  set_var "TELEGRAM_ALLOWED_IDS"   "$TELEGRAM_ALLOWED_IDS"
+fi
 
 # Risk defaults
 railway variables set "MAX_POSITION_PCT=0.05"           > /dev/null 2>&1

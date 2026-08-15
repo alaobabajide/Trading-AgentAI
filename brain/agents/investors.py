@@ -4,7 +4,7 @@ Each agent receives only its declared data slice (asymmetric information
 partition) and returns a DIRECTION: + REASONING: response in the same
 format as the Panel A analyst agents.
 
-Model: Haiku (tactical speed) for all personas.
+Model: TACTICAL_MODEL (fast, I/O-bound) for all personas.
 """
 from __future__ import annotations
 

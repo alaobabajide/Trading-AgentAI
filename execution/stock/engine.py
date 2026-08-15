@@ -83,7 +83,7 @@ class StockExecutionEngine:
             return None
 
         risk = self._get_risk()
-        if risk._triggered:
+        if risk.is_triggered:
             log.warning("Circuit breaker active — refusing to execute %s", signal.symbol)
             return None
 
@@ -167,26 +167,3 @@ class StockExecutionEngine:
             raw=order,
         )
 
-    def update_trailing_stops(self, symbol: str, current_price: float) -> None:
-        """Call periodically to ratchet trailing stops."""
-        new_stop = self._trailing.update(symbol, current_price)
-        if new_stop is not None:
-            self._update_stop_order(symbol, new_stop)
-
-    def _update_stop_order(self, symbol: str, new_stop: float) -> None:
-        """Replace the open stop order for a position."""
-        try:
-            positions = self._trading.get_all_positions()
-            for pos in positions:
-                if pos.symbol == symbol:
-                    orders = self._trading.get_orders()
-                    for order in orders:
-                        if str(order.symbol) == symbol and str(order.order_type) == "stop":
-                            from alpaca.trading.requests import ReplaceOrderRequest
-                            self._trading.replace_order_by_id(
-                                order.id,
-                                ReplaceOrderRequest(stop_price=new_stop),
-                            )
-                            log.info("Trailing stop updated: %s new_stop=%.4f", symbol, new_stop)
-        except Exception as exc:
-            log.error("Trailing stop update failed for %s: %s", symbol, exc)

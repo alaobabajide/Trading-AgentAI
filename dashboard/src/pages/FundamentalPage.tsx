@@ -1,4 +1,10 @@
 import { useState, useEffect } from "react";
+
+const EXPENSE_RATIO_LOW    = 0.2;
+const EXPENSE_RATIO_HIGH   = 0.5;
+const NAV_PREMIUM_THRESHOLD = 0.2;
+const BETA_LOW              = 0.3;
+const BETA_HIGH             = 1.2;
 import { BookOpen, RefreshCw, AlertCircle } from "lucide-react";
 import clsx from "clsx";
 import { SymbolSelector } from "../components/SymbolSelector";
@@ -196,8 +202,8 @@ function LiveEtfPanel({
     ? `${f.expense_ratio.toFixed(4)}%`
     : "N/A";
   const expColor = !f.expense_ratio ? undefined
-    : f.expense_ratio < 0.2 ? "text-emerald-400"
-    : f.expense_ratio > 0.5 ? "text-red-400"
+    : f.expense_ratio < EXPENSE_RATIO_LOW  ? "text-emerald-400"
+    : f.expense_ratio > EXPENSE_RATIO_HIGH ? "text-red-400"
     : "text-yellow-400";
 
   return (
@@ -241,7 +247,7 @@ function LiveEtfPanel({
             value={navDiscount !== null
               ? `${navDiscount >= 0 ? "+" : ""}${navDiscount.toFixed(2)}%`
               : "N/A"}
-            color={navDiscount !== null && Math.abs(navDiscount) < 0.2
+            color={navDiscount !== null && Math.abs(navDiscount) < NAV_PREMIUM_THRESHOLD
               ? "text-emerald-400" : "text-yellow-400"}
           />
           <MetricCell
@@ -251,8 +257,8 @@ function LiveEtfPanel({
           <MetricCell
             label="Beta (3-Yr)"
             value={(f.beta ?? 0) > 0 ? f.beta!.toFixed(2) : "N/A"}
-            color={(f.beta ?? 0) < 0.3 ? "text-emerald-400"
-              : (f.beta ?? 0) > 1.2 ? "text-red-400" : undefined}
+            color={(f.beta ?? 0) < BETA_LOW  ? "text-emerald-400"
+              : (f.beta ?? 0) > BETA_HIGH ? "text-red-400" : undefined}
           />
         </div>
 

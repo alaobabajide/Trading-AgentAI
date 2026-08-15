@@ -17,7 +17,7 @@ from data.onchain import OnChainSnapshot
 from data.portfolio import PortfolioState
 from data.macro_data import fetch_macro_context
 from brain.signal import TradingSignal
-from watchlist import HOT_MIN_VOTES, WARM_MIN_VOTES
+from watchlist import HOT_MIN_VOTES, WARM_MIN_VOTES, AGENT_COUNT
 from brain.agents.fundamental import FundamentalAnalyst
 from brain.agents.technical import TechnicalAnalyst
 from brain.agents.sentiment import SentimentAnalyst
@@ -1768,6 +1768,7 @@ def _paper_risk_manager(
     take_profit_pct: float = 0.05,
 ) -> str:
     """Rule-based risk assessment using portfolio values — no LLM needed."""
+    original_action = action   # capture before any branch may mutate it to HOLD
     equity  = max(portfolio.equity, 1.0)
     cash    = portfolio.cash
     cash_ratio = cash / equity
@@ -1810,8 +1811,6 @@ def _paper_risk_manager(
             f"Position sized at {pos_pct*100:.1f}% of equity."
         )
 
-    # Use original_action for vote lookup so mutated HOLD doesn't fetch the wrong bucket
-    original_action = action  # action may have been mutated to HOLD above
     vote_key = "bullish" if original_action == "BUY" else "bearish"
     votes = vote_tally.get(vote_key, 0)
     return json.dumps({
@@ -2277,8 +2276,7 @@ class DebateOrchestrator:
             for ctx_dict in (d for _, d in panel_b_tasks.values()):
                 ctx_dict.setdefault("symbol", symbol)
 
-            # Fire all 27 agents simultaneously (ThreadPoolExecutor — I/O-bound LLM calls)
-            with ThreadPoolExecutor(max_workers=27) as pool:
+            with ThreadPoolExecutor(max_workers=AGENT_COUNT) as pool:
                 futures: dict[Any, tuple[str, str]] = {}  # future → (panel, role)
 
                 futures[pool.submit(self._regime.analyse, regime_ctx)] = ("a", "regime")

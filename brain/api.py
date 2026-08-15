@@ -4,7 +4,7 @@ POST /signal   → runs the full debate and returns a TradingSignal JSON.
 GET  /health   → liveness check.
 GET  /signal/{symbol}/latest → last cached signal.
 
-Heavy dependencies (anthropic, pandas, ta, etc.) are imported lazily inside
+Heavy dependencies (pandas, ta, etc.) are imported lazily inside
 request handlers so that a missing package or OOM during import does NOT
 prevent the /health endpoint from responding.
 """
@@ -410,7 +410,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 def _build_services(cfg):
     # Heavy imports done here (inside a request handler) so a bad import never
     # prevents the health endpoint from starting.
-    from config import get_settings  # noqa: F401 (already passed as cfg)
     from data.market_data import AlpacaMarketData, AlpacaCryptoMarketData
     from data.sentiment import SentimentFetcher
     from data.onchain import OnChainFetcher
@@ -423,7 +422,6 @@ def _build_services(cfg):
     onchain = OnChainFetcher(eth_rpc_url=cfg.eth_rpc_url)
     portfolio = PortfolioFetcher(
         cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,
-        cfg.binance_api_key, cfg.binance_secret_key, cfg.binance_testnet,
     )
     eff = _effective_config(cfg)
     orchestrator = DebateOrchestrator(
@@ -632,7 +630,6 @@ def reset_risk_config():
 def config_status():
     """Returns which API keys are configured (true/false only — never exposes values)
     plus runtime metadata so the frontend never needs to hardcode facts about the engine."""
-    import os
     from config import get_settings
     from watchlist import (
         STOCK_WATCHLIST, ETF_WATCHLIST, CRYPTO_WATCHLIST,
@@ -731,8 +728,9 @@ def generate_signal(req: SignalRequest):
         try:
             from openai import OpenAI as _OpenAI
             _probe = _OpenAI(base_url="https://openrouter.ai/api/v1", api_key=cfg.openrouter_api_key)
+            from watchlist import TACTICAL_MODEL as _TACTICAL_MODEL
             _probe.chat.completions.create(
-                model="google/gemini-2.5-flash-lite",
+                model=_TACTICAL_MODEL,
                 max_tokens=1,
                 messages=[{"role": "user", "content": "x"}],
             )
@@ -838,7 +836,6 @@ def clear_all_cached_signals():
     """Wipe every entry from the in-memory signal cache and the on-disk JSON."""
     _signal_cache.clear()
     _save_cache(_signal_cache)
-    _log_audit("signals_cache_clear", {"count": 0})
     return {"cleared": True}
 
 
@@ -976,6 +973,9 @@ def execute_trade(req: ExecuteRequest):
                 alpaca_base_url=cfg.alpaca_base_url,
                 max_position_pct=eff["max_position_pct"],
                 max_crypto_allocation_pct=eff["max_crypto_allocation_pct"],
+                cash_buffer=cfg.crypto_cash_buffer,
+                min_notional_usd=cfg.crypto_min_notional_usd,
+                fallback_equity_usd=cfg.crypto_fallback_equity_usd,
             )
             result = engine.execute(signal)
 
@@ -1030,7 +1030,6 @@ def get_portfolio():
     else:
         portfolio_fetcher = PortfolioFetcher(
             cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,
-            cfg.binance_api_key, cfg.binance_secret_key, cfg.binance_testnet,
         )
         try:
             state = portfolio_fetcher.snapshot()
@@ -1211,10 +1210,6 @@ def get_portfolio_history(period: str = "1D"):
     pts = _build_equity(cfg, is_paper, lookback_days=lookback, use_daily=daily)
     log.info("portfolio/history(%s): fallback reconstruction returned %d pts", period, len(pts))
     return pts
-
-
-def _build_1d_equity(cfg, is_paper: bool) -> list:
-    return _build_equity(cfg, is_paper, lookback_days=1, use_daily=False)
 
 
 def _build_equity(cfg, is_paper: bool, lookback_days: int, use_daily: bool) -> list:
@@ -1711,7 +1706,7 @@ _CREDITS_TTL   = 120  # seconds — check balance every 2 minutes max
 @app.get("/credits")
 def get_credit_status():
     """Query OpenRouter for remaining API credit balance.
-    Returns current balance, used amount, and whether balance is below the $5 warning threshold.
+    Returns current balance, used amount, and whether balance is below the configured warning threshold.
     """
     import time as _time
     cached = _CREDITS_CACHE.get("last")
@@ -1721,6 +1716,9 @@ def get_credit_status():
     cfg = get_settings()
     api_key = cfg.openrouter_api_key or ""
 
+    warn_thresh = cfg.credit_warning_threshold_usd
+    crit_thresh = cfg.credit_critical_threshold_usd
+
     if not api_key:
         result = {
             "provider": "openrouter",
@@ -1729,7 +1727,8 @@ def get_credit_status():
             "used_usd": None,
             "limit_usd": None,
             "warning": False,
-            "warning_threshold": 5.0,
+            "warning_threshold": warn_thresh,
+            "critical_threshold": crit_thresh,
             "error": "OPENROUTER_API_KEY not configured — running in paper mode",
         }
         return result
@@ -1754,8 +1753,9 @@ def get_credit_status():
             "balance_usd": balance_usd,
             "used_usd": round(used_usd, 4),
             "limit_usd": limit_usd,
-            "warning": balance_usd is not None and balance_usd < 5.0,
-            "warning_threshold": 5.0,
+            "warning": balance_usd is not None and balance_usd < warn_thresh,
+            "warning_threshold": warn_thresh,
+            "critical_threshold": crit_thresh,
             "error": None,
         }
     except Exception as exc:
@@ -1767,7 +1767,8 @@ def get_credit_status():
             "used_usd": None,
             "limit_usd": None,
             "warning": False,
-            "warning_threshold": 5.0,
+            "warning_threshold": warn_thresh,
+            "critical_threshold": crit_thresh,
             "error": str(exc),
         }
 

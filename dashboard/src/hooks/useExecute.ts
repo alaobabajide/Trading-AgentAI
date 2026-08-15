@@ -27,7 +27,6 @@ export interface ExecuteResult {
 export function useExecute() {
   const [executing, setExecuting] = useState(false);
   const [error, setError]         = useState<string | null>(null);
-  const [lastResult, setResult]   = useState<ExecuteResult | null>(null);
   // Ref updated synchronously so callers read the real error immediately
   // after awaiting execute(), without waiting for a React re-render.
   const lastErrorRef = useRef<string | null>(null);
@@ -46,9 +45,7 @@ export function useExecute() {
       if (!resp.ok) {
         throw new Error((data as { detail?: string }).detail ?? `HTTP ${resp.status}`);
       }
-      const result = data as ExecuteResult;
-      setResult(result);
-      return result;
+      return data as ExecuteResult;
     } catch (e) {
       const msg = (e as Error).message;
       lastErrorRef.current = msg;
@@ -64,5 +61,5 @@ export function useExecute() {
     lastErrorRef.current = null;
   }, []);
 
-  return { execute, executing, error, lastResult, clearError, lastErrorRef };
+  return { execute, executing, error, clearError, lastErrorRef };
 }

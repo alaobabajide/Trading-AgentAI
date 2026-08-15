@@ -680,14 +680,15 @@ export interface ApiUsageResponse {
 }
 
 export interface CreditStatus {
-  provider:          string;
-  configured:        boolean;
-  balance_usd:       number | null;
-  used_usd:          number | null;
-  limit_usd:         number | null;
-  warning:           boolean;
-  warning_threshold: number;
-  error:             string | null;
+  provider:            string;
+  configured:          boolean;
+  balance_usd:         number | null;
+  used_usd:            number | null;
+  limit_usd:           number | null;
+  warning:             boolean;
+  warning_threshold:   number;
+  critical_threshold:  number;
+  error:               string | null;
 }
 
 export function useCreditStatus() {

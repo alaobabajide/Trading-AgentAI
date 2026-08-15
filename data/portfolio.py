@@ -51,15 +51,10 @@ class PortfolioFetcher:
         alpaca_api_key: str,
         alpaca_secret_key: str,
         alpaca_base_url: str,
-        binance_api_key: str = "",
-        binance_secret_key: str = "",
-        binance_testnet: bool = True,
     ) -> None:
         self._alpaca_key = alpaca_api_key
         self._alpaca_secret = alpaca_secret_key
         self._alpaca_url = alpaca_base_url
-        # binance_* params kept for backward-compat with existing callers but are unused
-        _ = binance_api_key, binance_secret_key, binance_testnet
 
     # ── Alpaca ────────────────────────────────────────────────────────────────
 

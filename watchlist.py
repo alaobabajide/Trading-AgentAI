@@ -2,48 +2,39 @@
 from __future__ import annotations
 
 STOCK_WATCHLIST = [
-    # ── Mega-cap tech / AI (>$1T market cap) ──────────────────────────────────
-    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AVGO", "ORCL",
+    # ── Mega-cap tech / AI ────────────────────────────────────────────────────
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AVGO",
     # ── Growth tech / cloud / SaaS ────────────────────────────────────────────
-    "NFLX", "ADBE", "CRM", "NOW", "SNOW", "SHOP", "UBER", "WDAY",
-    # ── Semiconductors / hardware ──────────────────────────────────────────────
-    "AMD", "MU", "TXN", "QCOM", "INTC", "AMAT", "KLAC", "DELL",
+    "NFLX", "ADBE", "CRM", "NOW", "SNOW", "SHOP", "UBER", "WDAY", "ORCL",
+    # ── Semiconductors (high-beta) ────────────────────────────────────────────
+    "AMD", "MU", "QCOM", "AMAT", "KLAC",
     # ── Cybersecurity / AI infra ──────────────────────────────────────────────
     "PANW", "CRWD", "PLTR", "DDOG", "NET", "ZS", "COIN",
     # ── Financials ────────────────────────────────────────────────────────────
-    "JPM", "V", "MA", "BAC", "GS", "MS", "WFC", "C", "AXP", "BX", "BLK",
-    "SCHW", "MCO", "SPGI", "KKR",
-    # ── Healthcare / pharma / biotech ─────────────────────────────────────────
-    "LLY", "JNJ", "UNH", "ABBV", "MRK", "AMGN", "TMO", "ISRG", "PFE", "MDT",
-    # ── Consumer discretionary ────────────────────────────────────────────────
-    "WMT", "COST", "HD", "LOW", "MCD", "SBUX", "NKE", "TGT",
-    # ── Consumer staples ──────────────────────────────────────────────────────
-    "PG", "KO", "PEP", "PM", "CVS",
-    # ── Energy ────────────────────────────────────────────────────────────────
-    "XOM", "CVX", "OXY", "SLB", "COP",
-    # ── Industrials / aerospace / defence ─────────────────────────────────────
-    "GE", "CAT", "DE", "HON", "RTX", "LMT", "GD", "BA", "UPS", "FDX", "ETN",
-    # ── Telecom / media ───────────────────────────────────────────────────────
-    "VZ", "T", "CMCSA",
-    # ── REITs / real estate ───────────────────────────────────────────────────
-    "PLD", "AMT", "DLR", "WELL",
-    # ── Diversified / conglomerate ────────────────────────────────────────────
-    "IBM", "MMM", "LIN", "NEE", "ADP", "F", "GM",
+    "JPM", "V", "MA", "GS", "BX", "BLK", "SCHW", "KKR",
+    # ── Healthcare / biotech ─────────────────────────────────────────────────
+    "LLY", "UNH", "AMGN", "TMO", "ISRG",
+    # ── Consumer ─────────────────────────────────────────────────────────────
+    "COST", "HD", "NKE", "SBUX",
+    # ── Energy ───────────────────────────────────────────────────────────────
+    "XOM", "OXY",
+    # ── Industrials ──────────────────────────────────────────────────────────
+    "GE", "CAT",
 ]
 
 ETF_WATCHLIST = [
-    # ── Broad US market ────────────────────────────────────────────────────────
-    "SPY", "VOO", "IVV", "QQQ", "VTI", "IWM", "DIA", "MDY",
+    # ── Broad US market ───────────────────────────────────────────────────────
+    "SPY", "QQQ", "VTI", "IWM",
     # ── International ─────────────────────────────────────────────────────────
-    "VEA", "EEM", "IEMG", "VWO", "EWJ", "EWZ", "FXI",
-    # ── Fixed income ──────────────────────────────────────────────────────────
-    "BND", "AGG", "TLT", "LQD", "HYG", "JNK", "TIP", "SHY",
+    "EEM", "EWJ", "FXI", "EWZ",
+    # ── Fixed income (signal-generating) ─────────────────────────────────────
+    "TLT", "HYG", "JNK",
     # ── Commodities ───────────────────────────────────────────────────────────
-    "GLD", "IAU", "SLV", "USO", "DBC",
-    # ── All 11 SPDR sector ETFs ────────────────────────────────────────────────
+    "GLD", "SLV", "USO",
+    # ── All 11 SPDR sector ETFs ───────────────────────────────────────────────
     "XLC", "XLY", "XLP", "XLE", "XLF", "XLV", "XLI", "XLB", "XLRE", "XLK", "XLU",
-    # ── Thematic / specialty ───────────────────────────────────────────────────
-    "ARKK", "SOXX", "SMH", "IBB", "CIBR", "VNQ", "SCHD", "KWEB", "ICLN", "BOTZ", "GDX",
+    # ── Thematic / high-volatility ────────────────────────────────────────────
+    "ARKK", "SOXX", "SMH", "IBB", "KWEB",
 ]
 
 # Alpaca crypto format (BTCUSD, not BTCUSDT) — no Binance geo-block
@@ -55,7 +46,7 @@ WARM_MIN_VOTES = 11   # 11–16 weighted votes aligned → WARM
 AGENT_COUNT    = 27   # total agents in the debate pool
 
 # Orchestrator cycle interval (minutes)
-CYCLE_INTERVAL_MINUTES = 15
+CYCLE_INTERVAL_MINUTES = 30
 
 LLM_PROVIDER_NAME = "OpenRouter"
 LLM_PROVIDER_URL  = "openrouter.ai/settings/billing"

@@ -6,15 +6,14 @@ import { SignalBadge } from "./SignalBadge";
 interface Props {
   signal:    Signal;
   secsLeft:  number;
+  totalSecs: number;
   onVeto:    () => void;
   onConfirm: () => void;
 }
 
-export function WarmSignalBanner({ signal, secsLeft, onVeto, onConfirm }: Props) {
+export function WarmSignalBanner({ signal, secsLeft, totalSecs, onVeto, onConfirm }: Props) {
   const isHot = signal.tier === "HOT";
-  const progress = isHot
-    ? (secsLeft / 5) * 100
-    : (secsLeft / 10) * 100;
+  const progress = (secsLeft / totalSecs) * 100;
 
   return (
     <div className={clsx(
@@ -62,11 +61,7 @@ export function WarmSignalBanner({ signal, secsLeft, onVeto, onConfirm }: Props)
               "text-[11px] font-mono mt-1",
               isHot ? "text-emerald-400" : "text-amber-400",
             )}>
-              {secsLeft > 0
-                ? isHot
-                  ? `Auto-executing in ${secsLeft}s — click to veto`
-                  : `Auto-executing in ${secsLeft}s — click to veto`
-                : "Executing…"}
+              {secsLeft > 0 ? `Auto-executing in ${secsLeft}s — click to veto` : "Executing…"}
             </p>
           </div>
 

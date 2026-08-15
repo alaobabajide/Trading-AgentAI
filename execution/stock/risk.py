@@ -49,9 +49,9 @@ class RiskControls:
             self._triggered = True
         return self._triggered
 
-    def reset_circuit_breaker(self) -> None:
-        self._triggered = False
-        log.info("Circuit breaker reset (manual override)")
+    @property
+    def is_triggered(self) -> bool:
+        return self._triggered
 
     def size_position(
         self,

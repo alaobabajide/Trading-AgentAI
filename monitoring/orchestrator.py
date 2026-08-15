@@ -12,6 +12,7 @@ import logging
 import os
 import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
@@ -23,6 +24,7 @@ from data.portfolio import PortfolioFetcher, PortfolioState
 from watchlist import STOCK_WATCHLIST, ETF_WATCHLIST, CRYPTO_WATCHLIST, CYCLE_INTERVAL_MINUTES
 from monitoring.metrics import (
     brain_latency_histogram,
+    cash_gauge,
     circuit_breaker_gauge,
     crypto_allocation_gauge,
     daily_pnl_gauge,
@@ -68,7 +70,6 @@ class Orchestrator:
 
         self._portfolio_fetcher = PortfolioFetcher(
             cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,
-            cfg.binance_api_key, cfg.binance_secret_key, cfg.binance_testnet,
         )
 
         # Singleton Alpaca client — reused across all market-hour checks and position checks
@@ -86,9 +87,10 @@ class Orchestrator:
         # Lock guards concurrent writes from ThreadPoolExecutor workers.
         self._pos_thresholds: dict[str, tuple[float, float]] = {}  # symbol → (sl_pct, tp_pct)
         self._pos_thresholds_lock = threading.Lock()
-        # COLD cooldown: symbols that returned HOLD/COLD last cycle are skipped this cycle.
-        # Saves ~80% of LLM calls on quiet market days. Previous set rotates each cycle.
-        self._prev_cold_symbols: set[str] = set()
+        # COLD cooldown: symbols that returned HOLD/COLD are skipped for cold_skip_cycles cycles.
+        # _cold_history is a deque of the last k cold-symbol sets (one per completed cycle).
+        # A symbol in any set in the deque is still within its cooldown window.
+        self._cold_history: deque[set[str]] = deque(maxlen=cfg.cold_skip_cycles)
         self._curr_cold_symbols: set[str] = set()
         self._cold_lock = threading.Lock()
         # Trailing stop: tracks highest observed price per open symbol (ratchets upward)
@@ -115,6 +117,7 @@ class Orchestrator:
     def _refresh_portfolio_metrics(self) -> PortfolioState:
         portfolio = self._portfolio_fetcher.snapshot()
         equity_gauge.set(portfolio.equity)
+        cash_gauge.set(portfolio.cash)
         daily_pnl_gauge.set(portfolio.daily_pnl)
         daily_pnl_pct_gauge.set(portfolio.daily_pnl_pct)
         crypto_allocation_gauge.set(portfolio.crypto_allocation_pct * 100)
@@ -201,11 +204,12 @@ class Orchestrator:
             log.debug("SKIP %s — market closed (signal cached, will execute at open)", symbol)
             return
 
-        # ── Gate 3.5: COLD cooldown — skip symbols quiet last cycle (LLM mode only) ──
+        # ── Gate 3.5: COLD cooldown — skip symbols quiet in recent cycles (LLM mode only) ──
         if not self._paper_mode:
             with self._cold_lock:
-                if symbol in self._prev_cold_symbols:
-                    log.debug("SKIP %s — COLD cooldown (quiet last cycle)", symbol)
+                if any(symbol in past for past in self._cold_history):
+                    log.debug("SKIP %s — COLD cooldown (quiet within last %d cycle(s))",
+                              symbol, self._cfg.cold_skip_cycles)
                     return
 
         # ── Gate 3.6: Loss cooldown — 2 stop-loss hits in 5 days → skip 2 cycles ──
@@ -287,12 +291,12 @@ class Orchestrator:
         exec_sl_pct = float(sig.get("stop_loss_pct",  self._cfg.stop_loss_pct))
         exec_tp_pct = float(sig.get("take_profit_pct", self._cfg.take_profit_pct))
         if "TRENDING_UP" in regime:
-            exec_tp_pct = max(exec_tp_pct, 0.08)       # ride the trend longer
+            exec_tp_pct = max(exec_tp_pct, self._cfg.regime_trending_up_min_tp)
         elif "RANGING" in regime:
-            exec_tp_pct = min(exec_tp_pct, 0.03)       # take profits quickly in choppy market
+            exec_tp_pct = min(exec_tp_pct, self._cfg.regime_ranging_max_tp)
         elif "HIGH_VOLATILITY" in regime:
-            exec_sl_pct = max(exec_sl_pct, 0.03)       # wider stop to survive noise
-            exec_tp_pct = min(exec_tp_pct, 0.05)       # moderate target
+            exec_sl_pct = max(exec_sl_pct, self._cfg.regime_high_vol_min_sl)
+            exec_tp_pct = min(exec_tp_pct, self._cfg.regime_high_vol_max_tp)
 
         # ── Correlation-aware position sizing (Phase 3-A) ─────────────────────
         # If the target correlates > 0.70 with any existing open position,
@@ -499,7 +503,7 @@ class Orchestrator:
     # ── Retrain trigger ───────────────────────────────────────────────────────
 
     def _check_retrain(self, portfolio: PortfolioState) -> None:
-        if portfolio.daily_pnl_pct < -1.0:
+        if portfolio.daily_pnl_pct < -self._cfg.retrain_trigger_loss_pct:
             log.info("Retrain trigger: daily P&L = %.2f%%", portfolio.daily_pnl_pct)
             retrain_counter.inc()
 
@@ -519,7 +523,7 @@ class Orchestrator:
                 return
             data = r.json()
             balance = data.get("balance_usd")
-            if balance is not None and float(balance) < 5.0:
+            if balance is not None and float(balance) < self._cfg.credit_warning_threshold_usd:
                 self._send_credit_alert(float(balance))
         except Exception as exc:
             log.warning("Credit check failed: %s", exc)
@@ -527,7 +531,7 @@ class Orchestrator:
     def _send_credit_alert(self, balance: float) -> None:
         """Send Telegram message about low credits (at most once per hour)."""
         now = time.monotonic()
-        if now - self._last_credit_alert_ts < 3600:
+        if now - self._last_credit_alert_ts < self._cfg.credit_alert_cooldown_secs:
             return
         self._last_credit_alert_ts = now
         cfg = self._cfg
@@ -536,10 +540,11 @@ class Orchestrator:
         if not token or not allowed_ids:
             log.warning("Credit alert: Telegram not configured, cannot send notification")
             return
+        threshold = self._cfg.credit_warning_threshold_usd
         msg = (
             "⚠️ <b>OpenRouter API Credit Alert</b>\n\n"
             f"Remaining balance: <b>${balance:.2f}</b>\n"
-            "Balance is below the <b>$5.00</b> warning threshold.\n\n"
+            f"Balance is below the <b>${threshold:.2f}</b> warning threshold.\n\n"
             "Top up at openrouter.ai/settings/billing to keep live trading running."
         )
         for chat_id in allowed_ids:
@@ -559,18 +564,19 @@ class Orchestrator:
         log.info("=" * 60)
         log.info("=== Cycle start %s ===", datetime.now(timezone.utc).isoformat())
         log.info("=" * 60)
-        # Rotate COLD cooldown sets: prev← curr, curr← fresh
+        # Rotate COLD cooldown: push curr into history, open a fresh set for this cycle.
         with self._cold_lock:
-            self._prev_cold_symbols = self._curr_cold_symbols
+            self._cold_history.appendleft(self._curr_cold_symbols)
             self._curr_cold_symbols = set()
-        if self._prev_cold_symbols:
-            log.info("COLD cooldown: skipping %d quiet symbol(s) this cycle", len(self._prev_cold_symbols))
+            cooled_count = len(set().union(*self._cold_history))
+        if cooled_count:
+            log.info("COLD cooldown: %d symbol(s) on cooldown (window = %d cycle(s))",
+                     cooled_count, self._cfg.cold_skip_cycles)
 
         try:
             portfolio = self._refresh_portfolio_metrics()
         except Exception as exc:
             log.error("Portfolio refresh failed: %s — using defaults", exc)
-            from datetime import timezone as tz
             portfolio = PortfolioState(
                 timestamp=datetime.now(timezone.utc),
                 equity=100_000.0, cash=100_000.0,
@@ -586,7 +592,7 @@ class Orchestrator:
 
         # Parallel symbol processing:
         # Paper mode (rule-based, no LLM): 16 workers — zero API calls, pure computation.
-        # Live mode (LLM debate): 8 workers — Haiku is fast + I/O-bound, parallelism pays.
+        # Live mode (LLM debate): 8 workers — I/O-bound LLM calls; parallelism pays.
         max_workers = 16 if self._paper_mode else 8
         log.info("Processing %d symbols  workers=%d  mode=%s",
                  len(all_symbols), max_workers, "paper" if self._paper_mode else "live")

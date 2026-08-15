@@ -290,10 +290,11 @@ export function SignalCard({ signal }: { signal: Signal }) {
   const tierCfg = TIER_CONFIG[tier];
 
   // Vote tally — use real data if present, else derive from confidence for mock signals
+  const _pool = ANALYSTS.length;
   const tally: VoteTally = signal.vote_tally ?? {
-    bullish: signal.action === "BUY"  ? Math.round(signal.confidence * 7) : 1,
-    bearish: signal.action === "SELL" ? Math.round(signal.confidence * 7) : 1,
-    neutral: 7 - Math.round(signal.confidence * 7) - 1,
+    bullish: signal.action === "BUY"  ? Math.round(signal.confidence * _pool) : 1,
+    bearish: signal.action === "SELL" ? Math.round(signal.confidence * _pool) : 1,
+    neutral: Math.max(0, _pool - Math.round(signal.confidence * _pool) - 1),
   };
   const votesForAction = signal.votes_for_action ?? (
     signal.action === "BUY"  ? tally.bullish :
@@ -304,7 +305,7 @@ export function SignalCard({ signal }: { signal: Signal }) {
   const panelB          = signal.panel_b_votes;
   const panelsConflict  = signal.panels_conflict ?? false;
   const conflictNote    = signal.conflict_note ?? "";
-  const totalAgents     = (panelA && panelB) ? 27 : ANALYSTS.length;
+  const totalAgents     = (panelA && panelB) ? ANALYSTS.length + INVESTORS.length : ANALYSTS.length;
 
   return (
     <div className={clsx("glass rounded-2xl overflow-hidden border", tierCfg.border)}>
@@ -416,7 +417,7 @@ export function SignalCard({ signal }: { signal: Signal }) {
             >
               <h4 className="text-[10px] text-slate-500 uppercase tracking-widest group-hover:text-slate-400 transition-colors">
                 Analyst Panel
-                <span className="ml-2 text-slate-700 normal-case tracking-normal font-normal">15 agents</span>
+                <span className="ml-2 text-slate-700 normal-case tracking-normal font-normal">{ANALYSTS.length} agents</span>
               </h4>
               <div className="flex items-center gap-2">
                 {panelA && (
@@ -446,7 +447,7 @@ export function SignalCard({ signal }: { signal: Signal }) {
             >
               <h4 className="text-[10px] text-slate-500 uppercase tracking-widest group-hover:text-slate-400 transition-colors">
                 Investor Panel
-                <span className="ml-2 text-slate-700 normal-case tracking-normal font-normal">12 personas</span>
+                <span className="ml-2 text-slate-700 normal-case tracking-normal font-normal">{INVESTORS.length} personas</span>
               </h4>
               <div className="flex items-center gap-2">
                 {panelB && (

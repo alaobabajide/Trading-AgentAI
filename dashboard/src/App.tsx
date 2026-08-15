@@ -13,7 +13,7 @@ import { IndicesPage } from "./pages/IndicesPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { HITLProvider, useHITLContext } from "./context/HITLContext";
 import { SetupBanner } from "./components/SetupBanner";
-import { MODE_CONFIG } from "./lib/hitl";
+import { MODE_CONFIG, HOT_VETO_SECONDS } from "./lib/hitl";
 import { useCreditStatus } from "./lib/api";
 import { AlertTriangle, X } from "lucide-react";
 
@@ -26,8 +26,9 @@ function CreditWarningBanner() {
 
   if (!status || !status.warning || dismissed) return null;
 
-  const balance = status.balance_usd ?? 0;
-  const urgent  = balance < 2.0;
+  const balance    = status.balance_usd ?? 0;
+  const critThresh = status.critical_threshold ?? 2;
+  const urgent     = balance < critThresh;
 
   return (
     <div className={clsx(
@@ -220,6 +221,7 @@ function AppInner() {
         <WarmSignalBanner
           signal={hitl.pendingSignal}
           secsLeft={hitl.vetoSecsLeft}
+          totalSecs={hitl.pendingSignal.tier === "HOT" ? HOT_VETO_SECONDS : hitl.profile.warmVetoSeconds}
           onVeto={hitl.vetoSignal}
           onConfirm={async () => {
             await hitl.executeSignal(hitl.pendingSignal!);

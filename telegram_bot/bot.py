@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import html as _html
 import logging
+import re
 from datetime import datetime, timezone
 
 import httpx
@@ -279,7 +280,6 @@ async def cmd_signal(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as html_exc:
         log.warning("HTML reply failed (%s) — sending plain-text fallback", html_exc)
         # Strip all tags for the fallback so Telegram accepts it unconditionally
-        import re
         plain = re.sub(r"<[^>]+>", "", text)
         try:
             await msg.edit_text(plain[:4000], reply_markup=keyboard)
@@ -495,8 +495,14 @@ def _sync_exec_signal(symbol: str, asset_class: str, action: str) -> str:
         else:
             from execution.crypto.engine import CryptoExecutionEngine
             engine = CryptoExecutionEngine(
-                cfg.binance_api_key, cfg.binance_secret_key, cfg.binance_testnet,
-                cfg.max_position_pct, cfg.max_crypto_allocation_pct,
+                alpaca_api_key=cfg.alpaca_api_key,
+                alpaca_secret_key=cfg.alpaca_secret_key,
+                alpaca_base_url=cfg.alpaca_base_url,
+                max_position_pct=cfg.max_position_pct,
+                max_crypto_allocation_pct=cfg.max_crypto_allocation_pct,
+                cash_buffer=cfg.crypto_cash_buffer,
+                min_notional_usd=cfg.crypto_min_notional_usd,
+                fallback_equity_usd=cfg.crypto_fallback_equity_usd,
             )
             result = engine.execute(signal)
 
@@ -572,8 +578,14 @@ def _sync_exec_direct(
             from execution.crypto.engine import CryptoExecutionEngine
 
             engine = CryptoExecutionEngine(
-                cfg.binance_api_key, cfg.binance_secret_key, cfg.binance_testnet,
-                cfg.max_position_pct, cfg.max_crypto_allocation_pct,
+                alpaca_api_key=cfg.alpaca_api_key,
+                alpaca_secret_key=cfg.alpaca_secret_key,
+                alpaca_base_url=cfg.alpaca_base_url,
+                max_position_pct=cfg.max_position_pct,
+                max_crypto_allocation_pct=cfg.max_crypto_allocation_pct,
+                cash_buffer=cfg.crypto_cash_buffer,
+                min_notional_usd=cfg.crypto_min_notional_usd,
+                fallback_equity_usd=cfg.crypto_fallback_equity_usd,
             )
             result = engine.execute(signal, portfolio_equity=equity)
 

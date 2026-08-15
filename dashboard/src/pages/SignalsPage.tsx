@@ -369,10 +369,13 @@ const INTERVAL_OPTIONS = [
   { label: "Off", ms: 0 },
 ] as const;
 
+const DEFAULT_INTERVAL_IDX = 1;   // index into INTERVAL_OPTIONS (30s)
+const POLL_DISABLED_MS      = Number.MAX_SAFE_INTEGER;
+
 export function SignalsPage() {
-  const [intervalMs, setIntervalMs] = useState(30_000);
+  const [intervalMs, setIntervalMs] = useState<number>(INTERVAL_OPTIONS[DEFAULT_INTERVAL_IDX].ms);
   const { signals, apiState, refresh, refreshing, clearAll, clearing } = useSignals(
-    intervalMs > 0 ? intervalMs : 999_999_999,
+    intervalMs > 0 ? intervalMs : POLL_DISABLED_MS,
   );
 
   const [search, setSearch]   = useState("");

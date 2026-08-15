@@ -42,17 +42,19 @@ class CryptoExecutionEngine:
         alpaca_base_url: str = "https://paper-api.alpaca.markets",
         max_position_pct: float = 0.05,
         max_crypto_allocation_pct: float = 0.30,
-        # Legacy Binance kwargs accepted but ignored — kept for callers that pass them
-        binance_api_key: str = "",
-        binance_secret_key: str = "",
-        testnet: bool = True,
+        cash_buffer: float = 0.99,
+        min_notional_usd: float = 1.0,
+        fallback_equity_usd: float = 100_000.0,
     ) -> None:
         from alpaca.trading.client import TradingClient
         is_paper = "paper" in alpaca_base_url.lower()
-        self._trading      = TradingClient(alpaca_api_key, alpaca_secret_key, paper=is_paper)
-        self._max_pos      = max_position_pct
-        self._max_crypto   = max_crypto_allocation_pct
-        self._is_paper     = is_paper
+        self._trading           = TradingClient(alpaca_api_key, alpaca_secret_key, paper=is_paper)
+        self._max_pos           = max_position_pct
+        self._max_crypto        = max_crypto_allocation_pct
+        self._cash_buffer       = cash_buffer
+        self._min_notional      = min_notional_usd
+        self._fallback_equity   = fallback_equity_usd
+        self._is_paper          = is_paper
 
     def _get_account(self):
         return self._trading.get_account()
@@ -114,7 +116,7 @@ class CryptoExecutionEngine:
     def execute(
         self,
         signal: TradingSignal,
-        portfolio_equity: float = 100_000.0,
+        portfolio_equity: float | None = None,
     ) -> CryptoOrderResult | None:
         from alpaca.trading.requests import (
             MarketOrderRequest, TakeProfitRequest, StopLossRequest,
@@ -128,7 +130,7 @@ class CryptoExecutionEngine:
         try:
             acct   = self._get_account()
             cash   = float(acct.cash or 0)
-            equity = float(acct.equity or portfolio_equity)
+            equity = float(acct.equity or portfolio_equity or self._fallback_equity)
         except Exception as exc:
             log.error("Could not fetch Alpaca account for crypto execution: %s", exc)
             return None
@@ -166,10 +168,10 @@ class CryptoExecutionEngine:
         notional = min(
             equity * signal.suggested_position_pct,
             equity * self._max_pos,
-            cash * 0.99,
+            cash * self._cash_buffer,
         )
-        if notional < 1.0:
-            log.warning("Notional too small for %s (%.2f) — skipping BUY", signal.symbol, notional)
+        if notional < self._min_notional:
+            log.warning("Notional too small for %s (%.2f < %.2f min) — skipping BUY", signal.symbol, notional, self._min_notional)
             return None
 
         # Fetch current price to compute qty and bracket levels

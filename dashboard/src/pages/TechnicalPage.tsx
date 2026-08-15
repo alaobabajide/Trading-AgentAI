@@ -15,6 +15,9 @@ type Timeframe = "1W" | "1M" | "3M";
 
 const TF_DAYS: Record<Timeframe, number> = { "1W": 7, "1M": 30, "3M": 90 };
 
+const RSI_OVERBOUGHT = 70;
+const RSI_OVERSOLD   = 30;
+
 interface BarData {
   time: string;
   open: number;
@@ -123,7 +126,7 @@ export function TechnicalPage() {
   const metrics = latest
     ? [
         { label: "RSI 14",  value: latest.rsi?.toFixed(1) ?? "—",
-          color: (latest.rsi ?? 50) >= 70 ? "text-red-400" : (latest.rsi ?? 50) <= 30 ? "text-emerald-400" : "text-slate-200" },
+          color: (latest.rsi ?? 50) >= RSI_OVERBOUGHT ? "text-red-400" : (latest.rsi ?? 50) <= RSI_OVERSOLD ? "text-emerald-400" : "text-slate-200" },
         { label: "MACD",    value: latest.macd?.toFixed(3) ?? "—",
           color: (latest.macd ?? 0) >= 0 ? "text-emerald-400" : "text-red-400" },
         { label: "Signal",  value: latest.macd_signal?.toFixed(3) ?? "—", color: "text-orange-400" },

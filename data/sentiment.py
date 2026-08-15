@@ -21,7 +21,6 @@ log = logging.getLogger(__name__)
 RSS_FEEDS: dict[str, list[str]] = {
     "global": [
         "https://feeds.finance.yahoo.com/rss/2.0/headline?s={symbol}&region=US&lang=en-US",
-        "https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best",
     ],
 }
 

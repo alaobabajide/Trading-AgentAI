@@ -12,11 +12,8 @@ load_dotenv()
 
 
 class Settings(BaseSettings):
-    # OpenRouter — replaces Anthropic for LLM calls; 94% cheaper at same capability
+    # OpenRouter — primary LLM gateway
     openrouter_api_key: str = Field("", env="OPENROUTER_API_KEY")
-
-    # Anthropic — kept for backward compat but no longer used by the LLM pipeline
-    anthropic_api_key: str = Field("", env="ANTHROPIC_API_KEY")
 
     # Alpaca
     alpaca_api_key: str = Field("", env="ALPACA_API_KEY")
@@ -83,6 +80,26 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field("", env="TELEGRAM_BOT_TOKEN")
     telegram_allowed_ids: str = Field("", env="TELEGRAM_ALLOWED_IDS")  # comma-separated chat IDs
     max_telegram_order_usd: float = Field(1000.0, env="MAX_TELEGRAM_ORDER_USD")
+
+    # ── Regime-adaptive risk overrides ───────────────────────────────────────────
+    regime_trending_up_min_tp: float = Field(0.08, env="REGIME_TRENDING_UP_MIN_TP")
+    regime_ranging_max_tp: float = Field(0.03, env="REGIME_RANGING_MAX_TP")
+    regime_high_vol_min_sl: float = Field(0.03, env="REGIME_HIGH_VOL_MIN_SL")
+    regime_high_vol_max_tp: float = Field(0.05, env="REGIME_HIGH_VOL_MAX_TP")
+
+    # ── Credit / retrain triggers ─────────────────────────────────────────────
+    retrain_trigger_loss_pct: float = Field(1.0, env="RETRAIN_TRIGGER_LOSS_PCT")
+    credit_warning_threshold_usd: float = Field(5.0, env="CREDIT_WARNING_THRESHOLD_USD")
+    credit_critical_threshold_usd: float = Field(2.0, env="CREDIT_CRITICAL_THRESHOLD_USD")
+    credit_alert_cooldown_secs: int = Field(3600, env="CREDIT_ALERT_COOLDOWN_SECS")
+
+    # ── COLD cooldown ─────────────────────────────────────────────────────────
+    cold_skip_cycles: int = Field(2, env="COLD_SKIP_CYCLES")  # cycles a COLD symbol sits out
+
+    # ── Crypto execution ──────────────────────────────────────────────────────
+    crypto_cash_buffer: float = Field(0.99, env="CRYPTO_CASH_BUFFER")
+    crypto_min_notional_usd: float = Field(1.0, env="CRYPTO_MIN_NOTIONAL_USD")
+    crypto_fallback_equity_usd: float = Field(100_000.0, env="CRYPTO_FALLBACK_EQUITY_USD")
 
     # Monitoring
     prometheus_port: int = Field(9090, env="PROMETHEUS_PORT")

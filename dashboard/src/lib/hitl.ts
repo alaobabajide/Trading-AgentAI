@@ -77,6 +77,9 @@ export const MODE_CONFIG: Record<HITLMode, { label: string; description: string;
   manual:   { label: "Manual",   color: "text-slate-400",   description: "Full control — agents advise only, you execute" },
 };
 
+/** Fixed veto window for HOT signals (seconds). WARM window comes from UserProfile.warmVetoSeconds. */
+export const HOT_VETO_SECONDS = 5;
+
 /** Storage key for persisting profile to localStorage */
 export const PROFILE_STORAGE_KEY = "tradeagent:profile";
 

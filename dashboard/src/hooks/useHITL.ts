@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   HITLMode, UserProfile, SignalTier,
+  HOT_VETO_SECONDS,
   loadProfile, saveProfile,
 } from "../lib/hitl";
 import type { Signal } from "../lib/types";
@@ -122,7 +123,7 @@ export function useHITL(): HITLState & HITLActions {
     }
     if (mode === "assisted") {
       // Assisted: all non-HOLD signals go through the veto window
-      const vetoSecs = tier === "HOT" ? 5 : warmVetoSeconds;
+      const vetoSecs = tier === "HOT" ? HOT_VETO_SECONDS : warmVetoSeconds;
       startVeto(signal, vetoSecs);
       return "veto_window";
     }
