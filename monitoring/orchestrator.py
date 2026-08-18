@@ -40,8 +40,32 @@ from monitoring.metrics import (
 
 log = logging.getLogger(__name__)
 
-# ── Peak-equity persistence (survives process restarts; Railway persistent vol at /data) ──
-_PEAK_EQUITY_FILE = os.environ.get("PEAK_EQUITY_FILE", "/data/ta_peak_equity.json")
+# ── Persistent data directory ─────────────────────────────────────────────────
+# Mirrors brain/api.py: auto-detects the best writable path without requiring a
+# manually mounted Railway volume. /data (volume) → /app/data → /tmp.
+def _find_data_dir() -> str:
+    candidates = [
+        os.environ.get("DATA_DIR", ""),
+        "/data",
+        os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")),
+        "/tmp",
+    ]
+    for _p in (p for p in candidates if p):
+        try:
+            os.makedirs(_p, exist_ok=True)
+            _probe = os.path.join(_p, ".write_probe")
+            with open(_probe, "w") as _f:
+                _f.write("ok")
+            os.remove(_probe)
+            return _p
+        except Exception:
+            continue
+    return "/tmp"
+
+_DATA_DIR = _find_data_dir()
+
+# ── Peak-equity persistence ────────────────────────────────────────────────────
+_PEAK_EQUITY_FILE = os.environ.get("PEAK_EQUITY_FILE", os.path.join(_DATA_DIR, "ta_peak_equity.json"))
 
 
 def _load_peak_equity() -> float:

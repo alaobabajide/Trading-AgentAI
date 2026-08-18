@@ -129,10 +129,35 @@ _CONFIG_INT_BOUNDS: dict[str, tuple[int, int]] = {
     "loss_cooldown_skip_cycles": (1,   20),
 }
 
+# ── Persistent data directory ─────────────────────────────────────────────────
+# Auto-detects the best writable path at import time — no manual Railway volume
+# setup required. Priority: DATA_DIR env var → /data (Railway volume, if mounted)
+# → /app/data (app dir, survives process restarts within same deployment) → /tmp.
+def _find_data_dir() -> str:
+    candidates = [
+        os.environ.get("DATA_DIR", ""),
+        "/data",
+        os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")),
+        "/tmp",
+    ]
+    for _p in (p for p in candidates if p):
+        try:
+            os.makedirs(_p, exist_ok=True)
+            _probe = os.path.join(_p, ".write_probe")
+            with open(_probe, "w") as _f:
+                _f.write("ok")
+            os.remove(_probe)
+            return _p
+        except Exception:
+            continue
+    return "/tmp"
+
+_DATA_DIR = _find_data_dir()
+
 # ── Dynamic risk config (frontend-editable, persisted to file) ────────────────
 # Overrides env-var defaults without a redeploy.
 # Shape: {stop_loss_pct, take_profit_pct, max_position_pct, circuit_breaker_drawdown}
-_CONFIG_FILE = os.environ.get("DYNAMIC_CONFIG_FILE", "/data/ta_dynamic_config.json")
+_CONFIG_FILE = os.environ.get("DYNAMIC_CONFIG_FILE", os.path.join(_DATA_DIR, "ta_dynamic_config.json"))
 _dynamic_config: dict = {}
 
 
@@ -333,23 +358,15 @@ async def lifespan(app: FastAPI):
     import sys
     log.info("Brain API starting up — Python %s  cwd=%s", sys.version.split()[0], os.getcwd())
 
-    # Validate /data persistence — warn loudly if the directory is not writable
-    # (Railway persistent volume must be mounted at /data for config and peak_equity to survive redeploys)
-    _data_dir = os.path.dirname(_CONFIG_FILE) or "/data"
-    try:
-        os.makedirs(_data_dir, exist_ok=True)
-        _probe = os.path.join(_data_dir, ".write_probe")
-        with open(_probe, "w") as _f:
-            _f.write("ok")
-        os.remove(_probe)
-        log.info("Persistence check OK — %s is writable", _data_dir)
-    except Exception as _pe:
-        log.warning(
-            "PERSISTENCE WARNING: %s is not writable (%s). "
-            "Config changes and circuit-breaker state will be LOST on redeploy. "
-            "Mount a Railway persistent volume at /data or set DYNAMIC_CONFIG_FILE to a writable path.",
-            _data_dir, _pe,
-        )
+    # _DATA_DIR was resolved at import time by _find_data_dir() — log the result so it's
+    # visible in Railway logs immediately and the user knows what durability level they have.
+    _durability = (
+        "Railway persistent volume — survives redeploys" if _DATA_DIR == "/data"
+        else "app directory — survives process restarts, not redeploys" if "app" in _DATA_DIR
+        else "ephemeral — data lost on any restart"
+    )
+    log.info("Data directory: %s (%s)", _DATA_DIR, _durability)
+    log.info("Config file:    %s", _CONFIG_FILE)
 
     # Load dynamic config from disk at startup (picks up any pre-existing overrides)
     global _dynamic_config
