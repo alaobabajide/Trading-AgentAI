@@ -93,7 +93,11 @@ class RiskControls:
         atr_stop_pct = max(atr_stop_floor, min(atr_stop_cap, atr_stop_pct))
         stop_distance = current_price * atr_stop_pct
         stop_price = max(round(current_price - stop_distance, 2), 0.01)  # Alpaca requires whole cents
-        take_profit_price = round(current_price + current_price * take_profit_pct, 2)
+        # Ensure take-profit is at least 2× the actual stop distance (≥2.0R).
+        # Without this, high-volatility names with stop capped at 4% only achieve 1.25R at
+        # the fixed 5% TP, which is below the minimum required to be profitable after spread.
+        tp_distance = max(current_price * take_profit_pct, stop_distance * 2.0)
+        take_profit_price = round(current_price + tp_distance, 2)
 
         # Notional cap
         max_notional = self.equity * min(signal_position_pct, self.max_position_pct)

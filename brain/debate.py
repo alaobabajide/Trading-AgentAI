@@ -704,10 +704,6 @@ def _paper_options_flow(indicators: dict) -> str:
         notes.append(f"52W position {pct_range:.0f}% of annual range")
 
     direction = "BULLISH" if b >= 2 else "BEARISH" if s >= 2 else "NEUTRAL"
-    if b == 1 and s == 0:
-        direction = "BULLISH"
-    elif s == 1 and b == 0:
-        direction = "BEARISH"
 
     return (
         f"DIRECTION: {direction}\n"
@@ -1854,6 +1850,17 @@ def _compute_indicators(snapshot: MarketSnapshot) -> dict[str, Any]:
     volumes = pd.Series([float(b.volume) for b in snapshot.bars], dtype=float)
     price   = float(closes.iloc[-1])
 
+    # Inject live intraday price — daily bars only update after 4pm ET.
+    # Without this every 30-min cycle during the trading day evaluates yesterday's close,
+    # generating stale signals even when the stock has already moved significantly.
+    _lq = getattr(snapshot, "latest_quote", None)
+    _lq_mid = float(getattr(_lq, "mid", 0) or 0) if _lq is not None else 0.0
+    if _lq_mid > 0:
+        closes.iloc[-1] = _lq_mid
+        highs.iloc[-1]  = max(float(highs.iloc[-1]), _lq_mid)
+        lows.iloc[-1]   = min(float(lows.iloc[-1]),  _lq_mid)
+        price = _lq_mid
+
     # ── Momentum ──────────────────────────────────────────────────────────────
     rsi      = ta.momentum.RSIIndicator(closes).rsi()
     macd_ind = ta.trend.MACD(closes)
@@ -2456,9 +2463,9 @@ class DebateOrchestrator:
         _conf = float(parsed.get("confidence", 0.0))
         _base_pos_pct = float(parsed.get("suggested_position_pct", 0.0))
         if _base_pos_pct > 0 and _conf > 0:
-            _scale = (_conf - 0.60) / (0.85 - 0.60)         # 0.0 at conf=0.60, 1.0 at conf=0.85
+            _scale = (_conf - 0.40) / (0.85 - 0.40)         # 0.0 at conf=0.40, 1.0 at conf=0.85
             _scale = max(0.0, min(1.0, _scale))               # clamp to [0, 1]
-            _size_factor = 0.60 + _scale * 0.40              # maps to [0.60, 1.00]
+            _size_factor = 0.40 + _scale * 0.60              # maps to [0.40, 1.00] (was 0.60–1.00)
             _base_pos_pct = _base_pos_pct * _size_factor
             log.debug("Confidence sizing: conf=%.2f scale=%.2f pos_pct=%.3f",
                       _conf, _size_factor, _base_pos_pct)

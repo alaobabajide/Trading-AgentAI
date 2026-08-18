@@ -8,6 +8,7 @@ Runs the main event loop:
 """
 from __future__ import annotations
 
+import json as _json
 import logging
 import os
 import threading
@@ -38,6 +39,33 @@ from monitoring.metrics import (
 )
 
 log = logging.getLogger(__name__)
+
+# ── Peak-equity persistence (survives process restarts; Railway persistent vol at /data) ──
+_PEAK_EQUITY_FILE = os.environ.get("PEAK_EQUITY_FILE", "/data/ta_peak_equity.json")
+
+
+def _load_peak_equity() -> float:
+    try:
+        with open(_PEAK_EQUITY_FILE) as _f:
+            val = float(_json.load(_f).get("peak_equity", 0.0))
+        log.info("Loaded persisted peak equity: $%.2f from %s", val, _PEAK_EQUITY_FILE)
+        return max(val, 0.0)
+    except FileNotFoundError:
+        return 0.0
+    except Exception as exc:
+        log.warning("Could not load peak equity: %s — starting at 0", exc)
+        return 0.0
+
+
+def _save_peak_equity(value: float) -> None:
+    try:
+        _dir = os.path.dirname(_PEAK_EQUITY_FILE)
+        if _dir:
+            os.makedirs(_dir, exist_ok=True)
+        with open(_PEAK_EQUITY_FILE, "w") as _f:
+            _json.dump({"peak_equity": value}, _f)
+    except Exception as exc:
+        log.debug("Could not persist peak equity: %s", exc)
 
 
 def _wait_for_brain(url: str, timeout_secs: int = 60) -> bool:
@@ -82,7 +110,7 @@ class Orchestrator:
             except Exception as exc:
                 log.warning("Could not initialise Alpaca client: %s", exc)
 
-        self._peak_equity: float = 0.0
+        self._peak_equity: float = _load_peak_equity()
         # Per-symbol thresholds stored from last signal (keyed by symbol)
         # Lock guards concurrent writes from ThreadPoolExecutor workers.
         self._pos_thresholds: dict[str, tuple[float, float]] = {}  # symbol → (sl_pct, tp_pct)
@@ -124,6 +152,7 @@ class Orchestrator:
 
         if portfolio.equity > self._peak_equity:
             self._peak_equity = portfolio.equity
+            _save_peak_equity(self._peak_equity)
         drawdown = (
             (self._peak_equity - portfolio.equity) / self._peak_equity * 100
             if self._peak_equity > 0 else 0.0
@@ -317,7 +346,14 @@ class Orchestrator:
                         corr = close_df.corr()
                         peer_corrs = corr[symbol].drop(symbol, errors="ignore").abs()
                         max_corr = float(peer_corrs.max()) if not peer_corrs.empty else 0.0
-                        if max_corr > self._correlation_threshold:
+                        if max_corr > 0.85:
+                            log.info(
+                                "Correlation block: %s max_corr=%.2f > 0.85 → BUY skipped"
+                                " (too correlated with open positions)",
+                                symbol, max_corr,
+                            )
+                            return
+                        elif max_corr > self._correlation_threshold:
                             exec_pos_pct *= 0.5
                             log.info(
                                 "Correlation gate: %s max_corr=%.2f > threshold=%.2f → position halved to %.1f%%",
@@ -432,37 +468,60 @@ class Orchestrator:
                 reason = f"STOP LOSS (down {plpc*100:.2f}% <= -{sl_pct*100:.1f}%)"
 
             if reason:
-                log.info("Closing %s — %s", symbol, reason)
+                # Guard: skip manual close when Alpaca bracket child orders are still active.
+                # Active stop/limit child orders already handle exit via OCO; a duplicate
+                # close_position() call creates conflicting market orders and may cause
+                # a rejected or partial fill.
+                _has_child_orders = False
                 try:
-                    order = self._alpaca_client.close_position(symbol)
-                    order_counter.labels(
-                        symbol=symbol, action="SELL", exchange="alpaca", status="submitted",
-                    ).inc()
-                    log.info("  ✓ Position closed: %s id=%s", symbol, order.id)
-                    with self._pos_thresholds_lock:
-                        self._pos_thresholds.pop(symbol, None)
-                    self._trailing_peaks.pop(symbol, None)
-                    # Record stop-loss hit for loss-cooldown gate (Phase 3-C)
-                    if "STOP LOSS" in reason:
-                        now = time.monotonic()
-                        with self._loss_lock:
-                            history = self._loss_history.get(symbol, [])
-                            history.append(now)
-                            window_secs = self._loss_cooldown_window_days * 86400
-                            history = [t for t in history if now - t < window_secs]
-                            self._loss_history[symbol] = history
-                            if len(history) >= self._loss_cooldown_hits:
-                                cooldown_secs = self._loss_cooldown_skip_cycles * CYCLE_INTERVAL_MINUTES * 60
-                                self._loss_cooldown_end[symbol] = now + cooldown_secs
-                                log.info(
-                                    "Loss cooldown activated: %s — %d stop-loss hits in %dd"
-                                    " → skip next %d cycles",
-                                    symbol, len(history),
-                                    self._loss_cooldown_window_days,
-                                    self._loss_cooldown_skip_cycles,
-                                )
-                except Exception as exc:
-                    log.error("  ✗ Failed to close %s: %s", symbol, exc)
+                    _open_orders = self._alpaca_client.get_orders()
+                    _has_child_orders = any(
+                        str(_o.symbol) == symbol
+                        and str(_o.order_type) in ("stop", "stop_limit", "limit")
+                        and str(_o.status) in ("new", "held", "accepted")
+                        for _o in _open_orders
+                    )
+                except Exception as _oe:
+                    log.debug("Could not check bracket child orders for %s: %s", symbol, _oe)
+
+                if _has_child_orders:
+                    log.debug(
+                        "Position monitor: %s has active bracket child orders — "
+                        "skipping manual close (Alpaca OCO will handle %s)",
+                        symbol, reason,
+                    )
+                else:
+                    log.info("Closing %s — %s", symbol, reason)
+                    try:
+                        order = self._alpaca_client.close_position(symbol)
+                        order_counter.labels(
+                            symbol=symbol, action="SELL", exchange="alpaca", status="submitted",
+                        ).inc()
+                        log.info("  ✓ Position closed: %s id=%s", symbol, order.id)
+                        with self._pos_thresholds_lock:
+                            self._pos_thresholds.pop(symbol, None)
+                        self._trailing_peaks.pop(symbol, None)
+                        # Record stop-loss hit for loss-cooldown gate (Phase 3-C)
+                        if "STOP LOSS" in reason:
+                            now = time.monotonic()
+                            with self._loss_lock:
+                                history = self._loss_history.get(symbol, [])
+                                history.append(now)
+                                window_secs = self._loss_cooldown_window_days * 86400
+                                history = [t for t in history if now - t < window_secs]
+                                self._loss_history[symbol] = history
+                                if len(history) >= self._loss_cooldown_hits:
+                                    cooldown_secs = self._loss_cooldown_skip_cycles * CYCLE_INTERVAL_MINUTES * 60
+                                    self._loss_cooldown_end[symbol] = now + cooldown_secs
+                                    log.info(
+                                        "Loss cooldown activated: %s — %d stop-loss hits in %dd"
+                                        " → skip next %d cycles",
+                                        symbol, len(history),
+                                        self._loss_cooldown_window_days,
+                                        self._loss_cooldown_skip_cycles,
+                                    )
+                    except Exception as exc:
+                        log.error("  ✗ Failed to close %s: %s", symbol, exc)
             else:
                 log.debug(
                     "Position monitor: %s plpc=%.2f%% (sl=%.1f%% tp=%.1f%%)",

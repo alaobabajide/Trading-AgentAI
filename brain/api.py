@@ -17,6 +17,7 @@ import re
 import time as _time
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from dataclasses import replace as _dc_replace
 from datetime import datetime
 from typing import Any
 
@@ -131,7 +132,7 @@ _CONFIG_INT_BOUNDS: dict[str, tuple[int, int]] = {
 # ── Dynamic risk config (frontend-editable, persisted to file) ────────────────
 # Overrides env-var defaults without a redeploy.
 # Shape: {stop_loss_pct, take_profit_pct, max_position_pct, circuit_breaker_drawdown}
-_CONFIG_FILE = os.environ.get("DYNAMIC_CONFIG_FILE", "/tmp/ta_dynamic_config.json")
+_CONFIG_FILE = os.environ.get("DYNAMIC_CONFIG_FILE", "/data/ta_dynamic_config.json")
 _dynamic_config: dict = {}
 
 
@@ -172,6 +173,9 @@ def _load_dynamic_config() -> dict:
 
 def _save_dynamic_config(data: dict) -> None:
     try:
+        config_dir = os.path.dirname(_CONFIG_FILE)
+        if config_dir:
+            os.makedirs(config_dir, exist_ok=True)
         with open(_CONFIG_FILE, "w") as f:
             json.dump(data, f)
         os.chmod(_CONFIG_FILE, 0o600)
@@ -697,6 +701,17 @@ def generate_signal(req: SignalRequest):
     except Exception as exc:
         log.error("Market data fetch failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail=f"Market data fetch failed: {exc}")
+
+    # ── Refresh latest_quote outside bar cache (bar cache TTL=5min retains yesterday's close;
+    # indicators must reflect the live intraday price to avoid acting on stale signals) ──
+    try:
+        fetcher = alpaca if req.asset_class == "stock" else alpaca_crypto
+        live_quote = fetcher.get_latest_quote(req.symbol)
+        if live_quote and float(getattr(live_quote, "mid", 0) or 0) > 0:
+            market = _dc_replace(market, latest_quote=live_quote)
+            log.debug("Live quote refreshed: %s mid=%.4f", req.symbol, live_quote.mid)
+    except Exception as _qexc:
+        log.debug("Live quote refresh skipped for %s: %s", req.symbol, _qexc)
 
     # ── Fetch sentiment (non-fatal) ─────────────────────────────────────────
     try:
