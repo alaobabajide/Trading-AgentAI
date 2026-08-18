@@ -42,7 +42,7 @@ CRYPTO_WATCHLIST = ["BTCUSD", "ETHUSD", "SOLUSD", "AVAXUSD", "DOGEUSD", "LTCUSD"
 
 # Vote thresholds for signal tiers (27-agent pool)
 HOT_MIN_VOTES  = 17   # ≥17 weighted votes aligned → HOT
-WARM_MIN_VOTES = 11   # 11–16 weighted votes aligned → WARM
+WARM_MIN_VOTES = 13   # 13–16 weighted votes aligned → WARM (raised from 11 — 38% too permissive)
 AGENT_COUNT    = 27   # total agents in the debate pool
 
 # Orchestrator cycle interval (minutes)

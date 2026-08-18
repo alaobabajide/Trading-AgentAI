@@ -163,6 +163,9 @@ class Orchestrator:
         self._take_profit_pct = cfg.take_profit_pct
         # Credit alert — monotonic timestamp of last Telegram notification (avoids spam)
         self._last_credit_alert_ts: float = 0.0
+        # SPY market trend cache — (monotonic_timestamp, is_uptrend); refreshed every 5 min
+        self._spy_cache: tuple[float, bool] | None = None
+        self._spy_cache_lock = threading.Lock()
 
     # ── Portfolio refresh ──────────────────────────────────────────────────────
 
@@ -204,6 +207,39 @@ class Orchestrator:
         return portfolio
 
     # ── Signal + execution ────────────────────────────────────────────────────
+
+    def _spy_is_uptrend(self) -> bool:
+        """True when SPY last daily close ≥ its 20-day SMA (broad market uptrend).
+
+        Cached for 5 minutes so it doesn't hit yfinance on every symbol. Fails
+        open (returns True) when data is unavailable so we never block all trades
+        on a network hiccup.
+        """
+        now = time.monotonic()
+        with self._spy_cache_lock:
+            if self._spy_cache is not None:
+                cached_ts, cached_val = self._spy_cache
+                if now - cached_ts < 300:
+                    return cached_val
+        try:
+            import yfinance as yf
+            spy = yf.download("SPY", period="30d", progress=False, auto_adjust=True, threads=False)
+            if spy.empty or len(spy) < 20:
+                return True
+            closes = spy["Close"].squeeze()
+            sma20 = float(closes.rolling(20).mean().iloc[-1])
+            last_close = float(closes.iloc[-1])
+            result = last_close >= sma20
+            log.info(
+                "SPY trend filter: last=%.2f SMA20=%.2f → %s",
+                last_close, sma20, "UPTREND" if result else "DOWNTREND/FLAT",
+            )
+        except Exception as exc:
+            log.debug("SPY trend check failed: %s — failing open", exc)
+            result = True
+        with self._spy_cache_lock:
+            self._spy_cache = (time.monotonic(), result)
+        return result
 
     def _is_market_open(self) -> bool:
         """Return True only during regular US market hours (9:30–16:00 ET, Mon–Fri)."""
@@ -257,13 +293,12 @@ class Orchestrator:
             log.debug("SKIP %s — market closed (signal cached, will execute at open)", symbol)
             return
 
-        # ── Gate 3.5: COLD cooldown — skip symbols quiet in recent cycles (LLM mode only) ──
-        if not self._paper_mode:
-            with self._cold_lock:
-                if any(symbol in past for past in self._cold_history):
-                    log.debug("SKIP %s — COLD cooldown (quiet within last %d cycle(s))",
-                              symbol, self._cfg.cold_skip_cycles)
-                    return
+        # ── Gate 3.5: COLD cooldown — skip symbols quiet in recent cycles ──────
+        with self._cold_lock:
+            if any(symbol in past for past in self._cold_history):
+                log.debug("SKIP %s — COLD cooldown (quiet within last %d cycle(s))",
+                          symbol, self._cfg.cold_skip_cycles)
+                return
 
         # ── Gate 3.6: Loss cooldown — 2 stop-loss hits in 5 days → skip 2 cycles ──
         with self._loss_lock:
@@ -385,6 +420,17 @@ class Orchestrator:
                             )
             except Exception as exc:
                 log.debug("Correlation check failed for %s: %s", symbol, exc)
+
+        # ── Gate 5d: market trend filter — only buy when SPY is in uptrend ──────
+        # Prevents buying individual stocks while the broad market is in a
+        # downtrend (SPY < 20-day SMA). SELL signals and crypto are unaffected.
+        if action == "BUY" and asset_class == "stock":
+            if not self._spy_is_uptrend():
+                log.info(
+                    "  → SKIP BUY for %s — SPY below 20-day SMA (broad market downtrend)",
+                    symbol,
+                )
+                return
 
         log.info("  → Submitting %s %s order (tier=%s) via /execute …", action, symbol, tier)
 

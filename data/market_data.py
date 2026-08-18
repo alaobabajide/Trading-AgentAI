@@ -162,21 +162,31 @@ class AlpacaMarketData:
         from alpaca.data.requests import StockLatestQuoteRequest
         from alpaca.data.enums import DataFeed
 
-        req = StockLatestQuoteRequest(symbol_or_symbols=symbol, feed=DataFeed.IEX)
-        resp = self._client.get_stock_latest_quote(req)
-        q = resp.get(symbol)
-        if q is None:
-            return None
-        bid = float(q.bid_price or 0)
-        ask = float(q.ask_price or 0)
-        return Quote(
-            symbol=symbol,
-            timestamp=q.timestamp,
-            bid=bid,
-            ask=ask,
-            mid=(bid + ask) / 2,
-            asset_class="stock",
-        )
+        # Try SIP first (real-time on live accounts, always real-time on paper).
+        # IEX is 15-min delayed on live accounts — same fallback order as get_bars().
+        for feed in (DataFeed.SIP, DataFeed.IEX):
+            try:
+                req = StockLatestQuoteRequest(symbol_or_symbols=symbol, feed=feed)
+                resp = self._client.get_stock_latest_quote(req)
+                q = resp.get(symbol)
+                if q is None:
+                    continue
+                bid = float(q.bid_price or 0)
+                ask = float(q.ask_price or 0)
+                if bid == 0 and ask == 0:
+                    log.debug("Empty quote from %s feed for %s, trying next feed", feed, symbol)
+                    continue
+                return Quote(
+                    symbol=symbol,
+                    timestamp=q.timestamp,
+                    bid=bid,
+                    ask=ask,
+                    mid=(bid + ask) / 2,
+                    asset_class="stock",
+                )
+            except Exception as exc:
+                log.debug("Quote feed %s failed for %s (%s), trying next", feed, symbol, exc)
+        return None
 
     def snapshot(self, symbol: str, days: int = 60) -> MarketSnapshot:
         return MarketSnapshot(
