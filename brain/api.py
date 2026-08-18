@@ -330,8 +330,34 @@ class SignalResponse(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    import sys, os
+    import sys
     log.info("Brain API starting up — Python %s  cwd=%s", sys.version.split()[0], os.getcwd())
+
+    # Validate /data persistence — warn loudly if the directory is not writable
+    # (Railway persistent volume must be mounted at /data for config and peak_equity to survive redeploys)
+    _data_dir = os.path.dirname(_CONFIG_FILE) or "/data"
+    try:
+        os.makedirs(_data_dir, exist_ok=True)
+        _probe = os.path.join(_data_dir, ".write_probe")
+        with open(_probe, "w") as _f:
+            _f.write("ok")
+        os.remove(_probe)
+        log.info("Persistence check OK — %s is writable", _data_dir)
+    except Exception as _pe:
+        log.warning(
+            "PERSISTENCE WARNING: %s is not writable (%s). "
+            "Config changes and circuit-breaker state will be LOST on redeploy. "
+            "Mount a Railway persistent volume at /data or set DYNAMIC_CONFIG_FILE to a writable path.",
+            _data_dir, _pe,
+        )
+
+    # Load dynamic config from disk at startup (picks up any pre-existing overrides)
+    global _dynamic_config
+    disk_cfg = _load_dynamic_config()
+    if disk_cfg:
+        _dynamic_config = disk_cfg
+        log.info("Dynamic config loaded at startup: %s", list(disk_cfg.keys()))
+
     yield
     log.info("Brain API shutting down.")
 
@@ -939,6 +965,21 @@ def execute_trade(req: ExecuteRequest):
                     raise HTTPException(
                         status_code=502,
                         detail=f"Could not fetch market price for {req.symbol.upper()} — data feed unavailable",
+                    )
+            else:
+                # Inject live quote into the last bar so ATR sizing, stop price, and
+                # take-profit price are anchored to the current intraday market price —
+                # not yesterday's 4pm close. Without this fix a stock that gaps down 3%
+                # at open gets a bracket stop already ABOVE the entry price, which
+                # triggers an immediate fill the moment the order is placed.
+                _exec_quote = market.get_latest_quote(req.symbol.upper())
+                if _exec_quote and _exec_quote.mid > 0:
+                    bars_closes[-1] = _exec_quote.mid
+                    bars_highs[-1]  = max(bars_highs[-1], _exec_quote.mid)
+                    bars_lows[-1]   = min(bars_lows[-1],  _exec_quote.mid)
+                    log.debug(
+                        "Execute live price inject: %s mid=%.4f (bar close was %.4f)",
+                        req.symbol, _exec_quote.mid, bars[-1].close if bars else 0,
                     )
 
             eff = _effective_config(cfg)
