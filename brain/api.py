@@ -923,11 +923,14 @@ def execute_trade(req: ExecuteRequest):
 
     cfg = get_settings()
 
-    # Merge with cached signal sizing if present
+    # The orchestrator already applies all risk adjustments (correlation halving,
+    # regime-based sl/tp scaling) before sending this request. Always use the
+    # request values so those adjustments aren't silently overwritten by the cache.
+    # Fall back to cache only for the rationale text (informational only).
     cached   = _signal_cache.get(req.symbol.upper(), {})
-    pos_pct  = float(cached.get("suggested_position_pct", req.suggested_position_pct))
-    sl_pct   = float(cached.get("stop_loss_pct",          req.stop_loss_pct))
-    tp_pct   = float(cached.get("take_profit_pct",        req.take_profit_pct))
+    pos_pct  = req.suggested_position_pct
+    sl_pct   = req.stop_loss_pct
+    tp_pct   = req.take_profit_pct
 
     # Build a TradingSignal from the request so the execution engines can use it
     signal = TradingSignal(

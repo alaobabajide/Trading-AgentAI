@@ -166,6 +166,13 @@ class Orchestrator:
         # SPY market trend cache — (monotonic_timestamp, is_uptrend); refreshed every 5 min
         self._spy_cache: tuple[float, bool] | None = None
         self._spy_cache_lock = threading.Lock()
+        # Bracket stop-out tracker — records monotonic timestamp when a BUY was submitted.
+        # Used in Gate 5e: if a position disappears while an entry is still tracked, the
+        # bracket stop-loss fired (Alpaca closed the position outside _monitor_positions),
+        # so _monitor_positions never incremented loss_history. Gate 5e detects this and
+        # records the loss hit so the loss-cooldown gate (3.6) can suppress re-entry.
+        self._recent_entries: dict[str, float] = {}
+        self._entry_lock = threading.Lock()
 
     # ── Portfolio refresh ──────────────────────────────────────────────────────
 
@@ -357,6 +364,49 @@ class Orchestrator:
             log.info("  → BUY skipped for %s — position already open", symbol)
             return
 
+        # ── Gate 5e: detect bracket stop-outs and enforce loss cooldown ────────
+        # When Alpaca's bracket child stop-loss fires, the position closes
+        # outside _monitor_positions → loss_history is NEVER incremented →
+        # loss cooldown (Gate 3.6) never activates → system re-enters the
+        # same failing symbol every 30 minutes indefinitely.
+        # Fix: if we entered this symbol recently (tracked by _recent_entries)
+        # and there is now no open position, infer a bracket stop-out and
+        # record the loss hit so Gate 3.6 can suppress re-entry.
+        if action == "BUY":
+            _now5e = time.monotonic()
+            with self._entry_lock:
+                _entry_ts = self._recent_entries.get(symbol, 0)
+            if _entry_ts > 0 and _now5e - _entry_ts < 4 * CYCLE_INTERVAL_MINUTES * 60:
+                # Position was opened recently and is now gone → Alpaca bracket closed it
+                with self._loss_lock:
+                    _hist = self._loss_history.get(symbol, [])
+                    # Guard: only record once per entry event (skip if already recorded
+                    # within the last half-cycle to avoid double-counting)
+                    if not _hist or _now5e - _hist[-1] > CYCLE_INTERVAL_MINUTES * 30:
+                        _hist.append(_now5e)
+                        _win = self._loss_cooldown_window_days * 86400
+                        _hist = [t for t in _hist if _now5e - t < _win]
+                        self._loss_history[symbol] = _hist
+                        log.info(
+                            "Bracket stop-out detected for %s — loss hit #%d in last %dd",
+                            symbol, len(_hist), self._loss_cooldown_window_days,
+                        )
+                        if len(_hist) >= self._loss_cooldown_hits:
+                            _cd = self._loss_cooldown_skip_cycles * CYCLE_INTERVAL_MINUTES * 60
+                            self._loss_cooldown_end[symbol] = _now5e + _cd
+                            log.info(
+                                "Loss cooldown activated (bracket stop-out): %s → skip %d cycles",
+                                symbol, self._loss_cooldown_skip_cycles,
+                            )
+                with self._entry_lock:
+                    self._recent_entries.pop(symbol, None)
+                # Re-check: cooldown may have just been activated above
+                with self._loss_lock:
+                    _cd_end = self._loss_cooldown_end.get(symbol, 0)
+                if time.monotonic() < _cd_end:
+                    log.info("SKIP %s — loss cooldown active (bracket stop-out detected)", symbol)
+                    return
+
         # ── Gate 5b: can't short crypto — skip SELL with no open position ─────
         if action == "SELL" and asset_class == "crypto" and not self._has_open_position(symbol, asset_class):
             log.info("  → SELL skipped for %s — no open crypto position (shorting unsupported)", symbol)
@@ -459,6 +509,10 @@ class Orchestrator:
                 result.get("target_pct", 0) * 100,
             )
             status = "submitted"
+            # Track BUY entries for Gate 5e bracket stop-out detection
+            if action == "BUY":
+                with self._entry_lock:
+                    self._recent_entries[symbol] = time.monotonic()
         except httpx.HTTPStatusError as exc:
             log.error(
                 "  ✗ Execute rejected for %s: HTTP %d — %s",
