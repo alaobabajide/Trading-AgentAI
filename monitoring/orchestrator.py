@@ -92,6 +92,35 @@ def _save_peak_equity(value: float) -> None:
         log.debug("Could not persist peak equity: %s", exc)
 
 
+# ── Recent-entry persistence (for Gate 5e bracket stop-out detection) ─────────
+_RECENT_ENTRIES_FILE = os.path.join(_DATA_DIR, "ta_recent_entries.json")
+_RECENT_ENTRIES_TTL  = 4 * 30 * 60  # 4 cycles × 30 min = 120 min max age
+
+
+def _load_recent_entries() -> dict[str, float]:
+    """Load wall-clock entry timestamps from disk; prune stale ones."""
+    try:
+        with open(_RECENT_ENTRIES_FILE) as _f:
+            raw: dict[str, float] = _json.load(_f)
+        now = time.time()
+        pruned = {sym: ts for sym, ts in raw.items() if now - ts < _RECENT_ENTRIES_TTL}
+        log.info("Loaded %d recent entry record(s) from %s", len(pruned), _RECENT_ENTRIES_FILE)
+        return pruned
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        log.warning("Could not load recent entries: %s", exc)
+        return {}
+
+
+def _save_recent_entries(entries: dict[str, float]) -> None:
+    try:
+        with open(_RECENT_ENTRIES_FILE, "w") as _f:
+            _json.dump(entries, _f)
+    except Exception as exc:
+        log.debug("Could not persist recent entries: %s", exc)
+
+
 def _wait_for_brain(url: str, timeout_secs: int = 60) -> bool:
     """Poll /health until uvicorn is ready, up to timeout_secs."""
     deadline = time.monotonic() + timeout_secs
@@ -166,12 +195,13 @@ class Orchestrator:
         # SPY market trend cache — (monotonic_timestamp, is_uptrend); refreshed every 5 min
         self._spy_cache: tuple[float, bool] | None = None
         self._spy_cache_lock = threading.Lock()
-        # Bracket stop-out tracker — records monotonic timestamp when a BUY was submitted.
+        # Bracket stop-out tracker — records wall-clock timestamp when a BUY was submitted.
         # Used in Gate 5e: if a position disappears while an entry is still tracked, the
         # bracket stop-loss fired (Alpaca closed the position outside _monitor_positions),
         # so _monitor_positions never incremented loss_history. Gate 5e detects this and
         # records the loss hit so the loss-cooldown gate (3.6) can suppress re-entry.
-        self._recent_entries: dict[str, float] = {}
+        # Persisted to disk so stop-out history survives Railway restarts.
+        self._recent_entries: dict[str, float] = _load_recent_entries()
         self._entry_lock = threading.Lock()
 
     # ── Portfolio refresh ──────────────────────────────────────────────────────
@@ -359,8 +389,25 @@ class Orchestrator:
                 self._curr_cold_symbols.add(symbol)
             return
 
-        # ── Gate 5: don't add to a position that already exists ───────────────
-        if action == "BUY" and self._has_open_position(symbol, asset_class):
+        # ── Gate 5: don't add to a position that already exists; enforce max concurrent ──
+        if action == "BUY" and self._alpaca_client:
+            try:
+                _all_pos = self._alpaca_client.get_all_positions()
+                if any(p.symbol == symbol for p in _all_pos):
+                    log.info("  → BUY skipped for %s — position already open", symbol)
+                    return
+                if len(_all_pos) >= self._cfg.max_concurrent_positions:
+                    log.info(
+                        "  → BUY skipped for %s — at max concurrent positions (%d/%d open)",
+                        symbol, len(_all_pos), self._cfg.max_concurrent_positions,
+                    )
+                    return
+            except Exception as _exc5:
+                log.warning("Could not check positions for Gate 5: %s", _exc5)
+                if self._has_open_position(symbol, asset_class):
+                    log.info("  → BUY skipped for %s — position already open (fallback check)", symbol)
+                    return
+        elif action == "BUY" and self._has_open_position(symbol, asset_class):
             log.info("  → BUY skipped for %s — position already open", symbol)
             return
 
@@ -373,10 +420,10 @@ class Orchestrator:
         # and there is now no open position, infer a bracket stop-out and
         # record the loss hit so Gate 3.6 can suppress re-entry.
         if action == "BUY":
-            _now5e = time.monotonic()
+            _now5e = time.time()  # wall clock — survives restarts via _recent_entries persistence
             with self._entry_lock:
                 _entry_ts = self._recent_entries.get(symbol, 0)
-            if _entry_ts > 0 and _now5e - _entry_ts < 4 * CYCLE_INTERVAL_MINUTES * 60:
+            if _entry_ts > 0 and _now5e - _entry_ts < _RECENT_ENTRIES_TTL:
                 # Position was opened recently and is now gone → Alpaca bracket closed it
                 with self._loss_lock:
                     _hist = self._loss_history.get(symbol, [])
@@ -400,10 +447,11 @@ class Orchestrator:
                             )
                 with self._entry_lock:
                     self._recent_entries.pop(symbol, None)
+                    _save_recent_entries(dict(self._recent_entries))
                 # Re-check: cooldown may have just been activated above
                 with self._loss_lock:
                     _cd_end = self._loss_cooldown_end.get(symbol, 0)
-                if time.monotonic() < _cd_end:
+                if time.time() < _cd_end:
                     log.info("SKIP %s — loss cooldown active (bracket stop-out detected)", symbol)
                     return
 
@@ -509,10 +557,11 @@ class Orchestrator:
                 result.get("target_pct", 0) * 100,
             )
             status = "submitted"
-            # Track BUY entries for Gate 5e bracket stop-out detection
+            # Track BUY entries for Gate 5e bracket stop-out detection (wall clock, persisted)
             if action == "BUY":
                 with self._entry_lock:
-                    self._recent_entries[symbol] = time.monotonic()
+                    self._recent_entries[symbol] = time.time()
+                    _save_recent_entries(dict(self._recent_entries))
         except httpx.HTTPStatusError as exc:
             log.error(
                 "  ✗ Execute rejected for %s: HTTP %d — %s",
