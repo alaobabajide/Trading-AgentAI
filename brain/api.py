@@ -458,7 +458,7 @@ def _verify_supabase_jwt(token: str) -> str | None:
     cached = _jwt_cache.get(cache_key)
     if cached:
         user_id, expires = cached
-        if time.monotonic() < expires:
+        if _time.monotonic() < expires:
             return user_id
     try:
         sb = _get_supabase_admin()
@@ -466,11 +466,11 @@ def _verify_supabase_jwt(token: str) -> str | None:
             return None
         resp = sb.auth.get_user(token)
         uid = resp.user.id if resp and resp.user else None
-        _jwt_cache[cache_key] = (uid, time.monotonic() + _JWT_CACHE_TTL)
+        _jwt_cache[cache_key] = (uid, _time.monotonic() + _JWT_CACHE_TTL)
         return uid
     except Exception as exc:
         log.debug("JWT validation failed: %s", exc)
-        _jwt_cache[cache_key] = (None, time.monotonic() + 60)   # cache failures 1 min to avoid hammering Supabase
+        _jwt_cache[cache_key] = (None, _time.monotonic() + 60)   # cache failures 1 min to avoid hammering Supabase
         return None
 
 
