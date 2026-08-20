@@ -10,8 +10,9 @@ if [ -z "$BRAIN_API_KEY" ]; then
     echo "[start] WARNING: BRAIN_API_KEY is not set. All /api/* routes are UNAUTHENTICATED. Set it in Railway env vars."
 fi
 
-# ── 0b. Inject runtime config for the dashboard (API key delivered at startup) ─
-printf 'window.__TA_CONFIG__ = { apiKey: "%s" };\n' "$BRAIN_API_KEY" \
+# ── 0b. Inject runtime config for the dashboard ──────────────────────────────
+printf 'window.__TA_CONFIG__ = { apiKey: "%s", supabaseUrl: "%s", supabaseAnonKey: "%s" };\n' \
+    "$BRAIN_API_KEY" "$SUPABASE_URL" "$SUPABASE_ANON_KEY" \
     > /usr/share/nginx/html/runtime-config.js
 
 # ── 1. Start brain API (uvicorn) on 127.0.0.1:8000 in the background ─────────

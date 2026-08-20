@@ -29,3 +29,7 @@ schedule>=1.2.0
 
 # Security
 slowapi>=0.1.9
+
+# Auth
+supabase>=2.10.0
+PyJWT>=2.8.0

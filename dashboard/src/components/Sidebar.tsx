@@ -1,6 +1,7 @@
-import { Activity, BarChart2, BarChart3, BookOpen, Brain, CandlestickChart, LayoutDashboard, Settings, Zap } from "lucide-react";
+import { Activity, BarChart2, BarChart3, BookOpen, Brain, CandlestickChart, LayoutDashboard, LogOut, Settings, Zap } from "lucide-react";
 import clsx from "clsx";
 import { useBrainHealth } from "../lib/api";
+import { useAuth } from "../context/AuthContext";
 
 type Page = "dashboard" | "signals" | "positions" | "technical" | "fundamental" | "charts" | "indices" | "brain" | "settings";
 
@@ -92,6 +93,34 @@ export function Sidebar({ active, onNav }: Props) {
           <span className="text-xs text-slate-400">{label}</span>
         </div>
       </div>
+
+      {/* User + sign-out */}
+      <UserFooter />
     </aside>
+  );
+}
+
+function UserFooter() {
+  const { user, signOut } = useAuth();
+  if (!user) return null;
+  const display = user.user_metadata?.full_name ?? user.email ?? "Account";
+  return (
+    <div className="px-3 mt-3 mb-1">
+      <div className="glass rounded-xl px-3 py-2.5 flex items-center gap-2 min-w-0">
+        <div className="flex-1 min-w-0">
+          <p className="text-[11px] font-medium text-slate-300 truncate">{display}</p>
+          {user.email && user.user_metadata?.full_name && (
+            <p className="text-[10px] text-slate-600 font-mono truncate">{user.email}</p>
+          )}
+        </div>
+        <button
+          onClick={() => signOut()}
+          title="Sign out"
+          className="shrink-0 text-slate-500 hover:text-red-400 transition-colors"
+        >
+          <LogOut className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    </div>
   );
 }

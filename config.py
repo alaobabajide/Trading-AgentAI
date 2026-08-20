@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     brain_api_key: str = Field("", env="BRAIN_API_KEY")  # required — set in Railway
     allowed_origins: str = Field("", env="ALLOWED_ORIGINS")  # comma-separated CORS origins
 
+    # ── Supabase auth ─────────────────────────────────────────────────────────
+    supabase_url: str = Field("", env="SUPABASE_URL")
+    supabase_anon_key: str = Field("", env="SUPABASE_ANON_KEY")
+    supabase_service_role_key: str = Field("", env="SUPABASE_SERVICE_ROLE_KEY")
+
     # ── Telegram ──────────────────────────────────────────────────────────────
     telegram_bot_token: str = Field("", env="TELEGRAM_BOT_TOKEN")
     telegram_allowed_ids: str = Field("", env="TELEGRAM_ALLOWED_IDS")  # comma-separated chat IDs

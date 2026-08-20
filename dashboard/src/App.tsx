@@ -12,10 +12,12 @@ import { ChartsPage } from "./pages/ChartsPage";
 import { IndicesPage } from "./pages/IndicesPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { HITLProvider, useHITLContext } from "./context/HITLContext";
+import { AuthProvider, useAuth } from "./context/AuthContext";
+import { LoginPage } from "./pages/LoginPage";
 import { SetupBanner } from "./components/SetupBanner";
 import { MODE_CONFIG, HOT_VETO_SECONDS } from "./lib/hitl";
 import { useCreditStatus } from "./lib/api";
-import { AlertTriangle, X } from "lucide-react";
+import { AlertTriangle, Loader2, X } from "lucide-react";
 
 type Page = "dashboard" | "signals" | "positions" | "technical" | "fundamental" | "charts" | "indices" | "brain" | "settings";
 type TradingEnv = "paper" | "live";
@@ -282,10 +284,32 @@ function AppInner() {
   );
 }
 
-export default function App() {
+function AuthGate() {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-surface-900 flex items-center justify-center">
+        <Loader2 className="w-6 h-6 text-brand-400 animate-spin" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LoginPage />;
+  }
+
   return (
     <HITLProvider>
       <AppInner />
     </HITLProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AuthGate />
+    </AuthProvider>
   );
 }

@@ -8,8 +8,15 @@ import { EquityPoint, PortfolioSnapshot, Signal } from "./types";
 
 const BASE = "/api";
 
-// Read the API key injected by start.sh into /runtime-config.js at container startup.
-// Falls back to empty string if not set (unauthenticated dev mode).
+// ── Auth token management ─────────────────────────────────────────────────────
+// AuthContext calls setActiveToken() whenever the Supabase session changes.
+// Browser requests use Bearer <jwt>; machine-to-machine falls back to X-Api-Key.
+let _activeToken: string | null = null;
+
+export function setActiveToken(token: string | null): void {
+  _activeToken = token;
+}
+
 function _apiKey(): string {
   return (
     (window as unknown as { __TA_CONFIG__?: { apiKey?: string } }).__TA_CONFIG__
@@ -18,6 +25,10 @@ function _apiKey(): string {
 }
 
 export function apiHeaders(extra?: Record<string, string>): Record<string, string> {
+  if (_activeToken) {
+    return { Authorization: `Bearer ${_activeToken}`, ...extra };
+  }
+  // Fallback: legacy X-Api-Key (dev mode / orchestrator)
   const key = _apiKey();
   return key ? { "X-Api-Key": key, ...extra } : { ...extra };
 }

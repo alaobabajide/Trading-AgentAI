@@ -394,7 +394,7 @@ app.add_middleware(
     allow_origins=_allowed_origins,
     allow_credentials=bool(_allowed_origins),
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["X-Api-Key", "Content-Type"],
+    allow_headers=["X-Api-Key", "Content-Type", "Authorization"],
 )
 
 # ── Rate limiting (outermost — runs first, cheapest check) ────────────────────
@@ -432,19 +432,75 @@ async def body_size_limit(request: Request, call_next):
 # ── API key authentication (all routes except /health and /) ─────────────────
 _PUBLIC_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc"}
 
+# ── Supabase JWT validation (lazy init, cached results) ───────────────────────
+_supabase_admin = None
+_supabase_admin_lock = __import__("threading").Lock()
+_jwt_cache: dict[str, tuple[str | None, float]] = {}   # last-20-chars → (user_id, monotonic_expiry)
+_JWT_CACHE_TTL = 300  # 5 min — tokens live 1 h so this is a safe cache window
+
+
+def _get_supabase_admin():
+    global _supabase_admin
+    if _supabase_admin is None:
+        with _supabase_admin_lock:
+            if _supabase_admin is None:
+                from config import get_settings as _gs
+                _c = _gs()
+                if _c.supabase_url and _c.supabase_service_role_key:
+                    from supabase import create_client as _cc
+                    _supabase_admin = _cc(_c.supabase_url, _c.supabase_service_role_key)
+    return _supabase_admin
+
+
+def _verify_supabase_jwt(token: str) -> str | None:
+    """Return user_id if the Supabase JWT is valid, else None. Results cached 5 min."""
+    cache_key = token[-24:]          # last 24 chars as cache key — unique enough, avoids storing full token
+    cached = _jwt_cache.get(cache_key)
+    if cached:
+        user_id, expires = cached
+        if time.monotonic() < expires:
+            return user_id
+    try:
+        sb = _get_supabase_admin()
+        if sb is None:
+            return None
+        resp = sb.auth.get_user(token)
+        uid = resp.user.id if resp and resp.user else None
+        _jwt_cache[cache_key] = (uid, time.monotonic() + _JWT_CACHE_TTL)
+        return uid
+    except Exception as exc:
+        log.debug("JWT validation failed: %s", exc)
+        _jwt_cache[cache_key] = (None, time.monotonic() + 60)   # cache failures 1 min to avoid hammering Supabase
+        return None
+
 
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
     if request.url.path in _PUBLIC_PATHS:
         return await call_next(request)
+
     from config import get_settings
     cfg = get_settings()
-    if not cfg.brain_api_key:
-        log.critical("BRAIN_API_KEY is not set — API is UNAUTHENTICATED. Set it in Railway env vars.")
-        return await call_next(request)   # fail-open during initial setup only
-    if request.headers.get("X-Api-Key", "") != cfg.brain_api_key:
-        return JSONResponse(status_code=403, content={"detail": "Forbidden — invalid or missing API key"})
-    return await call_next(request)
+
+    # Dev / initial-setup mode: no auth configured at all → fail-open
+    if not cfg.brain_api_key and not cfg.supabase_service_role_key:
+        log.critical("No auth configured (BRAIN_API_KEY + SUPABASE_SERVICE_ROLE_KEY both missing) — API is UNAUTHENTICATED")
+        return await call_next(request)
+
+    # Path 1: X-Api-Key — machine-to-machine (orchestrator, Telegram bot)
+    if cfg.brain_api_key and request.headers.get("X-Api-Key", "") == cfg.brain_api_key:
+        return await call_next(request)
+
+    # Path 2: Supabase Bearer token — browser users
+    if cfg.supabase_service_role_key:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            user_id = _verify_supabase_jwt(auth_header[7:])
+            if user_id:
+                request.state.user_id = user_id
+                return await call_next(request)
+
+    return JSONResponse(status_code=403, content={"detail": "Forbidden — invalid or missing credentials"})
 
 
 # ── Safe exception handler — never expose stack traces externally ─────────────
