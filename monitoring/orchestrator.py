@@ -203,6 +203,11 @@ class Orchestrator:
         # Persisted to disk so stop-out history survives Railway restarts.
         self._recent_entries: dict[str, float] = _load_recent_entries()
         self._entry_lock = threading.Lock()
+        # Gate 5 concurrency guard — prevents TOCTOU race where parallel workers
+        # all read the same position count before any order fills, allowing
+        # more than max_concurrent_positions to be submitted simultaneously.
+        self._pending_buys: set[str] = set()
+        self._gate5_lock = threading.Lock()
 
     # ── Portfolio refresh ──────────────────────────────────────────────────────
 
@@ -389,19 +394,42 @@ class Orchestrator:
                 self._curr_cold_symbols.add(symbol)
             return
 
-        # ── Gate 5: don't add to a position that already exists; enforce max concurrent ──
+        # ── Gate 5: don't add to a position that already exists; enforce max concurrent + exposure ──
+        # _gate5_lock prevents the TOCTOU race: all 16 workers can read the same position
+        # count simultaneously and all pass the check, submitting 16 orders when only 1 slot
+        # remains. The lock + _pending_buys set makes the check-and-reserve atomic.
+        _added_to_pending = False
         if action == "BUY" and self._alpaca_client:
             try:
-                _all_pos = self._alpaca_client.get_all_positions()
-                if any(p.symbol == symbol for p in _all_pos):
-                    log.info("  → BUY skipped for %s — position already open", symbol)
-                    return
-                if len(_all_pos) >= self._cfg.max_concurrent_positions:
-                    log.info(
-                        "  → BUY skipped for %s — at max concurrent positions (%d/%d open)",
-                        symbol, len(_all_pos), self._cfg.max_concurrent_positions,
-                    )
-                    return
+                with self._gate5_lock:
+                    _all_pos = self._alpaca_client.get_all_positions()
+                    if any(p.symbol == symbol for p in _all_pos) or symbol in self._pending_buys:
+                        log.info("  → BUY skipped for %s — position already open or pending", symbol)
+                        return
+                    _n_active = len(_all_pos) + len(self._pending_buys)
+                    if _n_active >= self._cfg.max_concurrent_positions:
+                        log.info(
+                            "  → BUY skipped for %s — at max concurrent positions (%d open + %d pending ≥ %d limit)",
+                            symbol, len(_all_pos), len(self._pending_buys), self._cfg.max_concurrent_positions,
+                        )
+                        return
+                    # Enforce max_exposure_pct — the field exists in config and backtest
+                    # but was never checked in the live path, allowing margin-funded
+                    # over-allocation (110% stocks + 64% ETFs = 174% of NAV observed).
+                    try:
+                        _acct_g5 = self._alpaca_client.get_account()
+                        _equity_g5 = float(_acct_g5.equity or 1)
+                        _deployed_g5 = sum(abs(float(p.market_value or 0)) for p in _all_pos)
+                        if _equity_g5 > 0 and _deployed_g5 / _equity_g5 >= self._cfg.max_exposure_pct:
+                            log.info(
+                                "  → BUY skipped for %s — max exposure reached (%.0f%% deployed ≥ %.0f%% limit)",
+                                symbol, _deployed_g5 / _equity_g5 * 100, self._cfg.max_exposure_pct * 100,
+                            )
+                            return
+                    except Exception as _exc_exp:
+                        log.debug("Exposure check failed for Gate 5: %s", _exc_exp)
+                    self._pending_buys.add(symbol)
+                    _added_to_pending = True
             except Exception as _exc5:
                 log.warning("Could not check positions for Gate 5: %s", _exc5)
                 if self._has_open_position(symbol, asset_class):
@@ -453,6 +481,9 @@ class Orchestrator:
                     _cd_end = self._loss_cooldown_end.get(symbol, 0)
                 if time.time() < _cd_end:
                     log.info("SKIP %s — loss cooldown active (bracket stop-out detected)", symbol)
+                    if _added_to_pending:
+                        with self._gate5_lock:
+                            self._pending_buys.discard(symbol)
                     return
 
         # ── Gate 5b: can't short crypto — skip SELL with no open position ─────
@@ -470,6 +501,9 @@ class Orchestrator:
                     "  → SKIP crypto BUY for %s — risk-off regime (%s)",
                     symbol, regime,
                 )
+                if _added_to_pending:
+                    with self._gate5_lock:
+                        self._pending_buys.discard(symbol)
                 return
 
         # ── Regime-adaptive risk parameters (Phase 3-B) ───────────────────────
@@ -509,6 +543,9 @@ class Orchestrator:
                                 " (too correlated with open positions)",
                                 symbol, max_corr,
                             )
+                            if _added_to_pending:
+                                with self._gate5_lock:
+                                    self._pending_buys.discard(symbol)
                             return
                         elif max_corr > self._correlation_threshold:
                             exec_pos_pct *= 0.5
@@ -528,6 +565,9 @@ class Orchestrator:
                     "  → SKIP BUY for %s — SPY below 20-day SMA (broad market downtrend)",
                     symbol,
                 )
+                if _added_to_pending:
+                    with self._gate5_lock:
+                        self._pending_buys.discard(symbol)
                 return
 
         log.info("  → Submitting %s %s order (tier=%s) via /execute …", action, symbol, tier)
@@ -571,6 +611,12 @@ class Orchestrator:
         except Exception as exc:
             log.error("  ✗ Execute call failed for %s: %s", symbol, exc)
             status = "skipped"
+        finally:
+            # Always release the Gate 5 pending-buy reservation so the slot
+            # is freed whether the order succeeded, was rejected, or crashed.
+            if _added_to_pending:
+                with self._gate5_lock:
+                    self._pending_buys.discard(symbol)
 
         exchange = "alpaca" if asset_class == "stock" else "alpaca_crypto"
         order_counter.labels(symbol=symbol, action=action, exchange=exchange, status=status).inc()

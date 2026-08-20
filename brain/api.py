@@ -1008,18 +1008,31 @@ def execute_trade(req: ExecuteRequest):
 
             is_paper = "paper" in cfg.alpaca_base_url.lower()
 
-            # Pre-flight: check buying power before fetching bars or building engine
+            # Pre-flight: block BUY if already at max_exposure_pct.
+            # Previously checked buying_power < $1, which passes on margin accounts even
+            # when cash is deeply negative — allowing 174% NAV allocation via borrowed funds.
             if req.action == "BUY":
-                _acct = _TC(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper).get_account()
-                _bp   = float(_acct.buying_power or _acct.cash or 0)
-                if _bp < 1:
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            f"Insufficient buying power (${_bp:,.2f}). "
-                            "Close or take profit on existing positions to free capital."
-                        ),
-                    )
+                _tc_pf = _TC(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
+                _acct  = _tc_pf.get_account()
+                _equity_pf = float(_acct.equity or 0)
+                if _equity_pf <= 0:
+                    raise HTTPException(status_code=409, detail="Account has no equity.")
+                try:
+                    _positions_pf = _tc_pf.get_all_positions()
+                    _deployed_pf  = sum(abs(float(p.market_value or 0)) for p in _positions_pf)
+                    if _deployed_pf / _equity_pf >= cfg.max_exposure_pct:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                f"Max exposure reached: {_deployed_pf/_equity_pf*100:.0f}% of equity "
+                                f"is deployed (limit {cfg.max_exposure_pct*100:.0f}%). "
+                                "Close or take profit on existing positions to free capital."
+                            ),
+                        )
+                except HTTPException:
+                    raise
+                except Exception:
+                    pass  # fall through if positions fetch fails
 
             # Fetch recent bars for ATR-based sizing; fall back to latest quote
             # if the bar fetch returns empty (e.g. data feed permission gap).

@@ -66,7 +66,7 @@ class RiskControls:
         atr_multiplier: float = 1.5,
         atr_stop_floor: float = 0.005,
         atr_stop_cap: float = 0.04,
-    ) -> SizingResult:
+    ) -> SizingResult | None:
         """ATR-based position sizing.
 
         Uses atr_multiplier × ATR14 as the primary stop distance, bounded to
@@ -99,8 +99,15 @@ class RiskControls:
         tp_distance = max(current_price * take_profit_pct, stop_distance * 2.0)
         take_profit_price = round(current_price + tp_distance, 2)
 
-        # Notional cap
+        # Notional cap — self.equity is available capital (equity minus deployed).
+        # Guard: if no capital is available, refuse to size (returns None to caller).
         max_notional = self.equity * min(signal_position_pct, self.max_position_pct)
+        if max_notional < current_price:
+            log.info(
+                "Size %s: available capital %.2f < price %.2f — skipping order",
+                symbol, self.equity, current_price,
+            )
+            return None
         shares = max(1, int(max_notional / current_price))
         notional = shares * current_price
 

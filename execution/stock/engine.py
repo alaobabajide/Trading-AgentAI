@@ -67,7 +67,16 @@ class StockExecutionEngine:
         if last_equity == 0:
             last_equity = equity or 1.0
         daily_pnl_pct = (equity - last_equity) / last_equity * 100
-        rc = RiskControls(equity, self._max_pos, self._cb_drawdown)
+        # Size against available capital only, not total equity.
+        # Without this, each new order is sized at 5% of the full ~$101K
+        # regardless of how much is already deployed in open positions.
+        try:
+            positions = self._trading.get_all_positions()
+            deployed = sum(abs(float(p.market_value or 0)) for p in positions)
+            available = max(0.0, equity - deployed)
+        except Exception:
+            available = equity
+        rc = RiskControls(available, self._max_pos, self._cb_drawdown)
         rc.check_circuit_breaker(daily_pnl_pct)
         return rc
 
@@ -100,7 +109,7 @@ class StockExecutionEngine:
             log.error("Cannot execute: invalid current price for %s", signal.symbol)
             return None
 
-        sizing: SizingResult = risk.size_position(
+        sizing = risk.size_position(
             symbol=signal.symbol,
             current_price=current_price,
             highs=bars_highs,
@@ -113,6 +122,10 @@ class StockExecutionEngine:
             atr_stop_floor=self._atr_stop_floor,
             atr_stop_cap=self._atr_stop_cap,
         )
+
+        if sizing is None:
+            log.warning("Insufficient available capital to size %s — order skipped", signal.symbol)
+            return None
 
         if sizing.shares == 0:
             log.warning("Sizing resulted in 0 shares for %s", signal.symbol)
