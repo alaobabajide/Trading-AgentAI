@@ -9,6 +9,6 @@ function _runtimeCfg(): Record<string, string> {
 const cfg = _runtimeCfg();
 
 export const supabase = createClient(
-  cfg.supabaseUrl ?? import.meta.env.VITE_SUPABASE_URL ?? "",
-  cfg.supabaseAnonKey ?? import.meta.env.VITE_SUPABASE_ANON_KEY ?? "",
+  cfg.supabaseUrl ?? "",
+  cfg.supabaseAnonKey ?? "",
 );
