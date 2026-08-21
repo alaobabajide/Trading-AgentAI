@@ -40,13 +40,13 @@ BROKER_CATALOG: list[dict] = [
     {
         "id":            "schwab",
         "name":          "Charles Schwab",
-        "tagline":       "Stocks, ETFs & options — thinkorswim platform",
+        "tagline":       "Stocks, ETFs & options — OAuth-connected, live trading only",
         "supports_paper": False,
-        "status":        "coming_soon",
+        "status":        "live",
     },
 ]
 
-LIVE_BROKERS: set[str] = {"alpaca", "tastytrade"}
+LIVE_BROKERS: set[str] = {"alpaca", "tastytrade", "schwab"}
 DEFAULT_BROKER = "alpaca"
 
 # ── File path ────────────────────────────────────────────────────────────────

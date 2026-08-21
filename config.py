@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     # Polygon.io — optional market data upgrade (replaces Alpaca bars when set)
     polygon_api_key: str = Field("", env="POLYGON_API_KEY")
 
+    # Charles Schwab — OAuth 2.0 app credentials (system-level, not per-user)
+    schwab_app_key:      str = Field("", env="SCHWAB_APP_KEY")
+    schwab_app_secret:   str = Field("", env="SCHWAB_APP_SECRET")
+    schwab_redirect_uri: str = Field("", env="SCHWAB_REDIRECT_URI")    # registered in Schwab dev portal
+    schwab_redirect_target: str = Field("", env="SCHWAB_REDIRECT_TARGET")  # dashboard URL to land on after auth
+
     # Sentiment — Finnhub free tier fallback (optional; used when Yahoo RSS < 5 headlines)
     finnhub_api_key: str = Field("", env="FINNHUB_API_KEY")
 

@@ -4,7 +4,7 @@ import {
   HITLMode, UserProfile, DEFAULT_PROFILE,
   MODE_CONFIG, loadProfile, saveProfile,
 } from "../lib/hitl";
-import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload, useWebhookSettings, useBrokerSettings, useTastytradeSettings, TastytradeSavePayload, usePolygonSettings } from "../lib/api";
+import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload, useWebhookSettings, useBrokerSettings, useTastytradeSettings, TastytradeSavePayload, usePolygonSettings, useSchwabSettings } from "../lib/api";
 import { useEffect, useState } from "react";
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
@@ -575,6 +575,81 @@ function TastytradePanel() {
           Live mode — real money. Ensure your tastytrade account has sufficient funds before enabling auto-trading.
         </p>
       )}
+    </div>
+  );
+}
+
+function SchwabPanel() {
+  const schwab = useSchwabSettings();
+
+  const statusText = schwab.settings?.connected
+    ? schwab.settings.refresh_expired
+      ? "Session expired — reconnect"
+      : schwab.settings.access_expired
+        ? "Token refreshing…"
+        : "Connected"
+    : "Not connected";
+
+  const statusColor = schwab.settings?.connected
+    ? schwab.settings.refresh_expired
+      ? "text-red-400"
+      : "text-green-400"
+    : "text-slate-400";
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center gap-3">
+        <span className={`text-sm font-medium ${statusColor}`}>{statusText}</span>
+        {schwab.settings?.account_hash && (
+          <span className="text-xs text-slate-500 font-mono">
+            Account: …{schwab.settings.account_hash.slice(-6)}
+          </span>
+        )}
+      </div>
+
+      <p className="text-xs text-slate-400 leading-relaxed">
+        Schwab uses OAuth — click Connect to authorize in a new tab. No password is ever stored.
+        Access tokens refresh automatically; you'll need to reconnect if you see a session-expired error.
+      </p>
+
+      <div className="flex items-center gap-3 flex-wrap">
+        {!schwab.settings?.connected || schwab.settings?.refresh_expired ? (
+          <button
+            type="button"
+            onClick={schwab.connect}
+            disabled={schwab.connecting}
+            className="px-4 py-2 rounded-xl bg-brand-500/20 border border-brand-400/30 text-sm text-brand-300 hover:bg-brand-500/30 transition-colors disabled:opacity-40"
+          >
+            {schwab.connecting ? "Opening…" : "Connect Schwab"}
+          </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={schwab.refresh}
+              disabled={schwab.loading}
+              className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-sm text-slate-300 hover:bg-white/10 transition-colors disabled:opacity-40"
+            >
+              {schwab.loading ? "Refreshing…" : "Refresh Status"}
+            </button>
+            <button
+              type="button"
+              onClick={schwab.disconnect}
+              disabled={schwab.disconnecting}
+              className="px-4 py-2 rounded-xl bg-red-500/10 border border-red-400/20 text-sm text-red-400 hover:bg-red-500/20 transition-colors disabled:opacity-40"
+            >
+              {schwab.disconnecting ? "Disconnecting…" : "Disconnect"}
+            </button>
+          </>
+        )}
+      </div>
+
+      {schwab.error && <p className="text-xs text-red-400">{schwab.error}</p>}
+
+      <p className="text-[11px] text-orange-400/70">
+        Charles Schwab Individual Trader API is live-only — paper trading is not available.
+        Only use with funds you intend to trade.
+      </p>
     </div>
   );
 }
@@ -1260,6 +1335,17 @@ export function SettingsPage() {
           subtitle="tastytrade credentials — password encrypted at rest, never returned by the API"
         >
           <TastytradePanel />
+        </Section>
+      )}
+
+      {/* ── Charles Schwab Account (shown when schwab is selected) ──────── */}
+      {currentBroker === "schwab" && (
+        <Section
+          icon={<Landmark className="w-4 h-4" />}
+          title="Charles Schwab Account"
+          subtitle="Connect via OAuth — no password stored; tokens encrypted at rest"
+        >
+          <SchwabPanel />
         </Section>
       )}
 

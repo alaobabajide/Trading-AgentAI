@@ -1205,6 +1205,99 @@ export function useTastytradeSettings() {
   return { settings, saving, saved, error, save };
 }
 
+// ── Charles Schwab settings ────────────────────────────────────────────────────
+
+export interface SchwabSettings {
+  connected:       boolean;
+  access_expired:  boolean;
+  refresh_expired: boolean;
+  account_hash:    string;
+}
+
+export async function fetchSchwabSettings(): Promise<SchwabSettings> {
+  const res = await fetch(`${BASE}/schwab-settings`, {
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(`Schwab settings fetch failed (${res.status})`);
+  return safeJson<SchwabSettings>(res);
+}
+
+export async function fetchSchwabAuthUrl(): Promise<{ url: string }> {
+  const res = await fetch(`${BASE}/schwab-auth/url`, {
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(`Could not generate Schwab auth URL (${res.status})`);
+  return safeJson<{ url: string }>(res);
+}
+
+export async function disconnectSchwab(): Promise<{ disconnected: boolean; had_tokens: boolean }> {
+  const res = await fetch(`${BASE}/schwab-settings`, {
+    method: "DELETE",
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(`Schwab disconnect failed (${res.status})`);
+  return safeJson(res);
+}
+
+export function useSchwabSettings() {
+  const [settings,      setSettings]      = useState<SchwabSettings | null>(null);
+  const [loading,       setLoading]       = useState(false);
+  const [connecting,    setConnecting]    = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [error,         setError]         = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    fetchSchwabSettings()
+      .then((s) => { if (active) setSettings(s); })
+      .catch((e) => { if (active) setError((e as Error).message); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  async function connect() {
+    setConnecting(true);
+    setError(null);
+    try {
+      const { url } = await fetchSchwabAuthUrl();
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setConnecting(false);
+    }
+  }
+
+  async function disconnect() {
+    setDisconnecting(true);
+    setError(null);
+    try {
+      await disconnectSchwab();
+      setSettings({ connected: false, access_expired: false, refresh_expired: false, account_hash: "" });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setDisconnecting(false);
+    }
+  }
+
+  async function refresh() {
+    setLoading(true);
+    setError(null);
+    try {
+      const s = await fetchSchwabSettings();
+      setSettings(s);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return { settings, loading, connecting, disconnecting, error, connect, disconnect, refresh };
+}
+
 export function useLlmSettings() {
   const [settings,  setSettings]  = useState<LlmSettings | null>(null);
   const [models,    setModels]    = useState<ModelsResponse | null>(null);

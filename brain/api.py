@@ -47,6 +47,11 @@ _enc_key: bytes | None = None
 _bar_cache: dict[str, tuple[Any, float]] = {}
 _BAR_CACHE_TTL = 300.0  # seconds
 
+# ── Schwab OAuth state nonces — in-memory CSRF protection ─────────────────────
+# Maps state_string → (user_id, expiry_monotonic). Pruned on each new auth request.
+_SCHWAB_OAUTH_STATES: dict[str, tuple[str, float]] = {}
+_SCHWAB_STATE_TTL = 600.0  # 10-minute window to complete OAuth flow
+
 # ── Security helpers ───────────────────────────────────────────────────────────
 
 _SYMBOL_RE = re.compile(r"^[A-Z0-9]{1,20}$")
@@ -433,6 +438,8 @@ _RATE_LIMITS: dict[str, tuple[int, int]] = {
     "/broker-settings":       (20, 60),
     "/tastytrade-settings":   (20, 60),
     "/polygon-settings":      (20, 60),
+    "/schwab-settings":       (20, 60),
+    "/schwab-auth/url":       (10, 60),
 }
 _DEFAULT_RATE = (120, 60)
 
@@ -459,7 +466,7 @@ async def body_size_limit(request: Request, call_next):
 
 
 # ── API key authentication (all routes except /health and /) ─────────────────
-_PUBLIC_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc"}
+_PUBLIC_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc", "/schwab-auth/callback"}
 
 # ── Supabase JWT validation (lazy init, cached results) ───────────────────────
 _supabase_admin = None
@@ -702,10 +709,88 @@ def _resolve_broker(user_id: str | None, cfg):
             paper=creds.paper_mode,
         )
 
+    if broker_type == "schwab":
+        enc_key = _get_enc_key()
+        from brain.schwab_creds import load_schwab_tokens, update_schwab_access_token
+        tokens = load_schwab_tokens(user_id, enc_key)
+        if tokens is None or not tokens.configured:
+            raise HTTPException(400, "Schwab account not connected — go to Settings → Charles Schwab and click Connect")
+        if tokens.refresh_expired:
+            raise HTTPException(401, "Schwab refresh token expired — reconnect your account in Settings → Charles Schwab")
+
+        # Pre-flight: refresh access token if it expires within the next 2 minutes
+        if tokens.access_expired or (_time.time() + 120 >= tokens.access_token_exp):
+            tokens = _schwab_refresh_access_token(user_id, cfg, enc_key, tokens.refresh_token)
+
+        from broker.adapters.schwab import SchwabBrokerAdapter
+        return SchwabBrokerAdapter(
+            access_token=tokens.access_token,
+            account_hash=tokens.account_hash or None,
+        )
+
     # Default path: Alpaca
     ak, sk, base_url, _ = _resolve_alpaca_creds(user_id, cfg)
     from broker.adapters.alpaca import AlpacaBrokerAdapter
     return AlpacaBrokerAdapter(ak, sk, base_url)
+
+
+def _schwab_refresh_access_token(user_id: str, cfg, enc_key: bytes, refresh_token: str):
+    """Exchange a refresh token for a new Schwab access token.
+
+    Persists the new token to the cred store and returns an updated
+    EffectiveSchwabTokens. Raises HTTPException 401 if the refresh fails.
+    """
+    import base64
+    import httpx as _httpx
+    from brain.schwab_creds import update_schwab_access_token, load_schwab_tokens
+
+    app_key    = getattr(cfg, "schwab_app_key",    "") or os.environ.get("SCHWAB_APP_KEY",    "")
+    app_secret = getattr(cfg, "schwab_app_secret", "") or os.environ.get("SCHWAB_APP_SECRET", "")
+    if not app_key or not app_secret:
+        raise HTTPException(503, "Schwab app credentials not configured — set SCHWAB_APP_KEY and SCHWAB_APP_SECRET in Railway")
+
+    credentials = base64.b64encode(f"{app_key}:{app_secret}".encode()).decode()
+    try:
+        resp = _httpx.post(
+            "https://api.schwabapi.com/v1/oauth/token",
+            headers={
+                "Authorization": f"Basic {credentials}",
+                "Content-Type":  "application/x-www-form-urlencoded",
+            },
+            data={
+                "grant_type":    "refresh_token",
+                "refresh_token": refresh_token,
+            },
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        token_data = resp.json()
+    except Exception as exc:
+        log.warning("Schwab token refresh failed for user %s: %s", user_id[:8], exc)
+        raise HTTPException(401, "Schwab session expired — reconnect your account in Settings → Charles Schwab")
+
+    new_access  = token_data.get("access_token", "")
+    expires_in  = int(token_data.get("expires_in", 1800))
+    new_exp     = _time.time() + expires_in
+
+    # Also update refresh token if Schwab rotated it
+    new_refresh = token_data.get("refresh_token", "")
+    if new_refresh and new_refresh != refresh_token:
+        from brain.schwab_creds import save_schwab_tokens, load_schwab_tokens as _lst
+        existing = _lst(user_id, enc_key)
+        refresh_exp = existing.refresh_token_exp if existing else (_time.time() + 7 * 86400)
+        save_schwab_tokens(
+            user_id, enc_key,
+            access_token=new_access,
+            refresh_token=new_refresh,
+            access_token_exp=new_exp,
+            refresh_token_exp=refresh_exp,
+            account_hash=existing.account_hash if existing else "",
+        )
+    else:
+        update_schwab_access_token(user_id, enc_key, new_access, new_exp)
+
+    return load_schwab_tokens(user_id, enc_key)
 
 
 class AlpacaSettingsPayload(BaseModel):
@@ -1319,6 +1404,188 @@ def delete_polygon_settings(request: Request):
     from brain.polygon_creds import delete_user_polygon_key
     existed = delete_user_polygon_key(user_id)
     return {"deleted": True, "had_key": existed}
+
+
+# ── Charles Schwab OAuth 2.0 endpoints ────────────────────────────────────────
+
+@app.get("/schwab-auth/url")
+def schwab_auth_url(request: Request):
+    """Generate a Schwab OAuth authorization URL for this user.
+
+    Returns: { url: string } — the user should open this in a new tab.
+    Requires JWT auth. Rate-limited.
+    """
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required")
+
+    cfg = _get_settings()
+    app_key      = getattr(cfg, "schwab_app_key",      "") or os.environ.get("SCHWAB_APP_KEY",      "")
+    redirect_uri = getattr(cfg, "schwab_redirect_uri", "") or os.environ.get("SCHWAB_REDIRECT_URI", "")
+    if not app_key:
+        raise HTTPException(503, "Schwab integration not configured — contact the administrator")
+    if not redirect_uri:
+        raise HTTPException(503, "SCHWAB_REDIRECT_URI not configured")
+
+    import secrets
+    import urllib.parse
+
+    # Prune expired states
+    now = _time.monotonic()
+    expired = [k for k, (_, exp) in _SCHWAB_OAUTH_STATES.items() if now >= exp]
+    for k in expired:
+        del _SCHWAB_OAUTH_STATES[k]
+
+    nonce        = secrets.token_urlsafe(24)
+    state        = f"{user_id}:{nonce}"
+    _SCHWAB_OAUTH_STATES[state] = (user_id, now + _SCHWAB_STATE_TTL)
+
+    params = {
+        "response_type": "code",
+        "client_id":     app_key,
+        "redirect_uri":  redirect_uri,
+        "state":         state,
+        "scope":         "readonly",
+    }
+    url = "https://api.schwabapi.com/v1/oauth/authorize?" + urllib.parse.urlencode(params)
+    return {"url": url}
+
+
+@app.get("/schwab-auth/callback")
+async def schwab_auth_callback(request: Request):
+    """Browser redirect target after Schwab OAuth.
+
+    Schwab redirects here with ?code=...&state=...
+    We exchange the code for tokens, persist them, then redirect the user to the dashboard.
+    This endpoint is NOT JWT-authenticated — it is called by Schwab's servers on behalf
+    of the browser. CSRF protection is via the state nonce.
+    """
+    from fastapi.responses import RedirectResponse
+
+    params = dict(request.query_params)
+    code   = params.get("code",  "")
+    state  = params.get("state", "")
+    error  = params.get("error", "")
+
+    cfg             = _get_settings()
+    redirect_target = getattr(cfg, "schwab_redirect_target", "") or os.environ.get("SCHWAB_REDIRECT_TARGET", "/")
+
+    def _fail(reason: str):
+        import urllib.parse
+        dest = redirect_target + ("&" if "?" in redirect_target else "?") + urllib.parse.urlencode({"schwab_error": reason})
+        return RedirectResponse(dest)
+
+    if error:
+        return _fail(f"OAuth denied: {error}")
+    if not code or not state:
+        return _fail("Missing code or state parameter")
+
+    # CSRF validation
+    now = _time.monotonic()
+    if state not in _SCHWAB_OAUTH_STATES:
+        return _fail("Invalid or expired state — please try connecting again")
+    user_id, expiry = _SCHWAB_OAUTH_STATES.pop(state)
+    if now >= expiry:
+        return _fail("OAuth session timed out — please try connecting again")
+
+    # Exchange code for tokens
+    import base64
+    import httpx as _httpx
+
+    app_key      = getattr(cfg, "schwab_app_key",      "") or os.environ.get("SCHWAB_APP_KEY",      "")
+    app_secret   = getattr(cfg, "schwab_app_secret",   "") or os.environ.get("SCHWAB_APP_SECRET",   "")
+    redirect_uri = getattr(cfg, "schwab_redirect_uri", "") or os.environ.get("SCHWAB_REDIRECT_URI", "")
+    credentials  = base64.b64encode(f"{app_key}:{app_secret}".encode()).decode()
+
+    try:
+        token_resp = _httpx.post(
+            "https://api.schwabapi.com/v1/oauth/token",
+            headers={
+                "Authorization": f"Basic {credentials}",
+                "Content-Type":  "application/x-www-form-urlencoded",
+            },
+            data={
+                "grant_type":   "authorization_code",
+                "code":         code,
+                "redirect_uri": redirect_uri,
+            },
+            timeout=15.0,
+        )
+        token_resp.raise_for_status()
+        token_data = token_resp.json()
+    except Exception as exc:
+        log.error("Schwab token exchange failed for user %s: %s", user_id[:8], exc)
+        return _fail("Token exchange failed — please try again")
+
+    access_token  = token_data.get("access_token",  "")
+    refresh_token = token_data.get("refresh_token", "")
+    access_exp    = _time.time() + int(token_data.get("expires_in", 1800))
+    refresh_exp   = _time.time() + int(token_data.get("refresh_token_expires_in", 7 * 86400))
+
+    if not access_token or not refresh_token:
+        return _fail("Incomplete token response from Schwab")
+
+    # Fetch account hash from the accounts endpoint
+    account_hash = ""
+    try:
+        acct_resp = _httpx.get(
+            "https://api.schwabapi.com/trader/v1/accounts",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=15.0,
+        )
+        acct_resp.raise_for_status()
+        accounts = acct_resp.json() if isinstance(acct_resp.json(), list) else []
+        if accounts:
+            account_hash = accounts[0].get("hashValue") or accounts[0].get("encryptedId") or ""
+    except Exception as exc:
+        log.warning("Schwab account hash fetch failed for user %s: %s", user_id[:8], exc)
+
+    enc_key = _get_enc_key()
+    from brain.schwab_creds import save_schwab_tokens
+    save_schwab_tokens(
+        user_id, enc_key,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        access_token_exp=access_exp,
+        refresh_token_exp=refresh_exp,
+        account_hash=account_hash,
+    )
+    log.info("Schwab OAuth complete for user %s — account hash: %s", user_id[:8], account_hash[:8] if account_hash else "none")
+
+    dest = redirect_target + ("&" if "?" in redirect_target else "?") + "schwab_connected=1"
+    return RedirectResponse(dest)
+
+
+@app.get("/schwab-settings")
+def get_schwab_settings(request: Request):
+    """Return Schwab connection status for this user (no token values ever returned)."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for Schwab settings")
+
+    enc_key = _get_enc_key()
+    from brain.schwab_creds import load_schwab_tokens
+    tokens = load_schwab_tokens(user_id, enc_key)
+    if tokens is None or not tokens.configured:
+        return {"connected": False, "access_expired": False, "refresh_expired": False, "account_hash": ""}
+
+    return {
+        "connected":      True,
+        "access_expired": tokens.access_expired,
+        "refresh_expired": tokens.refresh_expired,
+        "account_hash":   tokens.account_hash,  # not sensitive — it's Schwab's own obfuscated ID
+    }
+
+
+@app.delete("/schwab-settings")
+def delete_schwab_settings(request: Request):
+    """Disconnect Schwab account — removes stored tokens for this user."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for Schwab settings")
+    from brain.schwab_creds import delete_schwab_tokens
+    existed = delete_schwab_tokens(user_id)
+    return {"disconnected": True, "had_tokens": existed}
 
 
 @app.get("/risk-settings")
