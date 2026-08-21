@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     schwab_redirect_uri: str = Field("", env="SCHWAB_REDIRECT_URI")    # registered in Schwab dev portal
     schwab_redirect_target: str = Field("", env="SCHWAB_REDIRECT_TARGET")  # dashboard URL to land on after auth
 
+    # TradeStation — OAuth 2.0 app credentials (system-level, not per-user)
+    tradestation_client_id:      str = Field("", env="TRADESTATION_CLIENT_ID")
+    tradestation_client_secret:  str = Field("", env="TRADESTATION_CLIENT_SECRET")
+    tradestation_redirect_uri:   str = Field("", env="TRADESTATION_REDIRECT_URI")
+    tradestation_redirect_target: str = Field("", env="TRADESTATION_REDIRECT_TARGET")
+
     # Sentiment — Finnhub free tier fallback (optional; used when Yahoo RSS < 5 headlines)
     finnhub_api_key: str = Field("", env="FINNHUB_API_KEY")
 

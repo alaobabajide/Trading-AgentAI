@@ -44,9 +44,30 @@ BROKER_CATALOG: list[dict] = [
         "supports_paper": False,
         "status":        "live",
     },
+    {
+        "id":            "kraken",
+        "name":          "Kraken",
+        "tagline":       "Crypto spot trading — BTC, ETH, SOL and 200+ pairs, live only",
+        "supports_paper": False,
+        "status":        "live",
+    },
+    {
+        "id":            "coinbase",
+        "name":          "Coinbase Advanced Trade",
+        "tagline":       "Crypto — US-regulated exchange, CDP API key authentication",
+        "supports_paper": False,
+        "status":        "live",
+    },
+    {
+        "id":            "tradestation",
+        "name":          "TradeStation",
+        "tagline":       "US stocks, ETFs & futures — OAuth-connected, SIM paper trading supported",
+        "supports_paper": True,
+        "status":        "live",
+    },
 ]
 
-LIVE_BROKERS: set[str] = {"alpaca", "tastytrade", "schwab", "ibkr"}
+LIVE_BROKERS: set[str] = {"alpaca", "tastytrade", "schwab", "ibkr", "kraken", "coinbase", "tradestation"}
 DEFAULT_BROKER = "alpaca"
 
 # ── File path ────────────────────────────────────────────────────────────────

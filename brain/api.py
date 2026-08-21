@@ -443,7 +443,11 @@ _RATE_LIMITS: dict[str, tuple[int, int]] = {
     "/ibkr-settings":         (20, 60),
     "/orders/history":        (30, 60),
     "/orders/history/export": (5,  60),
-    "/orders/history/years":  (20, 60),
+    "/orders/history/years":      (20, 60),
+    "/kraken-settings":           (20, 60),
+    "/coinbase-settings":         (20, 60),
+    "/tradestation-settings":     (20, 60),
+    "/tradestation-auth/url":     (10, 60),
 }
 _DEFAULT_RATE = (120, 60)
 
@@ -470,7 +474,7 @@ async def body_size_limit(request: Request, call_next):
 
 
 # ── API key authentication (all routes except /health and /) ─────────────────
-_PUBLIC_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc", "/schwab-auth/callback"}
+_PUBLIC_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc", "/schwab-auth/callback", "/tradestation-auth/callback"}
 
 # ── Supabase JWT validation (lazy init, cached results) ───────────────────────
 _supabase_admin = None
@@ -746,6 +750,37 @@ def _resolve_broker(user_id: str | None, cfg):
             paper=s.paper_mode,
         )
 
+    if broker_type == "kraken":
+        enc_key = _get_enc_key()
+        from brain.kraken_creds import get_effective_kraken_creds
+        creds = get_effective_kraken_creds(user_id, enc_key)
+        if not creds.configured:
+            raise HTTPException(400, "Kraken API credentials not configured — save them in Settings → Kraken")
+        from broker.adapters.kraken import KrakenBrokerAdapter
+        return KrakenBrokerAdapter(creds.api_key, creds.api_secret)
+
+    if broker_type == "coinbase":
+        enc_key = _get_enc_key()
+        from brain.coinbase_creds import get_effective_coinbase_creds
+        creds = get_effective_coinbase_creds(user_id, enc_key)
+        if not creds.configured:
+            raise HTTPException(400, "Coinbase credentials not configured — save them in Settings → Coinbase Advanced Trade")
+        from broker.adapters.coinbase import CoinbaseBrokerAdapter
+        return CoinbaseBrokerAdapter(creds.api_key_name, creds.private_key)
+
+    if broker_type == "tradestation":
+        enc_key = _get_enc_key()
+        from brain.tradestation_creds import load_ts_tokens
+        tokens = load_ts_tokens(user_id, enc_key)
+        if tokens is None or not tokens.configured:
+            raise HTTPException(400, "TradeStation not connected — go to Settings → TradeStation and click Connect")
+        if tokens.refresh_expired:
+            raise HTTPException(401, "TradeStation refresh token expired — reconnect in Settings → TradeStation")
+        if tokens.access_expired or (_time.time() + 120 >= tokens.access_token_exp):
+            tokens = _ts_refresh_access_token(user_id, cfg, enc_key, tokens.refresh_token)
+        from broker.adapters.tradestation import TradeStationBrokerAdapter
+        return TradeStationBrokerAdapter(tokens.access_token, tokens.account_number, tokens.paper_mode)
+
     # Default path: Alpaca
     ak, sk, base_url, _ = _resolve_alpaca_creds(user_id, cfg)
     from broker.adapters.alpaca import AlpacaBrokerAdapter
@@ -809,6 +844,46 @@ def _schwab_refresh_access_token(user_id: str, cfg, enc_key: bytes, refresh_toke
         update_schwab_access_token(user_id, enc_key, new_access, new_exp)
 
     return load_schwab_tokens(user_id, enc_key)
+
+
+def _ts_refresh_access_token(user_id: str, cfg, enc_key: bytes, refresh_token: str):
+    """Exchange a TradeStation refresh token for a new access token."""
+    import httpx as _httpx
+    from brain.tradestation_creds import update_ts_access_token, load_ts_tokens
+
+    client_id     = getattr(cfg, "tradestation_client_id",     "") or os.environ.get("TRADESTATION_CLIENT_ID",     "")
+    client_secret = getattr(cfg, "tradestation_client_secret", "") or os.environ.get("TRADESTATION_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        raise HTTPException(503, "TradeStation app credentials not configured — set TRADESTATION_CLIENT_ID and TRADESTATION_CLIENT_SECRET in Railway")
+
+    try:
+        resp = _httpx.post(
+            "https://signin.tradestation.com/oauth/token",
+            data={
+                "grant_type":    "refresh_token",
+                "client_id":     client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        token_data = resp.json()
+    except Exception as exc:
+        log.warning("TradeStation token refresh failed for %s: %s", user_id[:8], exc)
+        raise HTTPException(401, "TradeStation session expired — reconnect your account in Settings → TradeStation")
+
+    new_access = token_data.get("access_token", "")
+    expires_in = int(token_data.get("expires_in", 1200))  # TS access tokens = 20 min
+    new_exp    = _time.time() + expires_in
+    update_ts_access_token(user_id, enc_key, new_access, new_exp)
+    return load_ts_tokens(user_id, enc_key)
+
+
+# ── TradeStation OAuth state nonces (in-memory, TTL 10 min) ──────────────────
+_TS_OAUTH_STATES: dict[str, tuple[str, float]] = {}  # state → (user_id, exp)
+_TS_STATE_TTL = 600.0
 
 
 class AlpacaSettingsPayload(BaseModel):
@@ -2339,6 +2414,224 @@ def get_orders(request: Request, status: str = "open"):
 
 
 # ── Order history (persistent audit store) ────────────────────────────────────
+
+# ── Kraken endpoints ─────────────────────────────────────────────────────────
+
+class KrakenSettingsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    api_key:    str = ""
+    api_secret: str = ""
+
+
+@app.get("/kraken-settings")
+def get_kraken_settings(request: Request):
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT required")
+    from brain.kraken_creds import load_kraken_settings
+    row = load_kraken_settings(user_id)
+    configured = bool(row.get("api_key_enc") and row.get("api_secret_enc"))
+    # Return a non-secret prefix of the key name for display
+    raw_key = row.get("api_key_enc", "")
+    return {"configured": configured, "key_prefix": raw_key[:4] + "…" if configured else ""}
+
+
+@app.post("/kraken-settings")
+def save_kraken_settings_endpoint(request: Request, payload: KrakenSettingsPayload):
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT required")
+    if not payload.api_key and not payload.api_secret:
+        raise HTTPException(400, "Provide at least one of api_key or api_secret")
+    enc_key = _get_enc_key()
+    from brain.kraken_creds import save_kraken_settings
+    save_kraken_settings(user_id, payload.api_key, payload.api_secret, enc_key)
+    return {"ok": True}
+
+
+@app.delete("/kraken-settings")
+def delete_kraken_settings_endpoint(request: Request):
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT required")
+    from brain.kraken_creds import delete_kraken_settings
+    delete_kraken_settings(user_id)
+    return {"ok": True}
+
+
+# ── Coinbase endpoints ────────────────────────────────────────────────────────
+
+class CoinbaseSettingsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    api_key_name: str = ""
+    private_key:  str = ""
+
+
+@app.get("/coinbase-settings")
+def get_coinbase_settings(request: Request):
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT required")
+    from brain.coinbase_creds import load_coinbase_settings
+    row = load_coinbase_settings(user_id)
+    configured = bool(row.get("api_key_name") and row.get("private_key_enc"))
+    key_name   = row.get("api_key_name", "")
+    return {"configured": configured, "api_key_name": key_name if configured else ""}
+
+
+@app.post("/coinbase-settings")
+def save_coinbase_settings_endpoint(request: Request, payload: CoinbaseSettingsPayload):
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT required")
+    if not payload.api_key_name and not payload.private_key:
+        raise HTTPException(400, "Provide api_key_name and private_key")
+    enc_key = _get_enc_key()
+    from brain.coinbase_creds import save_coinbase_settings
+    save_coinbase_settings(user_id, payload.api_key_name, payload.private_key, enc_key)
+    return {"ok": True}
+
+
+@app.delete("/coinbase-settings")
+def delete_coinbase_settings_endpoint(request: Request):
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT required")
+    from brain.coinbase_creds import delete_coinbase_settings
+    delete_coinbase_settings(user_id)
+    return {"ok": True}
+
+
+# ── TradeStation OAuth + settings endpoints ──────────────────────────────────
+
+@app.get("/tradestation-auth/url")
+def get_tradestation_auth_url(request: Request):
+    """Return a one-time OAuth URL for the user to authorise TradeStation."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT required")
+    import secrets
+    cfg = get_settings()
+    client_id    = getattr(cfg, "tradestation_client_id",   "") or os.environ.get("TRADESTATION_CLIENT_ID",   "")
+    redirect_uri = getattr(cfg, "tradestation_redirect_uri","") or os.environ.get("TRADESTATION_REDIRECT_URI","")
+    if not client_id or not redirect_uri:
+        raise HTTPException(503, "TradeStation app not configured — set TRADESTATION_CLIENT_ID and TRADESTATION_REDIRECT_URI in Railway")
+
+    state = secrets.token_urlsafe(32)
+    _TS_OAUTH_STATES[state] = (user_id, _time.time() + _TS_STATE_TTL)
+
+    import urllib.parse as _up
+    params = _up.urlencode({
+        "response_type": "code",
+        "client_id":     client_id,
+        "redirect_uri":  redirect_uri,
+        "audience":      "https://api.tradestation.com",
+        "scope":         "openid profile offline_access MarketData ReadAccount Trade",
+        "state":         state,
+    })
+    return {"url": f"https://signin.tradestation.com/authorize?{params}"}
+
+
+@app.get("/tradestation-auth/callback")
+def tradestation_auth_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+    """OAuth callback — exchanges code for tokens and redirects to the dashboard."""
+    from fastapi.responses import RedirectResponse
+    cfg = get_settings()
+    redirect_target = (
+        getattr(cfg, "tradestation_redirect_target", "")
+        or os.environ.get("TRADESTATION_REDIRECT_TARGET", "/")
+    )
+    if error:
+        return RedirectResponse(url=f"{redirect_target}?ts_error={error}")
+
+    entry = _TS_OAUTH_STATES.pop(state, None)
+    if not entry:
+        return RedirectResponse(url=f"{redirect_target}?ts_error=invalid_state")
+    user_id, exp = entry
+    if _time.time() > exp:
+        return RedirectResponse(url=f"{redirect_target}?ts_error=state_expired")
+
+    client_id     = getattr(cfg, "tradestation_client_id",     "") or os.environ.get("TRADESTATION_CLIENT_ID",     "")
+    client_secret = getattr(cfg, "tradestation_client_secret", "") or os.environ.get("TRADESTATION_CLIENT_SECRET", "")
+    redirect_uri  = getattr(cfg, "tradestation_redirect_uri",  "") or os.environ.get("TRADESTATION_REDIRECT_URI",  "")
+
+    import httpx as _hx
+    try:
+        resp = _hx.post(
+            "https://signin.tradestation.com/oauth/token",
+            data={
+                "grant_type":    "authorization_code",
+                "client_id":     client_id,
+                "client_secret": client_secret,
+                "code":          code,
+                "redirect_uri":  redirect_uri,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        td = resp.json()
+    except Exception as exc:
+        log.warning("TradeStation OAuth callback failed: %s", exc)
+        return RedirectResponse(url=f"{redirect_target}?ts_error=token_exchange_failed")
+
+    enc_key    = _get_enc_key()
+    expires_in = int(td.get("expires_in", 1200))
+    from brain.tradestation_creds import save_ts_tokens
+    save_ts_tokens(
+        user_id, enc_key,
+        access_token=td.get("access_token", ""),
+        refresh_token=td.get("refresh_token", ""),
+        access_token_exp=_time.time() + expires_in,
+        refresh_token_exp=_time.time() + 365 * 86400,  # TS refresh tokens don't expire by default
+    )
+    return RedirectResponse(url=f"{redirect_target}?ts_connected=1")
+
+
+@app.get("/tradestation-settings")
+def get_tradestation_settings(request: Request):
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT required")
+    enc_key = _get_enc_key()
+    from brain.tradestation_creds import load_ts_tokens
+    tokens = load_ts_tokens(user_id, enc_key)
+    if tokens is None:
+        return {"connected": False, "account_number": "", "paper_mode": False}
+    return {
+        "connected":      tokens.configured,
+        "account_number": tokens.account_number,
+        "paper_mode":     tokens.paper_mode,
+        "access_expires": tokens.access_token_exp,
+    }
+
+
+class TSAccountPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    account_number: str
+
+
+@app.post("/tradestation-settings/account")
+def set_tradestation_account(request: Request, payload: TSAccountPayload):
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT required")
+    if not payload.account_number.strip():
+        raise HTTPException(400, "account_number is required")
+    from brain.tradestation_creds import save_ts_account
+    save_ts_account(user_id, payload.account_number.strip())
+    return {"ok": True}
+
+
+@app.delete("/tradestation-settings")
+def delete_tradestation_settings(request: Request):
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT required")
+    from brain.tradestation_creds import delete_ts_tokens
+    delete_ts_tokens(user_id)
+    return {"ok": True}
+
 
 @app.get("/orders/history")
 def get_order_history(request: Request, days: int = 365):

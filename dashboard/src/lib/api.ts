@@ -1510,6 +1510,206 @@ export function useIBKRSettings() {
   return { settings, draft, saving, saved, dirty, error, update, save, remove };
 }
 
+// ── Kraken ────────────────────────────────────────────────────────────────────
+
+export interface KrakenSettings {
+  configured:  boolean;
+  key_prefix:  string;
+}
+
+export async function fetchKrakenSettings(): Promise<KrakenSettings> {
+  const res = await fetch(`${BASE}/kraken-settings`, { headers: apiHeaders() });
+  if (!res.ok) throw new Error(`Kraken settings: ${res.status}`);
+  return safeJson<KrakenSettings>(res);
+}
+
+export async function saveKrakenSettings(api_key: string, api_secret: string): Promise<void> {
+  const res = await fetch(`${BASE}/kraken-settings`, {
+    method: "POST", headers: apiHeaders(),
+    body: JSON.stringify({ api_key, api_secret }),
+  });
+  if (!res.ok) throw new Error(`Save failed: ${res.status}`);
+}
+
+export async function deleteKrakenSettings(): Promise<void> {
+  const res = await fetch(`${BASE}/kraken-settings`, { method: "DELETE", headers: apiHeaders() });
+  if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+}
+
+export function useKrakenSettings() {
+  const [settings, setSettings] = useState<KrakenSettings | null>(null);
+  const [apiKey,   setApiKey]   = useState("");
+  const [apiSecret,setApiSecret]= useState("");
+  const [saving,   setSaving]   = useState(false);
+  const [saved,    setSaved]    = useState(false);
+  const [error,    setError]    = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchKrakenSettings().then(setSettings).catch((e) => setError((e as Error).message));
+  }, []);
+
+  async function save() {
+    setSaving(true); setSaved(false); setError(null);
+    try {
+      await saveKrakenSettings(apiKey, apiSecret);
+      const s = await fetchKrakenSettings();
+      setSettings(s); setSaved(true);
+      setApiKey(""); setApiSecret("");
+    } catch (e) { setError((e as Error).message); }
+    finally { setSaving(false); }
+  }
+
+  async function remove() {
+    setSaving(true); setError(null);
+    try {
+      await deleteKrakenSettings();
+      setSettings({ configured: false, key_prefix: "" });
+    } catch (e) { setError((e as Error).message); }
+    finally { setSaving(false); }
+  }
+
+  return { settings, apiKey, setApiKey, apiSecret, setApiSecret, saving, saved, error, save, remove };
+}
+
+// ── Coinbase Advanced Trade ───────────────────────────────────────────────────
+
+export interface CoinbaseSettings {
+  configured:   boolean;
+  api_key_name: string;
+}
+
+export async function fetchCoinbaseSettings(): Promise<CoinbaseSettings> {
+  const res = await fetch(`${BASE}/coinbase-settings`, { headers: apiHeaders() });
+  if (!res.ok) throw new Error(`Coinbase settings: ${res.status}`);
+  return safeJson<CoinbaseSettings>(res);
+}
+
+export async function saveCoinbaseSettings(api_key_name: string, private_key: string): Promise<void> {
+  const res = await fetch(`${BASE}/coinbase-settings`, {
+    method: "POST", headers: apiHeaders(),
+    body: JSON.stringify({ api_key_name, private_key }),
+  });
+  if (!res.ok) throw new Error(`Save failed: ${res.status}`);
+}
+
+export async function deleteCoinbaseSettings(): Promise<void> {
+  const res = await fetch(`${BASE}/coinbase-settings`, { method: "DELETE", headers: apiHeaders() });
+  if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+}
+
+export function useCoinbaseSettings() {
+  const [settings,   setSettings]   = useState<CoinbaseSettings | null>(null);
+  const [keyName,    setKeyName]    = useState("");
+  const [privateKey, setPrivateKey] = useState("");
+  const [saving,     setSaving]     = useState(false);
+  const [saved,      setSaved]      = useState(false);
+  const [error,      setError]      = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchCoinbaseSettings().then(setSettings).catch((e) => setError((e as Error).message));
+  }, []);
+
+  async function save() {
+    setSaving(true); setSaved(false); setError(null);
+    try {
+      await saveCoinbaseSettings(keyName, privateKey);
+      const s = await fetchCoinbaseSettings();
+      setSettings(s); setSaved(true);
+      setKeyName(""); setPrivateKey("");
+    } catch (e) { setError((e as Error).message); }
+    finally { setSaving(false); }
+  }
+
+  async function remove() {
+    setSaving(true); setError(null);
+    try {
+      await deleteCoinbaseSettings();
+      setSettings({ configured: false, api_key_name: "" });
+    } catch (e) { setError((e as Error).message); }
+    finally { setSaving(false); }
+  }
+
+  return { settings, keyName, setKeyName, privateKey, setPrivateKey, saving, saved, error, save, remove };
+}
+
+// ── TradeStation ──────────────────────────────────────────────────────────────
+
+export interface TradeStationSettings {
+  connected:      boolean;
+  account_number: string;
+  paper_mode:     boolean;
+  access_expires?: number;
+}
+
+export async function fetchTradeStationSettings(): Promise<TradeStationSettings> {
+  const res = await fetch(`${BASE}/tradestation-settings`, { headers: apiHeaders() });
+  if (!res.ok) throw new Error(`TradeStation settings: ${res.status}`);
+  return safeJson<TradeStationSettings>(res);
+}
+
+export async function fetchTradeStationAuthUrl(): Promise<string> {
+  const res = await fetch(`${BASE}/tradestation-auth/url`, { headers: apiHeaders() });
+  if (!res.ok) throw new Error(`Auth URL: ${res.status}`);
+  const data = await safeJson<{ url: string }>(res);
+  return data.url;
+}
+
+export async function setTradeStationAccount(account_number: string): Promise<void> {
+  const res = await fetch(`${BASE}/tradestation-settings/account`, {
+    method: "POST", headers: apiHeaders(),
+    body: JSON.stringify({ account_number }),
+  });
+  if (!res.ok) throw new Error(`Account save failed: ${res.status}`);
+}
+
+export async function deleteTradeStationSettings(): Promise<void> {
+  const res = await fetch(`${BASE}/tradestation-settings`, { method: "DELETE", headers: apiHeaders() });
+  if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+}
+
+export function useTradeStationSettings() {
+  const [settings,       setSettings]       = useState<TradeStationSettings | null>(null);
+  const [accountDraft,   setAccountDraft]   = useState("");
+  const [saving,         setSaving]         = useState(false);
+  const [saved,          setSaved]          = useState(false);
+  const [error,          setError]          = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchTradeStationSettings()
+      .then((s) => { setSettings(s); setAccountDraft(s.account_number ?? ""); })
+      .catch((e) => setError((e as Error).message));
+  }, []);
+
+  async function connect() {
+    try {
+      const url = await fetchTradeStationAuthUrl();
+      window.location.href = url;
+    } catch (e) { setError((e as Error).message); }
+  }
+
+  async function saveAccount() {
+    setSaving(true); setSaved(false); setError(null);
+    try {
+      await setTradeStationAccount(accountDraft);
+      const s = await fetchTradeStationSettings();
+      setSettings(s); setSaved(true);
+    } catch (e) { setError((e as Error).message); }
+    finally { setSaving(false); }
+  }
+
+  async function disconnect() {
+    setSaving(true); setError(null);
+    try {
+      await deleteTradeStationSettings();
+      setSettings({ connected: false, account_number: "", paper_mode: false });
+      setAccountDraft("");
+    } catch (e) { setError((e as Error).message); }
+    finally { setSaving(false); }
+  }
+
+  return { settings, accountDraft, setAccountDraft, saving, saved, error, connect, saveAccount, disconnect };
+}
+
 export function useLlmSettings() {
   const [settings,  setSettings]  = useState<LlmSettings | null>(null);
   const [models,    setModels]    = useState<ModelsResponse | null>(null);

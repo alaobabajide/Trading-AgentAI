@@ -4,7 +4,7 @@ import {
   HITLMode, UserProfile, DEFAULT_PROFILE,
   MODE_CONFIG, loadProfile, saveProfile,
 } from "../lib/hitl";
-import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload, useWebhookSettings, useBrokerSettings, useTastytradeSettings, TastytradeSavePayload, usePolygonSettings, useSchwabSettings, useIBKRSettings } from "../lib/api";
+import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload, useWebhookSettings, useBrokerSettings, useTastytradeSettings, TastytradeSavePayload, usePolygonSettings, useSchwabSettings, useIBKRSettings, useKrakenSettings, useCoinbaseSettings, useTradeStationSettings } from "../lib/api";
 import { useEffect, useState } from "react";
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
@@ -1367,6 +1367,199 @@ function EngineConfigPanel() {
   );
 }
 
+// ── Kraken panel ─────────────────────────────────────────────────────────────
+
+function KrakenPanel() {
+  const k = useKrakenSettings();
+  return (
+    <div className="space-y-4">
+      <SectionNote variant="warn">
+        Kraken spot operates in <strong>live mode only</strong> — paper trading is not supported.
+      </SectionNote>
+      {k.settings?.configured && (
+        <div className="flex items-center gap-2 text-xs text-emerald-400 font-mono">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          API key configured · prefix: {k.settings.key_prefix}
+        </div>
+      )}
+      <div className="space-y-3">
+        <div className="space-y-1">
+          <label className="text-xs text-slate-400 font-mono">API Key</label>
+          <input
+            type="password"
+            placeholder={k.settings?.configured ? "Leave blank to keep existing" : "Kraken API key"}
+            value={k.apiKey}
+            onChange={(e) => k.setApiKey(e.target.value)}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-brand-500/40"
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs text-slate-400 font-mono">API Secret</label>
+          <input
+            type="password"
+            placeholder={k.settings?.configured ? "Leave blank to keep existing" : "Base64-encoded secret"}
+            value={k.apiSecret}
+            onChange={(e) => k.setApiSecret(e.target.value)}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-brand-500/40"
+          />
+        </div>
+      </div>
+      {k.error && <p className="text-xs text-red-400 font-mono">{k.error}</p>}
+      {k.saved && <p className="text-xs text-emerald-400 font-mono">Saved.</p>}
+      <div className="flex gap-2">
+        <button
+          onClick={k.save}
+          disabled={k.saving || (!k.apiKey && !k.apiSecret)}
+          className="flex-1 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-40 text-sm font-semibold transition-colors"
+        >
+          {k.saving ? "Saving…" : "Save credentials"}
+        </button>
+        {k.settings?.configured && (
+          <button
+            onClick={k.remove}
+            disabled={k.saving}
+            className="px-4 py-2 rounded-xl border border-red-500/30 text-red-400 hover:bg-red-500/10 text-sm transition-colors disabled:opacity-40"
+          >
+            Disconnect
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Coinbase panel ────────────────────────────────────────────────────────────
+
+function CoinbasePanel() {
+  const cb = useCoinbaseSettings();
+  return (
+    <div className="space-y-4">
+      <SectionNote variant="warn">
+        Coinbase Advanced Trade operates in <strong>live mode only</strong>. Use CDP (Cloud Developer Platform) API keys — generate them at <span className="font-mono">cloud.coinbase.com/access/api</span>.
+      </SectionNote>
+      {cb.settings?.configured && (
+        <div className="flex items-center gap-2 text-xs text-emerald-400 font-mono">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          Connected · {cb.settings.api_key_name}
+        </div>
+      )}
+      <div className="space-y-3">
+        <div className="space-y-1">
+          <label className="text-xs text-slate-400 font-mono">API Key Name</label>
+          <input
+            type="text"
+            placeholder="organizations/…/apiKeys/…"
+            value={cb.keyName}
+            onChange={(e) => cb.setKeyName(e.target.value)}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-brand-500/40"
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs text-slate-400 font-mono">Private Key (PEM)</label>
+          <textarea
+            rows={5}
+            placeholder={"-----BEGIN EC PRIVATE KEY-----\n…\n-----END EC PRIVATE KEY-----"}
+            value={cb.privateKey}
+            onChange={(e) => cb.setPrivateKey(e.target.value)}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-brand-500/40 resize-none"
+          />
+        </div>
+      </div>
+      {cb.error && <p className="text-xs text-red-400 font-mono">{cb.error}</p>}
+      {cb.saved && <p className="text-xs text-emerald-400 font-mono">Saved.</p>}
+      <div className="flex gap-2">
+        <button
+          onClick={cb.save}
+          disabled={cb.saving || (!cb.keyName && !cb.privateKey)}
+          className="flex-1 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-40 text-sm font-semibold transition-colors"
+        >
+          {cb.saving ? "Saving…" : "Save credentials"}
+        </button>
+        {cb.settings?.configured && (
+          <button
+            onClick={cb.remove}
+            disabled={cb.saving}
+            className="px-4 py-2 rounded-xl border border-red-500/30 text-red-400 hover:bg-red-500/10 text-sm transition-colors disabled:opacity-40"
+          >
+            Disconnect
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── TradeStation panel ────────────────────────────────────────────────────────
+
+function TradeStationPanel() {
+  const ts = useTradeStationSettings();
+  const isPaper = ts.settings?.paper_mode ?? false;
+  return (
+    <div className="space-y-4">
+      {ts.settings?.connected ? (
+        <>
+          <div className="flex items-center gap-2 text-xs text-emerald-400 font-mono">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            Connected · {isPaper ? "SIM (paper)" : "Live"} · {ts.settings.account_number}
+          </div>
+          <SectionNote variant={isPaper ? "info" : "warn"}>
+            {isPaper
+              ? "SIM account — orders go to the TradeStation paper trading environment."
+              : "Live account — orders execute with real money."}
+          </SectionNote>
+          <div className="space-y-1">
+            <label className="text-xs text-slate-400 font-mono">Account Number</label>
+            <input
+              type="text"
+              value={ts.accountDraft}
+              onChange={(e) => ts.setAccountDraft(e.target.value)}
+              placeholder="e.g. 123456 or SIM123456"
+              className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-brand-500/40"
+            />
+          </div>
+          <p className="text-[10px] text-slate-500 font-mono">
+            Prefix with SIM to switch to paper trading (e.g. SIM123456).
+          </p>
+          {ts.error && <p className="text-xs text-red-400 font-mono">{ts.error}</p>}
+          {ts.saved && <p className="text-xs text-emerald-400 font-mono">Account updated.</p>}
+          <div className="flex gap-2">
+            <button
+              onClick={ts.saveAccount}
+              disabled={ts.saving || !ts.accountDraft.trim()}
+              className="flex-1 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-40 text-sm font-semibold transition-colors"
+            >
+              {ts.saving ? "Saving…" : "Update account"}
+            </button>
+            <button
+              onClick={ts.disconnect}
+              disabled={ts.saving}
+              className="px-4 py-2 rounded-xl border border-red-500/30 text-red-400 hover:bg-red-500/10 text-sm transition-colors disabled:opacity-40"
+            >
+              Disconnect
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="text-sm text-slate-400">
+            Connect your TradeStation account via OAuth. You will be redirected to TradeStation to authorise access, then returned here.
+          </p>
+          <SectionNote variant="info">
+            Paper trading uses a SIM account — enter your SIM account number after connecting.
+          </SectionNote>
+          {ts.error && <p className="text-xs text-red-400 font-mono">{ts.error}</p>}
+          <button
+            onClick={ts.connect}
+            className="w-full py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-sm font-semibold transition-colors"
+          >
+            Connect TradeStation
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export function SettingsPage() {
@@ -1503,6 +1696,39 @@ export function SettingsPage() {
           subtitle="Point to your running IB Gateway or TWS — no credentials stored here"
         >
           <IBKRPanel />
+        </Section>
+      )}
+
+      {/* ── Kraken (shown when kraken is selected) ────────────────────────── */}
+      {currentBroker === "kraken" && (
+        <Section
+          icon={<TrendingUp className="w-4 h-4" />}
+          title="Kraken Account"
+          subtitle="API key + base64 secret — generate keys at kraken.com/u/security/api"
+        >
+          <KrakenPanel />
+        </Section>
+      )}
+
+      {/* ── Coinbase (shown when coinbase is selected) ────────────────────── */}
+      {currentBroker === "coinbase" && (
+        <Section
+          icon={<TrendingUp className="w-4 h-4" />}
+          title="Coinbase Advanced Trade"
+          subtitle="CDP API key name + EC private key PEM — generate at cloud.coinbase.com/access/api"
+        >
+          <CoinbasePanel />
+        </Section>
+      )}
+
+      {/* ── TradeStation (shown when tradestation is selected) ────────────── */}
+      {currentBroker === "tradestation" && (
+        <Section
+          icon={<TrendingUp className="w-4 h-4" />}
+          title="TradeStation Account"
+          subtitle="OAuth 2.0 — authorise once and set your account number (prefix SIM for paper trading)"
+        >
+          <TradeStationPanel />
         </Section>
       )}
 
