@@ -2414,7 +2414,8 @@ def get_webhook_settings(request: Request):
         raise HTTPException(status_code=403, detail="JWT authentication required for webhook settings.")
     from brain.webhook_store import has_secret
     configured = has_secret(user_id)
-    webhook_path = f"/webhook/tradingview/{user_id}/<your-secret>" if configured else None
+    # /api/ prefix is needed for nginx to proxy to uvicorn; FastAPI sees the path without it.
+    webhook_path = f"/api/webhook/tradingview/{user_id}/<your-secret>" if configured else None
     return {"configured": configured, "user_id": user_id, "webhook_path": webhook_path}
 
 
@@ -2430,7 +2431,8 @@ def generate_webhook_secret(request: Request):
         raise HTTPException(status_code=403, detail="JWT authentication required for webhook settings.")
     from brain.webhook_store import generate_secret
     plaintext = generate_secret(user_id)
-    webhook_path = f"/webhook/tradingview/{user_id}/{plaintext}"
+    # /api/ prefix required for nginx → uvicorn proxy; FastAPI registers without it.
+    webhook_path = f"/api/webhook/tradingview/{user_id}/{plaintext}"
     log.info("Webhook secret generated for user %s", user_id[:8])
     return {
         "generated": True,
