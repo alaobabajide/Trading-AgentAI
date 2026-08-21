@@ -428,6 +428,7 @@ _RATE_LIMITS: dict[str, tuple[int, int]] = {
     "/config":          (20, 60),
     "/llm-settings":    (20, 60),
     "/alpaca-settings": (20, 60),
+    "/risk-settings":   (20, 60),
 }
 _DEFAULT_RATE = (120, 60)
 
@@ -576,6 +577,27 @@ def _build_debate(cfg, tactical_client, synthesis_client,
         synthesis_client=synthesis_client,
         tactical_model=tactical_model,
         synthesis_model=synthesis_model,
+    )
+
+
+def _build_debate_with_risk(cfg, effective_llm, risk_eff: dict) -> Any:
+    """Build a fresh DebateOrchestrator using an already-resolved risk dict.
+
+    Used for per-user signal requests where risk params may differ from the
+    global config — these orchestrators are never cached.
+    """
+    from brain.debate import DebateOrchestrator
+    return DebateOrchestrator(
+        confidence_threshold=risk_eff.get("signal_confidence_threshold", cfg.signal_confidence_threshold),
+        max_position_pct=risk_eff["max_position_pct"],
+        max_crypto_pct=risk_eff["max_crypto_allocation_pct"],
+        circuit_breaker_drawdown=risk_eff["circuit_breaker_drawdown"],
+        stop_loss_pct=risk_eff["stop_loss_pct"],
+        take_profit_pct=risk_eff["take_profit_pct"],
+        tactical_client=effective_llm.tactical_client,
+        synthesis_client=effective_llm.synthesis_client,
+        tactical_model=effective_llm.tactical_model,
+        synthesis_model=effective_llm.synthesis_model,
     )
 
 
@@ -752,58 +774,76 @@ class RiskConfigUpdate(BaseModel):
 
 
 @app.get("/config")
-def get_risk_config():
-    """Return current effective risk config (env defaults merged with dynamic overrides)."""
+def get_risk_config(request: Request):
+    """Return current effective risk config (env defaults merged with dynamic overrides).
+
+    Orchestrator (X-Api-Key, user_id=None): always returns the global config — unchanged.
+    Browser user (JWT, user_id=str): returns global config merged with per-user overrides.
+    """
     from config import get_settings
     global _dynamic_config
     cfg = get_settings()
     # Always reload from disk so a PATCH to any worker is immediately visible here.
-    # The file is small; this read is cheap and guarantees cross-worker consistency.
     disk = _load_dynamic_config()
     if disk:
         _dynamic_config = disk
-    eff = _effective_config(cfg)
+    base_eff = _effective_config(cfg)
+
+    defaults = {
+        "stop_loss_pct":                cfg.stop_loss_pct,
+        "take_profit_pct":              cfg.take_profit_pct,
+        "trailing_stop_pct":            cfg.trailing_stop_pct,
+        "partial_exit_pct":             cfg.partial_exit_pct,
+        "runner_trail_pct":             cfg.runner_trail_pct,
+        "max_position_pct":             cfg.max_position_pct,
+        "hot_position_pct":             cfg.hot_position_pct,
+        "max_crypto_allocation_pct":    cfg.max_crypto_allocation_pct,
+        "max_exposure_pct":             cfg.max_exposure_pct,
+        "max_concurrent_positions":     cfg.max_concurrent_positions,
+        "circuit_breaker_drawdown":     cfg.circuit_breaker_drawdown,
+        "drawdown_scale_threshold":     cfg.drawdown_scale_threshold,
+        "drawdown_scale_factor":        cfg.drawdown_scale_factor,
+        "correlation_halving_threshold":cfg.correlation_halving_threshold,
+        "signal_confidence_threshold":  cfg.signal_confidence_threshold,
+        "lookback_days":                cfg.lookback_days,
+        "atr_multiplier":               cfg.atr_multiplier,
+        "atr_stop_floor":               cfg.atr_stop_floor,
+        "atr_stop_cap":                 cfg.atr_stop_cap,
+        "loss_cooldown_hits":           cfg.loss_cooldown_hits,
+        "loss_cooldown_window_days":    cfg.loss_cooldown_window_days,
+        "loss_cooldown_skip_cycles":    cfg.loss_cooldown_skip_cycles,
+        "max_telegram_order_usd":       cfg.max_telegram_order_usd,
+    }
+
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if user_id:
+        from brain.risk_config import get_effective_risk_for_user, load_user_risk_config
+        eff = get_effective_risk_for_user(user_id, base_eff)
+        user_overrides = load_user_risk_config(user_id)
+        return {
+            **eff,
+            "source": "user" if user_overrides else ("dynamic" if _dynamic_config else "env"),
+            "overrides": dict(_dynamic_config),
+            "user_overrides": user_overrides,
+            "defaults": defaults,
+        }
+
     return {
-        **eff,
+        **base_eff,
         "source": "dynamic" if _dynamic_config else "env",
         "overrides": dict(_dynamic_config),
-        "defaults": {
-            "stop_loss_pct":                cfg.stop_loss_pct,
-            "take_profit_pct":              cfg.take_profit_pct,
-            "trailing_stop_pct":            cfg.trailing_stop_pct,
-            "partial_exit_pct":             cfg.partial_exit_pct,
-            "runner_trail_pct":             cfg.runner_trail_pct,
-            "max_position_pct":             cfg.max_position_pct,
-            "hot_position_pct":             cfg.hot_position_pct,
-            "max_crypto_allocation_pct":    cfg.max_crypto_allocation_pct,
-            "max_exposure_pct":             cfg.max_exposure_pct,
-            "max_concurrent_positions":     cfg.max_concurrent_positions,
-            "circuit_breaker_drawdown":     cfg.circuit_breaker_drawdown,
-            "drawdown_scale_threshold":     cfg.drawdown_scale_threshold,
-            "drawdown_scale_factor":        cfg.drawdown_scale_factor,
-            "correlation_halving_threshold":cfg.correlation_halving_threshold,
-            "signal_confidence_threshold":  cfg.signal_confidence_threshold,
-            "lookback_days":                cfg.lookback_days,
-            "atr_multiplier":               cfg.atr_multiplier,
-            "atr_stop_floor":               cfg.atr_stop_floor,
-            "atr_stop_cap":                 cfg.atr_stop_cap,
-            "loss_cooldown_hits":           cfg.loss_cooldown_hits,
-            "loss_cooldown_window_days":    cfg.loss_cooldown_window_days,
-            "loss_cooldown_skip_cycles":    cfg.loss_cooldown_skip_cycles,
-            "max_telegram_order_usd":       cfg.max_telegram_order_usd,
-        },
+        "defaults": defaults,
     }
 
 
 @app.patch("/config")
-def update_risk_config(body: RiskConfigUpdate):
+def update_risk_config(body: RiskConfigUpdate, request: Request):
     """Update risk config dynamically — no redeploy needed.
 
-    Changes take effect on the next signal/monitor cycle.
-    Values persist to disk and survive process restarts within the same container.
-    On a full redeploy, Railway env vars re-seed the defaults.
+    Orchestrator (X-Api-Key, user_id=None): updates global config + clears caches.
+    Browser user (JWT, user_id=str): updates only the user's per-user overrides.
+      Per-user PATCH never touches _dynamic_config and never clears caches.
     """
-    global _dynamic_config
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No fields provided to update")
@@ -815,27 +855,52 @@ def update_risk_config(body: RiskConfigUpdate):
         elif key in _CONFIG_INT_BOUNDS:
             lo, hi = _CONFIG_INT_BOUNDS[key]
             updates[key] = max(lo, min(hi, int(val)))
+
+    user_id: str | None = getattr(request.state, "user_id", None)
+    from config import get_settings
+    cfg = get_settings()
+
+    if user_id:
+        # Per-user: write to user_risk_config.json only — never touch global state or caches
+        from brain.risk_config import save_user_risk_config, get_effective_risk_for_user
+        save_user_risk_config(user_id, updates)
+        log.info("Per-user risk config updated for %s: %s", user_id, updates)
+        base_eff = _effective_config(cfg)
+        user_eff = get_effective_risk_for_user(user_id, base_eff)
+        return {"updated": updates, "current": user_eff}
+
+    # Global: identical to pre-Phase-3 behaviour
+    global _dynamic_config, _shared_services_cache, _debate_cache
     _dynamic_config.update(updates)
     _save_dynamic_config(_dynamic_config)
-    # Invalidate orchestrator caches so risk params take effect immediately
-    global _shared_services_cache, _debate_cache
     _shared_services_cache = None
     _debate_cache.clear()
     log.info("Dynamic risk config updated: %s", updates)
-    from config import get_settings
-    return {"updated": updates, "current": _effective_config(get_settings())}
+    return {"updated": updates, "current": _effective_config(cfg)}
 
 
 @app.delete("/config")
-def reset_risk_config():
-    """Reset all dynamic overrides — reverts to Railway env var defaults."""
+def reset_risk_config(request: Request):
+    """Reset dynamic overrides.
+
+    Orchestrator (X-Api-Key, user_id=None): resets global config + clears caches.
+    Browser user (JWT, user_id=str): removes only the user's per-user overrides.
+    """
+    user_id: str | None = getattr(request.state, "user_id", None)
+    from config import get_settings
+
+    if user_id:
+        from brain.risk_config import delete_user_risk_config
+        delete_user_risk_config(user_id)
+        log.info("Per-user risk config reset for %s", user_id)
+        return {"reset": True, "current": _effective_config(get_settings())}
+
     global _dynamic_config, _shared_services_cache, _debate_cache
     _dynamic_config = {}
     _save_dynamic_config({})
     _shared_services_cache = None
     _debate_cache.clear()
     log.info("Dynamic risk config reset to env var defaults")
-    from config import get_settings
     return {"reset": True, "current": _effective_config(get_settings())}
 
 
@@ -1040,6 +1105,77 @@ def save_alpaca_settings_endpoint(req: AlpacaSettingsPayload, request: Request):
     }
 
 
+@app.get("/risk-settings")
+def get_risk_settings(request: Request):
+    """Return the user's per-user risk overrides alongside the effective merged config.
+
+    Response includes:
+      effective      — merged result (env defaults + global dynamic + per-user)
+      user_overrides — only the fields the user has explicitly set
+    """
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="JWT authentication required for risk settings.")
+    from config import get_settings
+    from brain.risk_config import load_user_risk_config, get_effective_risk_for_user
+    cfg = get_settings()
+    base_eff = _effective_config(cfg)
+    user_overrides = load_user_risk_config(user_id)
+    effective = get_effective_risk_for_user(user_id, base_eff)
+    return {
+        "effective": effective,
+        "user_overrides": user_overrides,
+    }
+
+
+@app.post("/risk-settings")
+def save_risk_settings(body: RiskConfigUpdate, request: Request):
+    """Save per-user risk overrides (partial update — only send fields you want to change).
+
+    Never affects the global config or other users. Returns the merged effective config.
+    """
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="JWT authentication required for risk settings.")
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields provided to update.")
+    for key, val in list(updates.items()):
+        if key in _CONFIG_BOUNDS:
+            lo, hi = _CONFIG_BOUNDS[key]
+            updates[key] = max(lo, min(hi, float(val)))
+        elif key in _CONFIG_INT_BOUNDS:
+            lo, hi = _CONFIG_INT_BOUNDS[key]
+            updates[key] = max(lo, min(hi, int(val)))
+    from brain.risk_config import save_user_risk_config, get_effective_risk_for_user, load_user_risk_config
+    save_user_risk_config(user_id, updates)
+    log.info("Per-user risk settings saved for %s: %s", user_id, updates)
+    from config import get_settings
+    cfg = get_settings()
+    base_eff = _effective_config(cfg)
+    user_overrides = load_user_risk_config(user_id)
+    effective = get_effective_risk_for_user(user_id, base_eff)
+    return {
+        "saved": True,
+        "updated": updates,
+        "effective": effective,
+        "user_overrides": user_overrides,
+    }
+
+
+@app.delete("/risk-settings")
+def reset_risk_settings(request: Request):
+    """Remove all per-user risk overrides — reverts the user to global config."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="JWT authentication required for risk settings.")
+    from brain.risk_config import delete_user_risk_config
+    delete_user_risk_config(user_id)
+    log.info("Per-user risk settings reset for %s", user_id)
+    from config import get_settings
+    return {"reset": True, "current": _effective_config(get_settings())}
+
+
 @app.post("/signal", response_model=SignalResponse)
 def generate_signal(req: SignalRequest, request: Request):
     req.symbol = _validate_symbol(req.symbol)
@@ -1075,10 +1211,17 @@ def generate_signal(req: SignalRequest, request: Request):
         alpaca, alpaca_crypto, sentiment_fetcher, onchain_fetcher, portfolio_fetcher = (
             _get_shared_services(cfg)
         )
-        orchestrator = (
-            _get_debate(cfg, effective_llm) if effective_llm is not None
-            else None  # paper mode — orchestrator not used
-        )
+        if effective_llm is not None:
+            if user_id:
+                # Per-user: build fresh DebateOrchestrator with per-user risk — never cached
+                from brain.risk_config import get_effective_risk_for_user
+                _user_risk_eff = get_effective_risk_for_user(user_id, _effective_config(cfg))
+                orchestrator = _build_debate_with_risk(cfg, effective_llm, _user_risk_eff)
+            else:
+                # Orchestrator / system path: use cached debate (unchanged behaviour)
+                orchestrator = _get_debate(cfg, effective_llm)
+        else:
+            orchestrator = None  # paper mode — orchestrator not used
     except Exception as exc:
         log.error("Service initialisation failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Service init failed: {exc}")
@@ -1569,7 +1712,7 @@ def get_orders(request: Request, status: str = "open"):
         return {"orders": [], "fetch_error": f"Alpaca orders fetch failed: {exc}"}
 
 
-def _alpaca_portfolio_history(cfg, is_paper: bool, period: str, timeframe: str) -> list:
+def _alpaca_portfolio_history(ak: str, sk: str, is_paper: bool, period: str, timeframe: str) -> list:
     """Fetch equity curve from Alpaca's native portfolio history endpoint.
 
     This is the authoritative source — it captures realized P&L from closed
@@ -1583,7 +1726,7 @@ def _alpaca_portfolio_history(cfg, is_paper: bool, period: str, timeframe: str) 
     from alpaca.trading.client import TradingClient
     from alpaca.trading.requests import GetPortfolioHistoryRequest
 
-    client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
+    client = TradingClient(ak, sk, paper=is_paper)
     hist = client.get_portfolio_history(
         GetPortfolioHistoryRequest(period=period, timeframe=timeframe)
     )
@@ -1608,7 +1751,7 @@ def _alpaca_portfolio_history(cfg, is_paper: bool, period: str, timeframe: str) 
 
 
 @app.get("/portfolio/history")
-def get_portfolio_history(period: str = "1D"):
+def get_portfolio_history(period: str = "1D", request: Request = None):
     """Return the equity curve for the requested period.
 
     Primary: Alpaca's native portfolio history API — captures realized P&L
@@ -1626,10 +1769,15 @@ def get_portfolio_history(period: str = "1D"):
 
     from config import get_settings
     cfg = get_settings()
-    if not cfg.alpaca_api_key:
+
+    # Resolve Alpaca creds: per-user if JWT, system if X-Api-Key or no request
+    _hist_user_id = getattr(request.state, "user_id", None) if request else None
+    _hist_ak, _hist_sk, _hist_base_url, _hist_is_paper = _resolve_alpaca_creds(_hist_user_id, cfg)
+
+    if not _hist_ak:
         return []
 
-    is_paper = "paper" in cfg.alpaca_base_url.lower()
+    is_paper = _hist_is_paper
 
     # Alpaca API period/timeframe map
     alpaca_params = {
@@ -1641,7 +1789,7 @@ def get_portfolio_history(period: str = "1D"):
 
     # ── Try native Alpaca portfolio history first ──────────────────────────────
     try:
-        pts = _alpaca_portfolio_history(cfg, is_paper, alpaca_period, alpaca_tf)
+        pts = _alpaca_portfolio_history(_hist_ak, _hist_sk, is_paper, alpaca_period, alpaca_tf)
         if len(pts) >= 2:
             log.info("portfolio/history(%s): %d pts from Alpaca native API", period, len(pts))
             return pts
@@ -1655,12 +1803,12 @@ def get_portfolio_history(period: str = "1D"):
     # ── Fallback: reconstruct from live positions + price bars ─────────────────
     lookback = {"1D": 1, "1M": 30, "1Y": 365}[period]
     daily    = period != "1D"
-    pts = _build_equity(cfg, is_paper, lookback_days=lookback, use_daily=daily)
+    pts = _build_equity(_hist_ak, _hist_sk, is_paper, lookback_days=lookback, use_daily=daily)
     log.info("portfolio/history(%s): fallback reconstruction returned %d pts", period, len(pts))
     return pts
 
 
-def _build_equity(cfg, is_paper: bool, lookback_days: int, use_daily: bool) -> list:
+def _build_equity(ak: str, sk: str, is_paper: bool, lookback_days: int, use_daily: bool) -> list:
     """
     Reconstruct an equity curve from live positions + historical price bars.
 
@@ -1686,7 +1834,7 @@ def _build_equity(cfg, is_paper: bool, lookback_days: int, use_daily: bool) -> l
     label = f"{'daily' if use_daily else '5min'}/{lookback_days}d"
 
     try:
-        client  = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
+        client  = TradingClient(ak, sk, paper=is_paper)
         acct    = client.get_account()
         cash    = float(acct.cash)
         raw_pos = client.get_all_positions()
@@ -1742,7 +1890,7 @@ def _build_equity(cfg, is_paper: bool, lookback_days: int, use_daily: bool) -> l
 
     # ── Stock bars ────────────────────────────────────────────────────────────
     if stock_pos:
-        sc = StockHistoricalDataClient(cfg.alpaca_api_key, cfg.alpaca_secret_key)
+        sc = StockHistoricalDataClient(ak, sk)
         for feed in (DataFeed.SIP, DataFeed.IEX):
             try:
                 req = StockBarsRequest(
@@ -1762,7 +1910,7 @@ def _build_equity(cfg, is_paper: bool, lookback_days: int, use_daily: bool) -> l
         try:
             from alpaca.data.historical import CryptoHistoricalDataClient
             from alpaca.data.requests import CryptoBarsRequest
-            cc  = CryptoHistoricalDataClient(cfg.alpaca_api_key, cfg.alpaca_secret_key)
+            cc  = CryptoHistoricalDataClient(ak, sk)
             req = CryptoBarsRequest(
                 symbol_or_symbols=list(crypto_pos.keys()),
                 timeframe=tf, start=start, end=now,
@@ -1801,7 +1949,7 @@ def _build_equity(cfg, is_paper: bool, lookback_days: int, use_daily: bool) -> l
 
 @app.get("/portfolio/history/debug")
 def portfolio_history_debug():
-    """Diagnostic: shows point counts for 1D/1M/1Y equity builds."""
+    """Diagnostic: shows point counts for 1D/1M/1Y equity builds (system creds)."""
     from config import get_settings
     cfg = get_settings()
     if not cfg.alpaca_api_key:
@@ -1809,7 +1957,7 @@ def portfolio_history_debug():
     is_paper = "paper" in cfg.alpaca_base_url.lower()
     out = {}
     for period, days, daily in [("1D", 1, False), ("1M", 30, True), ("1Y", 365, True)]:
-        pts = _build_equity(cfg, is_paper, lookback_days=days, use_daily=daily)
+        pts = _build_equity(cfg.alpaca_api_key, cfg.alpaca_secret_key, is_paper, lookback_days=days, use_daily=daily)
         out[period] = {"pts": len(pts), "first": pts[:1], "last": pts[-1:]}
     return out
 
