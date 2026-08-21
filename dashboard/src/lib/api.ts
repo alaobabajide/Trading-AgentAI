@@ -1024,6 +1024,91 @@ export function useBrokerSettings() {
   return { settings, saving, saved, error, selectBroker, resetBroker };
 }
 
+// ── tastytrade settings ────────────────────────────────────────────────────────
+
+export interface TastytradeSettings {
+  username:        string;
+  account_number:  string;
+  paper_mode:      boolean;
+  keys_configured: boolean;
+}
+
+export interface TastytradeSavePayload {
+  username?:       string;
+  password?:       string;   // plaintext; omit = "don't change stored password"
+  account_number?: string;   // optional
+  paper_mode:      boolean;
+}
+
+export async function fetchTastytradeSettings(): Promise<TastytradeSettings> {
+  const res = await fetch(`${BASE}/tastytrade-settings`, {
+    signal:  AbortSignal.timeout(8000),
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export async function saveTastytradeSettings(
+  payload: TastytradeSavePayload,
+): Promise<{ saved: boolean; keys_configured: boolean }> {
+  const res = await fetch(`${BASE}/tastytrade-settings`, {
+    method:  "POST",
+    headers: apiHeaders({ "Content-Type": "application/json" }),
+    body:    JSON.stringify(payload),
+    signal:  AbortSignal.timeout(10000),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  return safeJson(res);
+}
+
+export function useTastytradeSettings() {
+  const [settings, setSettings] = useState<TastytradeSettings | null>(null);
+  const [saving,   setSaving]   = useState(false);
+  const [saved,    setSaved]    = useState(false);
+  const [error,    setError]    = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const s = await fetchTastytradeSettings();
+        if (!cancelled) setSettings(s);
+      } catch { /* not authenticated or backend not up */ }
+    }
+    load();
+  }, []);
+
+  async function save(payload: TastytradeSavePayload) {
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await saveTastytradeSettings(payload);
+      setSettings((prev) => prev
+        ? {
+            ...prev,
+            paper_mode:      payload.paper_mode,
+            username:        payload.username ?? prev.username,
+            account_number:  payload.account_number ?? prev.account_number,
+            keys_configured: result.keys_configured,
+          }
+        : null
+      );
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return { settings, saving, saved, error, save };
+}
+
 export function useLlmSettings() {
   const [settings,  setSettings]  = useState<LlmSettings | null>(null);
   const [models,    setModels]    = useState<ModelsResponse | null>(null);

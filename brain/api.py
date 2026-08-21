@@ -430,7 +430,8 @@ _RATE_LIMITS: dict[str, tuple[int, int]] = {
     "/alpaca-settings":  (20, 60),
     "/risk-settings":    (20, 60),
     "/webhook-settings": (10, 60),
-    "/broker-settings":  (20, 60),
+    "/broker-settings":       (20, 60),
+    "/tastytrade-settings":   (20, 60),
 }
 _DEFAULT_RATE = (120, 60)
 
@@ -677,13 +678,30 @@ def _resolve_broker(user_id: str | None, cfg):
 
     Orchestrator (user_id=None) always receives system Alpaca creds.
     JWT users get the broker they selected in /broker-settings, defaulting to Alpaca.
-    Raises HTTPException 503 if the user has selected an unimplemented broker.
+    Raises HTTPException 503 for unimplemented brokers, 400 if tastytrade creds missing.
     """
+    broker_type = "alpaca"
     if user_id:
         from brain.broker_creds import load_user_broker_type, LIVE_BROKERS
         broker_type = load_user_broker_type(user_id) or "alpaca"
         if broker_type not in LIVE_BROKERS:
-            raise HTTPException(503, f"Broker '{broker_type}' is not yet supported for live trading — switch to Alpaca")
+            raise HTTPException(503, f"Broker '{broker_type}' is not yet supported — switch to Alpaca")
+
+    if broker_type == "tastytrade":
+        enc_key = _get_enc_key()
+        from brain.tastytrade_creds import get_effective_tastytrade_creds
+        creds = get_effective_tastytrade_creds(user_id, enc_key)
+        if not creds.keys_configured:
+            raise HTTPException(400, "tastytrade credentials not configured — save them in Settings → tastytrade Account")
+        from broker.adapters.tastytrade import TastytradeBrokerAdapter
+        return TastytradeBrokerAdapter(
+            username=creds.username,
+            password=creds.password,
+            account_number=creds.account_number,
+            paper=creds.paper_mode,
+        )
+
+    # Default path: Alpaca
     ak, sk, base_url, _ = _resolve_alpaca_creds(user_id, cfg)
     from broker.adapters.alpaca import AlpacaBrokerAdapter
     return AlpacaBrokerAdapter(ak, sk, base_url)
@@ -699,6 +717,14 @@ class AlpacaSettingsPayload(BaseModel):
 class BrokerSettingsPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     broker_type: str
+
+
+class TastytradeSettingsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username:       str  = ""   # plaintext; empty = "don't change"
+    password:       str  = ""   # plaintext; empty = "don't change stored password"
+    account_number: str  = ""   # optional; empty = "use first account"
+    paper_mode:     bool = True
 
 
 def _get_market_snapshot(fetcher, symbol: str, days: int):
@@ -1169,6 +1195,46 @@ def reset_broker_settings(request: Request):
     from brain.broker_creds import DEFAULT_BROKER, delete_user_broker_type
     existed = delete_user_broker_type(user_id)
     return {"reset": True, "broker_type": DEFAULT_BROKER, "had_preference": existed}
+
+
+@app.get("/tastytrade-settings")
+def get_tastytrade_settings(request: Request):
+    """Return the current user's tastytrade configuration (password never returned)."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for tastytrade settings")
+    from brain.tastytrade_creds import load_user_tastytrade_settings
+    s = load_user_tastytrade_settings(user_id)
+    return {
+        "username":         s.username or "",
+        "account_number":   s.account_number or "",
+        "paper_mode":       s.paper_mode,
+        "keys_configured":  bool(s.username and s.password_enc),
+    }
+
+
+@app.post("/tastytrade-settings")
+def save_tastytrade_settings(req: TastytradeSettingsPayload, request: Request):
+    """Save the current user's tastytrade credentials (password encrypted at rest, never returned)."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for tastytrade settings")
+    enc_key = _get_enc_key()
+    from brain.tastytrade_creds import save_user_tastytrade_settings, load_user_tastytrade_settings
+    save_user_tastytrade_settings(
+        user_id=user_id,
+        username=req.username,
+        new_password=req.password,
+        account_number=req.account_number,
+        paper_mode=req.paper_mode,
+        enc_key=enc_key,
+    )
+    s = load_user_tastytrade_settings(user_id)
+    log.info("tastytrade settings saved for user %s (paper=%s)", user_id[:8], req.paper_mode)
+    return {
+        "saved":           True,
+        "keys_configured": bool(s.username and s.password_enc),
+    }
 
 
 @app.get("/risk-settings")

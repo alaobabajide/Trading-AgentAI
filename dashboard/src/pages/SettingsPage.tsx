@@ -4,8 +4,8 @@ import {
   HITLMode, UserProfile, DEFAULT_PROFILE,
   MODE_CONFIG, loadProfile, saveProfile,
 } from "../lib/hitl";
-import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload, useWebhookSettings, useBrokerSettings } from "../lib/api";
-import { useState } from "react";
+import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload, useWebhookSettings, useBrokerSettings, useTastytradeSettings, TastytradeSavePayload } from "../lib/api";
+import { useEffect, useState } from "react";
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
 
@@ -389,6 +389,121 @@ function BrokerPanel() {
       {saving && <p className="text-xs text-brand-400/60">Saving…</p>}
       {saved  && <p className="text-xs text-green-400">Active broker updated.</p>}
       {error  && <p className="text-xs text-red-400">{error}</p>}
+    </div>
+  );
+}
+
+function TastytradePanel() {
+  const tt = useTastytradeSettings();
+
+  const [username,   setUsername]   = useState("");
+  const [password,   setPassword]   = useState("");
+  const [accountNum, setAccountNum] = useState("");
+  const [paperMode,  setPaperMode]  = useState(true);
+  const [dirty,      setDirty]      = useState(false);
+
+  useEffect(() => {
+    if (tt.settings) {
+      setUsername(tt.settings.username || "");
+      setAccountNum(tt.settings.account_number || "");
+      setPaperMode(tt.settings.paper_mode);
+    }
+  }, [tt.settings]);
+
+  function handleChange<T>(setter: (v: T) => void) {
+    return (v: T) => { setter(v); setDirty(true); };
+  }
+
+  function handleSave() {
+    const payload: TastytradeSavePayload = { paper_mode: paperMode };
+    if (username) payload.username = username;
+    if (password) payload.password = password;
+    if (accountNum) payload.account_number = accountNum;
+    tt.save(payload).then(() => setDirty(false));
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Paper / live toggle */}
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => { setPaperMode(true); setDirty(true); }}
+          className={clsx(
+            "px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
+            paperMode ? "bg-brand-500/20 text-brand-300 border border-brand-400/40" : "border border-white/10 text-slate-400 hover:text-slate-200",
+          )}
+        >
+          Paper (Certification)
+        </button>
+        <button
+          type="button"
+          onClick={() => { setPaperMode(false); setDirty(true); }}
+          className={clsx(
+            "px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
+            !paperMode ? "bg-orange-500/20 text-orange-300 border border-orange-400/40" : "border border-white/10 text-slate-400 hover:text-slate-200",
+          )}
+        >
+          Live
+        </button>
+      </div>
+
+      {/* Credential fields */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <label className="text-[11px] text-slate-400 uppercase tracking-wide">Username / Email</label>
+          <input
+            type="text"
+            autoComplete="username"
+            placeholder="you@example.com"
+            value={username}
+            onChange={(e) => handleChange(setUsername)(e.target.value)}
+            className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-brand-100 placeholder-slate-500 focus:outline-none focus:border-brand-400/50"
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-[11px] text-slate-400 uppercase tracking-wide">
+            Password {tt.settings?.keys_configured && <span className="text-green-400/80 ml-1">(saved)</span>}
+          </label>
+          <input
+            type="password"
+            autoComplete="current-password"
+            placeholder="leave blank to keep saved password"
+            value={password}
+            onChange={(e) => handleChange(setPassword)(e.target.value)}
+            className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-brand-100 placeholder-slate-500 focus:outline-none focus:border-brand-400/50"
+          />
+        </div>
+        <div className="space-y-1 sm:col-span-2">
+          <label className="text-[11px] text-slate-400 uppercase tracking-wide">Account Number <span className="text-slate-500 normal-case">(optional — defaults to first account)</span></label>
+          <input
+            type="text"
+            placeholder="5WX12345"
+            value={accountNum}
+            onChange={(e) => handleChange(setAccountNum)(e.target.value)}
+            className="w-full sm:w-64 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-brand-100 placeholder-slate-500 focus:outline-none focus:border-brand-400/50"
+          />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={tt.saving || !dirty}
+          className="px-4 py-2 rounded-xl bg-brand-500/20 border border-brand-400/30 text-sm text-brand-300 hover:bg-brand-500/30 transition-colors disabled:opacity-40"
+        >
+          {tt.saving ? "Saving…" : "Save"}
+        </button>
+        {tt.saved  && <span className="text-xs text-green-400">Saved.</span>}
+        {tt.error  && <span className="text-xs text-red-400">{tt.error}</span>}
+      </div>
+
+      {!paperMode && (
+        <p className="text-[11px] text-orange-400/70">
+          Live mode — real money. Ensure your tastytrade account has sufficient funds before enabling auto-trading.
+        </p>
+      )}
     </div>
   );
 }
@@ -966,6 +1081,8 @@ export function SettingsPage() {
   const [profile, setProfile] = useState<UserProfile>(loadProfile);
   const [saved, setSaved] = useState(false);
   const configStatus = useConfigStatus();
+  const brokerState = useBrokerSettings();
+  const currentBroker = brokerState.settings?.current_broker ?? "alpaca";
 
   function update(partial: Partial<UserProfile>) {
     setProfile((p) => ({ ...p, ...partial }));
@@ -1053,20 +1170,33 @@ export function SettingsPage() {
         <BrokerPanel />
       </Section>
 
-      {/* ── Alpaca Account ────────────────────────────────────────────────── */}
-      <Section
-        icon={<Zap className="w-4 h-4" />}
-        title="Alpaca Account"
-        subtitle="Per-user Alpaca key for manual signals from the dashboard — stored encrypted"
-      >
-        <AlpacaPanel />
-      </Section>
+      {/* ── Alpaca Account (shown when Alpaca is selected) ────────────────── */}
+      {currentBroker === "alpaca" && (
+        <Section
+          icon={<Zap className="w-4 h-4" />}
+          title="Alpaca Account"
+          subtitle="Per-user Alpaca key for manual signals from the dashboard — stored encrypted"
+        >
+          <AlpacaPanel />
+        </Section>
+      )}
+
+      {/* ── tastytrade Account (shown when tastytrade is selected) ────────── */}
+      {currentBroker === "tastytrade" && (
+        <Section
+          icon={<Zap className="w-4 h-4" />}
+          title="tastytrade Account"
+          subtitle="tastytrade credentials — password encrypted at rest, never returned by the API"
+        >
+          <TastytradePanel />
+        </Section>
+      )}
 
       {/* ── TradingView Webhook ───────────────────────────────────────────── */}
       <Section
         icon={<Link className="w-4 h-4" />}
         title="TradingView Webhook"
-        subtitle="Receive TradingView alerts and execute trades automatically via your Alpaca account"
+        subtitle="Receive TradingView alerts and execute trades automatically via your active broker"
       >
         <WebhookPanel />
       </Section>

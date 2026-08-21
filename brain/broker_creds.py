@@ -28,7 +28,7 @@ BROKER_CATALOG: list[dict] = [
         "name":          "tastytrade",
         "tagline":       "Stocks, options, futures & crypto — active traders",
         "supports_paper": True,
-        "status":        "coming_soon",
+        "status":        "live",
     },
     {
         "id":            "ibkr",
@@ -46,7 +46,7 @@ BROKER_CATALOG: list[dict] = [
     },
 ]
 
-LIVE_BROKERS: set[str] = {"alpaca"}
+LIVE_BROKERS: set[str] = {"alpaca", "tastytrade"}
 DEFAULT_BROKER = "alpaca"
 
 # ── File path ────────────────────────────────────────────────────────────────
