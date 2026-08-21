@@ -542,14 +542,14 @@ def _build_shared_services(cfg):
     from data.sentiment import SentimentFetcher
     from data.onchain import OnChainFetcher
     from data.portfolio import PortfolioFetcher
+    from broker.adapters.alpaca import AlpacaBrokerAdapter
 
     alpaca        = AlpacaMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)
     alpaca_crypto = AlpacaCryptoMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)
     sentiment     = SentimentFetcher(finnhub_api_key=cfg.finnhub_api_key)
     onchain       = OnChainFetcher(eth_rpc_url=cfg.eth_rpc_url)
-    portfolio     = PortfolioFetcher(
-        cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,
-    )
+    sys_broker    = AlpacaBrokerAdapter(cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url)
+    portfolio     = PortfolioFetcher(sys_broker)
     return alpaca, alpaca_crypto, sentiment, onchain, portfolio
 
 
@@ -669,6 +669,17 @@ def _resolve_alpaca_creds(user_id: str | None, cfg) -> tuple[str, str, str, bool
         cfg.alpaca_base_url or "https://paper-api.alpaca.markets",
         "paper" in (cfg.alpaca_base_url or "").lower(),
     )
+
+
+def _resolve_broker(user_id: str | None, cfg):
+    """Return a BrokerAdapter for the given user (Alpaca for now).
+
+    Wraps _resolve_alpaca_creds so the rest of the API is broker-agnostic.
+    Phase B will extend this to support non-Alpaca brokers.
+    """
+    ak, sk, base_url, _ = _resolve_alpaca_creds(user_id, cfg)
+    from broker.adapters.alpaca import AlpacaBrokerAdapter
+    return AlpacaBrokerAdapter(ak, sk, base_url)
 
 
 class AlpacaSettingsPayload(BaseModel):
@@ -1421,7 +1432,7 @@ class ExecuteRequest(BaseModel):
 
 
 def _execute_order(
-    ak: str, sk: str, base_url: str, is_paper: bool,
+    broker,
     exec_eff: dict, cfg, signal, sl_pct: float, tp_pct: float,
     source: str = "api",
 ) -> dict:
@@ -1429,23 +1440,21 @@ def _execute_order(
 
     Shared by /execute and /webhook/tradingview so both routes use identical execution
     logic — no drift risk from duplicated code paths.
+    broker is a BrokerAdapter (currently always AlpacaBrokerAdapter).
     """
     try:
         if signal.asset_class == "stock":
-            from alpaca.trading.client import TradingClient as _TC
-            from data.market_data import AlpacaMarketData
             from execution.stock.engine import StockExecutionEngine
 
             # Pre-flight: block BUY if already at max_exposure_pct.
             if signal.action == "BUY":
-                _tc_pf = _TC(ak, sk, paper=is_paper)
-                _acct  = _tc_pf.get_account()
-                _equity_pf = float(_acct.equity or 0)
+                _acct      = broker.get_account()
+                _equity_pf = _acct.equity
                 if _equity_pf <= 0:
                     raise HTTPException(status_code=409, detail="Account has no equity.")
                 try:
-                    _positions_pf = _tc_pf.get_all_positions()
-                    _deployed_pf  = sum(abs(float(p.market_value or 0)) for p in _positions_pf)
+                    _positions_pf = broker.get_all_positions()
+                    _deployed_pf  = sum(abs(p.market_value) for p in _positions_pf)
                     if _deployed_pf / _equity_pf >= exec_eff["max_exposure_pct"]:
                         raise HTTPException(
                             status_code=409,
@@ -1460,7 +1469,7 @@ def _execute_order(
                 except Exception:
                     pass  # fall through if positions fetch fails
 
-            market = AlpacaMarketData(ak, sk)
+            market = broker.get_market_data_client("stock")
             bars   = market.get_bars(signal.symbol, days=30)
             bars_highs  = [b.high  for b in bars]
             bars_lows   = [b.low   for b in bars]
@@ -1489,9 +1498,7 @@ def _execute_order(
                     )
 
             engine = StockExecutionEngine(
-                alpaca_api_key=ak,
-                alpaca_secret_key=sk,
-                alpaca_base_url=base_url,
+                broker=broker,
                 max_position_pct=exec_eff["max_position_pct"],
                 circuit_breaker_drawdown=exec_eff["circuit_breaker_drawdown"],
                 trailing_stop_pct=exec_eff["trailing_stop_pct"],
@@ -1507,7 +1514,6 @@ def _execute_order(
                     detail="Order blocked by risk controls (circuit breaker, sizing, or invalid price)",
                 )
 
-            exchange = "alpaca_paper" if is_paper else "alpaca_live"
             _write_audit(result.symbol, result.action, result.qty,
                          result.qty * result.submitted_price, source, result.order_id)
             return {
@@ -1519,7 +1525,7 @@ def _execute_order(
                 "submitted_price":   result.submitted_price,
                 "stop_price":        result.stop_price,
                 "take_profit_price": result.take_profit_price,
-                "exchange":          exchange,
+                "exchange":          result.exchange,
                 "stop_pct":          sl_pct,
                 "target_pct":        tp_pct,
             }
@@ -1528,9 +1534,7 @@ def _execute_order(
             from execution.crypto.engine import CryptoExecutionEngine
 
             engine = CryptoExecutionEngine(
-                alpaca_api_key=ak,
-                alpaca_secret_key=sk,
-                alpaca_base_url=base_url,
+                broker=broker,
                 max_position_pct=exec_eff["max_position_pct"],
                 max_crypto_allocation_pct=exec_eff["max_crypto_allocation_pct"],
                 cash_buffer=cfg.crypto_cash_buffer,
@@ -1584,7 +1588,6 @@ def execute_trade(req: ExecuteRequest, request: Request):
 
     cfg = get_settings()
     _exec_user_id = getattr(request.state, "user_id", None)
-    _ak, _sk, _base_url, _is_paper = _resolve_alpaca_creds(_exec_user_id, cfg)
     from brain.risk_config import get_effective_risk_for_user as _exec_risk_fn
     _exec_eff = _exec_risk_fn(_exec_user_id, _effective_config(cfg))
 
@@ -1605,7 +1608,8 @@ def execute_trade(req: ExecuteRequest, request: Request):
         take_profit_pct=tp_pct,
     )
 
-    return _execute_order(_ak, _sk, _base_url, _is_paper, _exec_eff, cfg, signal, sl_pct, tp_pct)
+    broker = _resolve_broker(_exec_user_id, cfg)
+    return _execute_order(broker, _exec_eff, cfg, signal, sl_pct, tp_pct)
 
 
 @app.get("/portfolio")
@@ -1630,14 +1634,13 @@ def get_portfolio(request: Request):
         log.warning("/portfolio: no Alpaca API key — returning empty state")
         state = PortfolioState(timestamp=datetime.now(timezone.utc), equity=0.0, cash=0.0)
     else:
-        portfolio_fetcher = PortfolioFetcher(
-            _pf_ak, _pf_sk, _pf_base_url,
-        )
+        from broker.adapters.alpaca import AlpacaBrokerAdapter
+        portfolio_fetcher = PortfolioFetcher(AlpacaBrokerAdapter(_pf_ak, _pf_sk, _pf_base_url))
         try:
             state = portfolio_fetcher.snapshot()
         except Exception as exc:
             log.error("Portfolio fetch failed: %s", exc, exc_info=True)
-            fetch_error = f"Alpaca portfolio fetch failed: {exc}"
+            fetch_error = f"Portfolio fetch failed: {exc}"
             state = PortfolioState(timestamp=datetime.now(timezone.utc), equity=0.0, cash=0.0)
 
     return {
@@ -1681,52 +1684,43 @@ def get_orders(request: Request, status: str = "open"):
         raise HTTPException(400, "status must be open, all, or closed")
 
     from config import get_settings
-    from alpaca.trading.client import TradingClient
-    from alpaca.trading.requests import GetOrdersRequest
-    from alpaca.trading.enums import QueryOrderStatus
-
     cfg = get_settings()
     _ord_user_id = getattr(request.state, "user_id", None)
-    _ord_ak, _ord_sk, _, _ord_paper = _resolve_alpaca_creds(_ord_user_id, cfg)
+    _ord_ak, _ord_sk, _ord_base_url, _ = _resolve_alpaca_creds(_ord_user_id, cfg)
 
     if not _ord_ak:
         return {"orders": [], "fetch_error": "ALPACA_API_KEY is not configured"}
 
-    client = TradingClient(_ord_ak, _ord_sk, paper=_ord_paper)
-
-    status_map = {
-        "open":   QueryOrderStatus.OPEN,
-        "all":    QueryOrderStatus.ALL,
-        "closed": QueryOrderStatus.CLOSED,
-    }
-
     try:
-        orders = client.get_orders(filter=GetOrdersRequest(status=status_map[status], limit=50))
-        result = []
-        for o in orders:
-            result.append({
-                "order_id":         str(o.id),
-                "client_order_id":  str(o.client_order_id or ""),
+        from broker.adapters.alpaca import AlpacaBrokerAdapter
+        broker = AlpacaBrokerAdapter(_ord_ak, _ord_sk, _ord_base_url)
+        orders = broker.get_orders(status=status, limit=50)
+        result = [
+            {
+                "order_id":         o.order_id,
+                "client_order_id":  o.client_order_id,
                 "symbol":           o.symbol,
-                "side":             o.side.value if o.side else "unknown",
-                "order_type":       o.type.value if o.type else "unknown",
-                "qty":              float(o.qty or 0),
-                "filled_qty":       float(o.filled_qty or 0),
-                "status":           o.status.value if o.status else "unknown",
+                "side":             o.side,
+                "order_type":       o.order_type,
+                "qty":              o.qty,
+                "filled_qty":       o.filled_qty,
+                "status":           o.status,
                 "submitted_at":     o.submitted_at.isoformat() if o.submitted_at else None,
                 "filled_at":        o.filled_at.isoformat() if o.filled_at else None,
-                "limit_price":      float(o.limit_price) if o.limit_price else None,
-                "stop_price":       float(o.stop_price) if o.stop_price else None,
-                "filled_avg_price": float(o.filled_avg_price) if o.filled_avg_price else None,
-            })
+                "limit_price":      o.limit_price,
+                "stop_price":       o.stop_price,
+                "filled_avg_price": o.filled_avg_price,
+            }
+            for o in orders
+        ]
         return {"orders": result, "fetch_error": None}
     except Exception as exc:
         log.error("Orders fetch failed: %s", exc, exc_info=True)
-        return {"orders": [], "fetch_error": f"Alpaca orders fetch failed: {exc}"}
+        return {"orders": [], "fetch_error": f"Orders fetch failed: {exc}"}
 
 
-def _alpaca_portfolio_history(ak: str, sk: str, is_paper: bool, period: str, timeframe: str) -> list:
-    """Fetch equity curve from Alpaca's native portfolio history endpoint.
+def _alpaca_portfolio_history(broker, period: str, timeframe: str) -> list:
+    """Fetch equity curve via the broker's native portfolio history API.
 
     This is the authoritative source — it captures realized P&L from closed
     trades, whereas the reconstruction approach can only see currently-open
@@ -1735,32 +1729,7 @@ def _alpaca_portfolio_history(ak: str, sk: str, is_paper: bool, period: str, tim
     Null equity values (pre-market / post-market gaps) are forward-filled
     so the chart never shows gaps.
     """
-    from datetime import timezone
-    from alpaca.trading.client import TradingClient
-    from alpaca.trading.requests import GetPortfolioHistoryRequest
-
-    client = TradingClient(ak, sk, paper=is_paper)
-    hist = client.get_portfolio_history(
-        GetPortfolioHistoryRequest(period=period, timeframe=timeframe)
-    )
-
-    timestamps: list = hist.timestamp or []
-    equities:   list = hist.equity   or []
-
-    if not timestamps or not equities or len(timestamps) != len(equities):
-        return []
-
-    pts: list = []
-    last_equity: float | None = None
-    for ts, eq in zip(timestamps, equities):
-        if eq is not None:
-            last_equity = float(eq)
-        if last_equity is None:
-            continue  # skip leading nulls before first real data point
-        dt = datetime.fromtimestamp(int(ts), tz=timezone.utc)
-        pts.append({"time": dt.isoformat(), "equity": last_equity, "pnl": 0.0})
-
-    return pts
+    return broker.get_portfolio_history(period, timeframe)
 
 
 @app.get("/portfolio/history")
@@ -1783,14 +1752,12 @@ def get_portfolio_history(period: str = "1D", request: Request = None):
     from config import get_settings
     cfg = get_settings()
 
-    # Resolve Alpaca creds: per-user if JWT, system if X-Api-Key or no request
+    # Resolve creds: per-user if JWT, system if X-Api-Key or no request
     _hist_user_id = getattr(request.state, "user_id", None) if request else None
     _hist_ak, _hist_sk, _hist_base_url, _hist_is_paper = _resolve_alpaca_creds(_hist_user_id, cfg)
 
     if not _hist_ak:
         return []
-
-    is_paper = _hist_is_paper
 
     # Alpaca API period/timeframe map
     alpaca_params = {
@@ -1800,23 +1767,25 @@ def get_portfolio_history(period: str = "1D", request: Request = None):
     }
     alpaca_period, alpaca_tf = alpaca_params[period]
 
-    # ── Try native Alpaca portfolio history first ──────────────────────────────
+    # ── Try native broker portfolio history first ──────────────────────────────
     try:
-        pts = _alpaca_portfolio_history(_hist_ak, _hist_sk, is_paper, alpaca_period, alpaca_tf)
+        from broker.adapters.alpaca import AlpacaBrokerAdapter
+        hist_broker = AlpacaBrokerAdapter(_hist_ak, _hist_sk, _hist_base_url)
+        pts = _alpaca_portfolio_history(hist_broker, alpaca_period, alpaca_tf)
         if len(pts) >= 2:
-            log.info("portfolio/history(%s): %d pts from Alpaca native API", period, len(pts))
+            log.info("portfolio/history(%s): %d pts from broker native API", period, len(pts))
             return pts
         log.warning(
-            "portfolio/history(%s): Alpaca native returned %d pts — falling back to reconstruction",
+            "portfolio/history(%s): broker native returned %d pts — falling back to reconstruction",
             period, len(pts),
         )
     except Exception as exc:
-        log.warning("portfolio/history(%s): Alpaca native API failed (%s) — falling back", period, exc)
+        log.warning("portfolio/history(%s): broker native API failed (%s) — falling back", period, exc)
 
     # ── Fallback: reconstruct from live positions + price bars ─────────────────
     lookback = {"1D": 1, "1M": 30, "1Y": 365}[period]
     daily    = period != "1D"
-    pts = _build_equity(_hist_ak, _hist_sk, is_paper, lookback_days=lookback, use_daily=daily)
+    pts = _build_equity(_hist_ak, _hist_sk, _hist_is_paper, lookback_days=lookback, use_daily=daily)
     log.info("portfolio/history(%s): fallback reconstruction returned %d pts", period, len(pts))
     return pts
 
@@ -2524,7 +2493,6 @@ async def tradingview_webhook(user_id: str, secret: str, request: Request):
     from brain.risk_config import get_effective_risk_for_user as _wh_risk_fn
 
     cfg = get_settings()
-    _ak, _sk, _base_url, _is_paper = _resolve_alpaca_creds(user_id, cfg)
     _wh_eff = _wh_risk_fn(user_id, _effective_config(cfg))
 
     sl_pct  = _wh_eff.get("stop_loss_pct",  cfg.stop_loss_pct)
@@ -2545,8 +2513,8 @@ async def tradingview_webhook(user_id: str, secret: str, request: Request):
     log.info("TradingView webhook: user=%s symbol=%s action=%s asset=%s",
              user_id[:8], symbol, action_raw, asset_class)
 
-    return _execute_order(_ak, _sk, _base_url, _is_paper, _wh_eff, cfg, signal,
-                          sl_pct, tp_pct, source="tradingview")
+    broker = _resolve_broker(user_id, cfg)
+    return _execute_order(broker, _wh_eff, cfg, signal, sl_pct, tp_pct, source="tradingview")
 
 
 if __name__ == "__main__":

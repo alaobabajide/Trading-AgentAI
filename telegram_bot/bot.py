@@ -487,17 +487,20 @@ def _sync_exec_signal(symbol: str, asset_class: str, action: str) -> str:
                 log.warning("Could not fetch bars for sizing: %s", e)
                 bars_fetched = False
 
+            from broker.adapters.alpaca import AlpacaBrokerAdapter
+            broker = AlpacaBrokerAdapter(cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url)
             engine = StockExecutionEngine(
-                cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,
-                cfg.max_position_pct, cfg.circuit_breaker_drawdown,
+                broker=broker,
+                max_position_pct=cfg.max_position_pct,
+                circuit_breaker_drawdown=cfg.circuit_breaker_drawdown,
             )
             result = engine.execute(signal, bars_highs, bars_lows, bars_closes)
         else:
             from execution.crypto.engine import CryptoExecutionEngine
+            from broker.adapters.alpaca import AlpacaBrokerAdapter
+            broker = AlpacaBrokerAdapter(cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url)
             engine = CryptoExecutionEngine(
-                alpaca_api_key=cfg.alpaca_api_key,
-                alpaca_secret_key=cfg.alpaca_secret_key,
-                alpaca_base_url=cfg.alpaca_base_url,
+                broker=broker,
                 max_position_pct=cfg.max_position_pct,
                 max_crypto_allocation_pct=cfg.max_crypto_allocation_pct,
                 cash_buffer=cfg.crypto_cash_buffer,
@@ -568,19 +571,22 @@ def _sync_exec_direct(
             bars_lows   = [b.low   for b in bars]
             bars_closes = [b.close for b in bars]
 
+            from broker.adapters.alpaca import AlpacaBrokerAdapter
+            broker = AlpacaBrokerAdapter(cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url)
             engine = StockExecutionEngine(
-                cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,
-                cfg.max_position_pct, cfg.circuit_breaker_drawdown,
+                broker=broker,
+                max_position_pct=cfg.max_position_pct,
+                circuit_breaker_drawdown=cfg.circuit_breaker_drawdown,
             )
             result = engine.execute(signal, bars_highs, bars_lows, bars_closes)
 
         else:  # crypto
             from execution.crypto.engine import CryptoExecutionEngine
+            from broker.adapters.alpaca import AlpacaBrokerAdapter
 
+            broker = AlpacaBrokerAdapter(cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url)
             engine = CryptoExecutionEngine(
-                alpaca_api_key=cfg.alpaca_api_key,
-                alpaca_secret_key=cfg.alpaca_secret_key,
-                alpaca_base_url=cfg.alpaca_base_url,
+                broker=broker,
                 max_position_pct=cfg.max_position_pct,
                 max_crypto_allocation_pct=cfg.max_crypto_allocation_pct,
                 cash_buffer=cfg.crypto_cash_buffer,

@@ -1,45 +1,33 @@
-"""Stock execution engine — NautilusTrader + Alpaca.
+"""Stock execution engine — broker-agnostic via BrokerAdapter.
 
 Architecture:
   • Receives a TradingSignal from the Brain API.
   • Applies ATR sizing and risk controls.
-  • Submits bracket orders (entry + stop-loss + take-profit) via Alpaca.
+  • Submits bracket orders via the injected BrokerAdapter.
   • Manages trailing stops on open positions.
 """
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING
 
 from brain.signal import TradingSignal
-from execution.stock.risk import RiskControls, SizingResult, TrailingStopManager
+from broker.interface import BrokerOrderResult
+from execution.stock.risk import RiskControls, TrailingStopManager
+
+if TYPE_CHECKING:
+    from broker.interface import BrokerAdapter
 
 log = logging.getLogger(__name__)
 
 
-@dataclass
-class OrderResult:
-    symbol: str
-    order_id: str
-    action: str
-    qty: int
-    submitted_price: float
-    stop_price: float
-    take_profit_price: float
-    timestamp: datetime
-    raw: Any = None
-
-
 class StockExecutionEngine:
-    """Wraps Alpaca's trading API with NautilusTrader-style risk controls."""
+    """Executes stock trades through any BrokerAdapter implementation."""
 
     def __init__(
         self,
-        alpaca_api_key: str,
-        alpaca_secret_key: str,
-        alpaca_base_url: str,
+        broker: "BrokerAdapter",
         max_position_pct: float = 0.05,
         circuit_breaker_drawdown: float = 0.10,
         trailing_stop_pct: float = 0.015,
@@ -47,32 +35,26 @@ class StockExecutionEngine:
         atr_stop_floor: float = 0.005,
         atr_stop_cap: float = 0.04,
     ) -> None:
-        from alpaca.trading.client import TradingClient
-
-        is_paper = "paper" in alpaca_base_url.lower()
-        self._trading = TradingClient(alpaca_api_key, alpaca_secret_key, paper=is_paper)
-        self._trailing = TrailingStopManager(trail_pct=trailing_stop_pct)
+        self._broker          = broker
+        self._trailing        = TrailingStopManager(trail_pct=trailing_stop_pct)
         self._risk: RiskControls | None = None
-        self._max_pos = max_position_pct
-        self._cb_drawdown = circuit_breaker_drawdown
-        self._atr_multiplier = atr_multiplier
-        self._atr_stop_floor = atr_stop_floor
-        self._atr_stop_cap = atr_stop_cap
+        self._max_pos         = max_position_pct
+        self._cb_drawdown     = circuit_breaker_drawdown
+        self._atr_multiplier  = atr_multiplier
+        self._atr_stop_floor  = atr_stop_floor
+        self._atr_stop_cap    = atr_stop_cap
 
     def _get_risk(self) -> RiskControls:
         """Lazily refresh equity-based risk controls."""
-        acct = self._trading.get_account()
-        equity = float(acct.equity)
-        last_equity = float(acct.last_equity or equity or 1.0)
-        if last_equity == 0:
-            last_equity = equity or 1.0
-        daily_pnl_pct = (equity - last_equity) / last_equity * 100
-        # Size against available capital only, not total equity.
-        # Without this, each new order is sized at 5% of the full ~$101K
-        # regardless of how much is already deployed in open positions.
+        acct       = self._broker.get_account()
+        equity     = acct.equity
+        last_eq    = acct.last_equity if acct.last_equity else equity or 1.0
+        if last_eq == 0:
+            last_eq = equity or 1.0
+        daily_pnl_pct = (equity - last_eq) / last_eq * 100
         try:
-            positions = self._trading.get_all_positions()
-            deployed = sum(abs(float(p.market_value or 0)) for p in positions)
+            positions = self._broker.get_all_positions()
+            deployed  = sum(abs(p.market_value) for p in positions)
             available = max(0.0, equity - deployed)
         except Exception:
             available = equity
@@ -86,7 +68,7 @@ class StockExecutionEngine:
         bars_highs: list[float],
         bars_lows: list[float],
         bars_closes: list[float],
-    ) -> OrderResult | None:
+    ) -> BrokerOrderResult | None:
         if signal.action == "HOLD":
             log.info("HOLD signal for %s — no order submitted", signal.symbol)
             return None
@@ -96,14 +78,10 @@ class StockExecutionEngine:
             log.warning("Circuit breaker active — refusing to execute %s", signal.symbol)
             return None
 
-        # ── SELL: close the existing long position at market ──────────────────
         if signal.action == "SELL":
-            return self._close_position(signal.symbol)
+            return self._broker.close_position(signal.symbol)
 
-        # ── BUY: bracket order (entry + stop-loss + take-profit) ─────────────
-        from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest
-        from alpaca.trading.enums import OrderSide, TimeInForce
-
+        # BUY: size the position then submit a bracket order
         current_price = bars_closes[-1] if bars_closes else 0.0
         if current_price <= 0:
             log.error("Cannot execute: invalid current price for %s", signal.symbol)
@@ -126,57 +104,23 @@ class StockExecutionEngine:
         if sizing is None:
             log.warning("Insufficient available capital to size %s — order skipped", signal.symbol)
             return None
-
         if sizing.shares == 0:
             log.warning("Sizing resulted in 0 shares for %s", signal.symbol)
             return None
 
-        order_req = MarketOrderRequest(
+        result = self._broker.submit_bracket_order(
             symbol=signal.symbol,
             qty=sizing.shares,
-            side=OrderSide.BUY,
-            time_in_force=TimeInForce.GTC,  # DAY would cancel stop/TP at 4 PM ET every day
-            order_class="bracket",
-            stop_loss=StopLossRequest(stop_price=sizing.stop_price),
-            take_profit=TakeProfitRequest(limit_price=sizing.take_profit_price),
+            side="BUY",
+            stop_price=sizing.stop_price,
+            take_profit_price=sizing.take_profit_price,
         )
-
-        order = self._trading.submit_order(order_req)
+        result.submitted_price = current_price  # use live price, not fill (market order)
         self._trailing.register(signal.symbol, current_price)
 
         log.info(
-            "BUY bracket submitted: %d %s @ market stop=%.2f tp=%.2f id=%s",
-            sizing.shares, signal.symbol,
-            sizing.stop_price, sizing.take_profit_price, order.id,
+            "BUY bracket submitted via %s: %d %s @ market stop=%.2f tp=%.2f id=%s",
+            self._broker.broker_name, sizing.shares, signal.symbol,
+            sizing.stop_price, sizing.take_profit_price, result.order_id,
         )
-        return OrderResult(
-            symbol=signal.symbol,
-            order_id=str(order.id),
-            action=signal.action,
-            qty=sizing.shares,
-            submitted_price=current_price,
-            stop_price=sizing.stop_price,
-            take_profit_price=sizing.take_profit_price,
-            timestamp=datetime.now(timezone.utc),
-            raw=order,
-        )
-
-    def _close_position(self, symbol: str) -> OrderResult | None:
-        """Close an existing long position at market (cancels any bracket child orders)."""
-        order = self._trading.close_position(symbol)
-        qty = int(float(getattr(order, "qty", 0) or 0))
-        price = float(getattr(order, "filled_avg_price", 0) or 0)
-        self._trailing.remove(symbol)
-        log.info("SELL close_position submitted: %s id=%s", symbol, order.id)
-        return OrderResult(
-            symbol=symbol,
-            order_id=str(order.id),
-            action="SELL",
-            qty=qty,
-            submitted_price=price,
-            stop_price=0.0,
-            take_profit_price=0.0,
-            timestamp=datetime.now(timezone.utc),
-            raw=order,
-        )
-
+        return result

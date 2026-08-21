@@ -1,15 +1,17 @@
 """Layer 1 — Portfolio state.
 
-Aggregates positions, equity, and P&L from Alpaca (stocks and crypto)
+Aggregates positions, equity, and P&L from any broker via BrokerAdapter
 into a single PortfolioState object used by the Brain and Risk layers.
-Crypto positions are detected by symbol suffix (BTCUSD, ETHUSD, etc.).
 """
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from broker.interface import BrokerAdapter
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +33,7 @@ class PortfolioState:
     timestamp: datetime
     equity: float                          # total NAV
     cash: float
-    buying_power: float = 0.0             # Alpaca buying power (may be 2× equity on margin)
+    buying_power: float = 0.0             # broker buying power (may be 2× equity on margin)
     positions: list[Position] = field(default_factory=list)
     daily_pnl: float = 0.0
     daily_pnl_pct: float = 0.0
@@ -46,69 +48,38 @@ class PortfolioState:
 
 
 class PortfolioFetcher:
-    def __init__(
-        self,
-        alpaca_api_key: str,
-        alpaca_secret_key: str,
-        alpaca_base_url: str,
-    ) -> None:
-        self._alpaca_key = alpaca_api_key
-        self._alpaca_secret = alpaca_secret_key
-        self._alpaca_url = alpaca_base_url
-
-    # ── Alpaca ────────────────────────────────────────────────────────────────
-
-    def _alpaca_positions(self) -> tuple[list[Position], float, float, float, float]:
-        """Returns (positions, equity, cash, buying_power, daily_pnl)."""
-        from alpaca.trading.client import TradingClient
-
-        # Derive paper mode from the configured base URL so both paper and
-        # live credentials work without code changes.
-        is_paper = "paper" in self._alpaca_url.lower()
-        client = TradingClient(self._alpaca_key, self._alpaca_secret, paper=is_paper)
-        acct = client.get_account()
-        equity = float(acct.equity)
-        cash = float(acct.cash)
-        buying_power = float(acct.buying_power) if acct.buying_power else cash
-        daily_pnl = float(acct.equity) - float(acct.last_equity)
-
-        raw_positions = client.get_all_positions()
-        positions: list[Position] = []
-        for p in raw_positions:
-            qty = float(p.qty)
-            avg_price = float(p.avg_entry_price)
-            current = float(p.current_price)
-            mv = float(p.market_value)
-            upnl = float(p.unrealized_pl)
-            sym = str(p.symbol)
-            # Alpaca crypto symbols end in USD (BTCUSD, ETHUSD, SOLUSD…)
-            is_crypto = sym.endswith("USD") and len(sym) > 3 and not sym.startswith("USD")
-            positions.append(Position(
-                symbol=sym,
-                asset_class="crypto" if is_crypto else "stock",
-                qty=qty,
-                avg_entry_price=avg_price,
-                current_price=current,
-                market_value=mv,
-                unrealized_pnl=upnl,
-                unrealized_pnl_pct=upnl / max(abs(qty * avg_price), 1) * 100,
-            ))
-        return positions, equity, cash, buying_power, daily_pnl
-
-    # ── Unified snapshot ──────────────────────────────────────────────────────
+    def __init__(self, broker: "BrokerAdapter") -> None:
+        self._broker = broker
 
     def snapshot(self) -> PortfolioState:
-        all_positions, equity, cash, buying_power, daily_pnl = [], 0.0, 0.0, 0.0, 0.0
+        all_positions: list[Position] = []
+        equity = cash = buying_power = daily_pnl = 0.0
 
-        if self._alpaca_key:
-            try:
-                all_positions, equity, cash, buying_power, daily_pnl = self._alpaca_positions()
-            except Exception as exc:
-                log.error("Alpaca portfolio fetch failed: %s", exc)
+        try:
+            acct         = self._broker.get_account()
+            equity       = acct.equity
+            cash         = acct.cash
+            buying_power = acct.buying_power
+            last_equity  = acct.last_equity if acct.last_equity else equity or 1.0
+            daily_pnl    = equity - last_equity
 
-        # Crypto positions now live on Alpaca (asset_class="crypto" detected by symbol suffix).
-        # Binance fetch is skipped — Railway's US IP blocks Binance regardless.
-        crypto_mv = sum(p.market_value for p in all_positions if p.asset_class == "crypto")
+            for bp in self._broker.get_all_positions():
+                cost_basis  = abs(bp.qty * bp.avg_entry_price)
+                upnl_pct    = bp.unrealized_pnl / max(cost_basis, 1) * 100
+                all_positions.append(Position(
+                    symbol=bp.symbol,
+                    asset_class=bp.asset_class,
+                    qty=bp.qty,
+                    avg_entry_price=bp.avg_entry_price,
+                    current_price=bp.current_price,
+                    market_value=bp.market_value,
+                    unrealized_pnl=bp.unrealized_pnl,
+                    unrealized_pnl_pct=upnl_pct,
+                ))
+        except Exception as exc:
+            log.error("Portfolio fetch failed (%s): %s", self._broker.broker_name, exc)
+
+        crypto_mv  = sum(p.market_value for p in all_positions if p.asset_class == "crypto")
         crypto_pct = crypto_mv / max(equity, 1)
 
         return PortfolioState(
@@ -121,5 +92,3 @@ class PortfolioFetcher:
             daily_pnl_pct=daily_pnl / max(equity - daily_pnl, 1) * 100,
             crypto_allocation_pct=crypto_pct,
         )
-
-

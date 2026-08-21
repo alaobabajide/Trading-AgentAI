@@ -149,8 +149,9 @@ class Orchestrator:
         mode_label = "rule-based (paper)" if self._paper_mode else "LLM debate (live)"
         log.info("Orchestrator signal mode: %s", mode_label)
 
+        from broker.adapters.alpaca import AlpacaBrokerAdapter
         self._portfolio_fetcher = PortfolioFetcher(
-            cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,
+            AlpacaBrokerAdapter(cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url)
         )
 
         # Singleton Alpaca client — reused across all market-hour checks and position checks
