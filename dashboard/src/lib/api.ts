@@ -924,6 +924,106 @@ export function useAlpacaSettings() {
   return { settings, saving, saved, error, save };
 }
 
+// ── Broker settings ────────────────────────────────────────────────────────────
+
+export interface BrokerInfo {
+  id:              string;
+  name:            string;
+  tagline:         string;
+  supports_paper:  boolean;
+  status:          "live" | "coming_soon";
+}
+
+export interface BrokerSettings {
+  current_broker:    string;
+  available_brokers: BrokerInfo[];
+}
+
+export async function fetchBrokerSettings(): Promise<BrokerSettings> {
+  const res = await fetch(`${BASE}/broker-settings`, {
+    signal:  AbortSignal.timeout(8000),
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export async function saveBrokerSettings(
+  brokerType: string,
+): Promise<{ saved: boolean; broker_type: string }> {
+  const res = await fetch(`${BASE}/broker-settings`, {
+    method:  "POST",
+    headers: apiHeaders({ "Content-Type": "application/json" }),
+    body:    JSON.stringify({ broker_type: brokerType }),
+    signal:  AbortSignal.timeout(10000),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  return safeJson(res);
+}
+
+export async function resetBrokerSettings(): Promise<{ reset: boolean; broker_type: string }> {
+  const res = await fetch(`${BASE}/broker-settings`, {
+    method:  "DELETE",
+    headers: apiHeaders(),
+    signal:  AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export function useBrokerSettings() {
+  const [settings,  setSettings]  = useState<BrokerSettings | null>(null);
+  const [saving,    setSaving]    = useState(false);
+  const [saved,     setSaved]     = useState(false);
+  const [error,     setError]     = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const s = await fetchBrokerSettings();
+        if (!cancelled) setSettings(s);
+      } catch { /* not authenticated or backend not up */ }
+    }
+    load();
+  }, []);
+
+  async function selectBroker(brokerType: string) {
+    setSaving(true);
+    setError(null);
+    try {
+      await saveBrokerSettings(brokerType);
+      setSettings((prev) => prev ? { ...prev, current_broker: brokerType } : null);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function resetBroker() {
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await resetBrokerSettings();
+      setSettings((prev) => prev ? { ...prev, current_broker: result.broker_type } : null);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return { settings, saving, saved, error, selectBroker, resetBroker };
+}
+
 export function useLlmSettings() {
   const [settings,  setSettings]  = useState<LlmSettings | null>(null);
   const [models,    setModels]    = useState<ModelsResponse | null>(null);

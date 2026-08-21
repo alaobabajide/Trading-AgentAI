@@ -1,10 +1,10 @@
 import clsx from "clsx";
-import { Brain, Clock, Link, Package, RefreshCw, Shield, TrendingUp, Zap } from "lucide-react";
+import { Brain, Clock, Landmark, Link, Package, RefreshCw, Shield, TrendingUp, Zap } from "lucide-react";
 import {
   HITLMode, UserProfile, DEFAULT_PROFILE,
   MODE_CONFIG, loadProfile, saveProfile,
 } from "../lib/hitl";
-import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload, useWebhookSettings } from "../lib/api";
+import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload, useWebhookSettings, useBrokerSettings } from "../lib/api";
 import { useState } from "react";
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
@@ -336,6 +336,59 @@ function WebhookPanel() {
       {wh.error && (
         <p className="text-xs text-red-400 font-mono">{wh.error}</p>
       )}
+    </div>
+  );
+}
+
+function BrokerPanel() {
+  const { settings, saving, saved, error, selectBroker } = useBrokerSettings();
+
+  if (!settings) {
+    return <p className="text-sm text-brand-300/50">Loading broker options…</p>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {settings.available_brokers.map((broker) => {
+          const isActive = broker.id === settings.current_broker;
+          const isLive   = broker.status === "live";
+          return (
+            <button
+              key={broker.id}
+              type="button"
+              disabled={!isLive || saving}
+              onClick={() => { if (isLive) selectBroker(broker.id); }}
+              className={clsx(
+                "text-left rounded-xl border p-3.5 transition-all",
+                isActive
+                  ? "border-brand-400/60 bg-brand-500/10 ring-1 ring-brand-400/30"
+                  : isLive
+                  ? "border-white/10 bg-white/[0.04] hover:border-brand-400/30 hover:bg-brand-500/[0.06] cursor-pointer"
+                  : "border-white/[0.06] bg-white/[0.02] opacity-50 cursor-not-allowed",
+              )}
+            >
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="text-sm font-semibold text-brand-100">{broker.name}</span>
+                {isActive && (
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-brand-500/20 text-brand-300 leading-none">
+                    Active
+                  </span>
+                )}
+                {!isActive && broker.status === "coming_soon" && (
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-white/[0.08] text-brand-400/60 leading-none">
+                    Soon
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-brand-300/60 leading-snug">{broker.tagline}</p>
+            </button>
+          );
+        })}
+      </div>
+      {saving && <p className="text-xs text-brand-400/60">Saving…</p>}
+      {saved  && <p className="text-xs text-green-400">Active broker updated.</p>}
+      {error  && <p className="text-xs text-red-400">{error}</p>}
     </div>
   );
 }
@@ -989,6 +1042,15 @@ export function SettingsPage() {
             ? `Signal tier logic: HOT = ${configStatus.hot_min_votes}+/${configStatus.agent_count} votes · WARM = ${configStatus.warm_min_votes}–${configStatus.hot_min_votes - 1}/${configStatus.agent_count} · COLD = <${configStatus.warm_min_votes} or panels conflict`
             : "Signal tier logic: loading…"}
         </SectionNote>
+      </Section>
+
+      {/* ── Broker Selection ─────────────────────────────────────────────── */}
+      <Section
+        icon={<Landmark className="w-4 h-4" />}
+        title="Broker"
+        subtitle="Choose which brokerage the trading agent uses for your account — only live brokers can execute orders"
+      >
+        <BrokerPanel />
       </Section>
 
       {/* ── Alpaca Account ────────────────────────────────────────────────── */}

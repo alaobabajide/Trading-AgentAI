@@ -430,6 +430,7 @@ _RATE_LIMITS: dict[str, tuple[int, int]] = {
     "/alpaca-settings":  (20, 60),
     "/risk-settings":    (20, 60),
     "/webhook-settings": (10, 60),
+    "/broker-settings":  (20, 60),
 }
 _DEFAULT_RATE = (120, 60)
 
@@ -672,11 +673,17 @@ def _resolve_alpaca_creds(user_id: str | None, cfg) -> tuple[str, str, str, bool
 
 
 def _resolve_broker(user_id: str | None, cfg):
-    """Return a BrokerAdapter for the given user (Alpaca for now).
+    """Return a BrokerAdapter for the given user.
 
-    Wraps _resolve_alpaca_creds so the rest of the API is broker-agnostic.
-    Phase B will extend this to support non-Alpaca brokers.
+    Orchestrator (user_id=None) always receives system Alpaca creds.
+    JWT users get the broker they selected in /broker-settings, defaulting to Alpaca.
+    Raises HTTPException 503 if the user has selected an unimplemented broker.
     """
+    if user_id:
+        from brain.broker_creds import load_user_broker_type, LIVE_BROKERS
+        broker_type = load_user_broker_type(user_id) or "alpaca"
+        if broker_type not in LIVE_BROKERS:
+            raise HTTPException(503, f"Broker '{broker_type}' is not yet supported for live trading — switch to Alpaca")
     ak, sk, base_url, _ = _resolve_alpaca_creds(user_id, cfg)
     from broker.adapters.alpaca import AlpacaBrokerAdapter
     return AlpacaBrokerAdapter(ak, sk, base_url)
@@ -687,6 +694,11 @@ class AlpacaSettingsPayload(BaseModel):
     paper_mode:  bool = True
     api_key:     str  = ""    # plaintext; empty = "don't change stored key"
     secret_key:  str  = ""    # plaintext; empty = "don't change stored key"
+
+
+class BrokerSettingsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    broker_type: str
 
 
 def _get_market_snapshot(fetcher, symbol: str, days: int):
@@ -1115,6 +1127,48 @@ def save_alpaca_settings_endpoint(req: AlpacaSettingsPayload, request: Request):
         "saved": True,
         "keys_configured": bool(settings.api_key_enc and settings.secret_key_enc),
     }
+
+
+@app.get("/broker-settings")
+def get_broker_settings(request: Request):
+    """Return the broker catalog and the user's current broker selection."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for broker settings")
+    from brain.broker_creds import BROKER_CATALOG, DEFAULT_BROKER, load_user_broker_type
+    current = load_user_broker_type(user_id) or DEFAULT_BROKER
+    return {
+        "current_broker":    current,
+        "available_brokers": BROKER_CATALOG,
+    }
+
+
+@app.post("/broker-settings")
+def save_broker_settings(req: BrokerSettingsPayload, request: Request):
+    """Save the user's broker selection. Only brokers with status='live' are accepted."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for broker settings")
+    from brain.broker_creds import BROKER_CATALOG, LIVE_BROKERS, save_user_broker_type
+    valid_ids = {b["id"] for b in BROKER_CATALOG}
+    if req.broker_type not in valid_ids:
+        raise HTTPException(400, f"Unknown broker '{req.broker_type}'")
+    if req.broker_type not in LIVE_BROKERS:
+        raise HTTPException(400, f"Broker '{req.broker_type}' is not yet available — stay tuned")
+    save_user_broker_type(user_id, req.broker_type)
+    log.info("Broker preference updated for user %s: %s", user_id[:8], req.broker_type)
+    return {"saved": True, "broker_type": req.broker_type}
+
+
+@app.delete("/broker-settings")
+def reset_broker_settings(request: Request):
+    """Reset the user's broker selection to the system default (Alpaca)."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for broker settings")
+    from brain.broker_creds import DEFAULT_BROKER, delete_user_broker_type
+    existed = delete_user_broker_type(user_id)
+    return {"reset": True, "broker_type": DEFAULT_BROKER, "had_preference": existed}
 
 
 @app.get("/risk-settings")
