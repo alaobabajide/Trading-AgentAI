@@ -3,8 +3,8 @@ import { BarChart2, AlertCircle, Clock, RefreshCw, Download, FileText } from "lu
 import { format } from "date-fns";
 import clsx from "clsx";
 import { PositionsTable } from "../components/PositionsTable";
-import { usePortfolio, useOrders, useOrderHistory, exportOrderHistory, useArchiveYears, downloadArchiveZip } from "../lib/api";
-import type { AlpacaOrder, StoredOrder } from "../lib/api";
+import { usePortfolio, useOrders, exportOrderHistory, useArchiveYears, downloadArchiveZip } from "../lib/api";
+import type { AlpacaOrder } from "../lib/api";
 
 function usMarketStatus(): { open: boolean; nextOpen: string } {
   return useMemo(() => {
@@ -195,83 +195,6 @@ function ArchivePanel({ years, loading }: { years: number[]; loading: boolean })
   );
 }
 
-// ── Audit history table (persistent store — all brokers) ─────────────────────
-
-const AUDIT_STATUS_COLOR: Record<string, string> = {
-  filled:           "text-emerald-400",
-  submitted:        "text-amber-400",
-  canceled:         "text-slate-500",
-  cancelled:        "text-slate-500",
-  expired:          "text-slate-500",
-  rejected:         "text-red-400",
-  broker_sync:      "text-slate-400",
-};
-
-function AuditTable({ orders }: { orders: StoredOrder[] }) {
-  if (orders.length === 0) {
-    return (
-      <p className="text-sm text-slate-500 text-center py-6">
-        No audit records yet — orders placed through the platform appear here.
-      </p>
-    );
-  }
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-[10px] uppercase tracking-widest text-slate-500 border-b border-white/5">
-            <th className="text-left pb-2 pr-3">Date</th>
-            <th className="text-left pb-2 pr-3">Symbol</th>
-            <th className="text-left pb-2 pr-3">Side</th>
-            <th className="text-left pb-2 pr-3">Type</th>
-            <th className="text-right pb-2 pr-3">Qty</th>
-            <th className="text-right pb-2 pr-3">Filled</th>
-            <th className="text-left pb-2 pr-3">Status</th>
-            <th className="text-left pb-2 pr-3">Broker</th>
-            <th className="text-left pb-2 pr-3">Source</th>
-            <th className="text-right pb-2 pr-3">Avg $</th>
-            <th className="text-right pb-2">Stop / TP</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-white/5">
-          {orders.map((o, i) => (
-            <tr key={o.order_id || i} className="font-mono text-xs">
-              <td className="py-1.5 pr-3 text-slate-500">
-                {o.submitted_at ? format(new Date(o.submitted_at), "MMM d · HH:mm") : "—"}
-              </td>
-              <td className="py-1.5 pr-3 font-semibold text-slate-200">{o.symbol}</td>
-              <td className={clsx("py-1.5 pr-3 font-semibold",
-                o.side === "BUY" ? "text-emerald-400" : "text-red-400"
-              )}>
-                {o.side}
-              </td>
-              <td className="py-1.5 pr-3 text-slate-400">{o.order_type}</td>
-              <td className="py-1.5 pr-3 text-right text-slate-300">{o.qty}</td>
-              <td className={clsx("py-1.5 pr-3 text-right",
-                o.filled_qty > 0 ? "text-emerald-400" : "text-slate-500"
-              )}>
-                {o.filled_qty}
-              </td>
-              <td className={clsx("py-1.5 pr-3", AUDIT_STATUS_COLOR[o.status] ?? "text-slate-400")}>
-                {o.status.charAt(0).toUpperCase() + o.status.slice(1)}
-              </td>
-              <td className="py-1.5 pr-3 text-slate-400">{o.broker}</td>
-              <td className="py-1.5 pr-3 text-slate-500">{o.source}</td>
-              <td className="py-1.5 pr-3 text-right text-slate-300">
-                {o.filled_avg_price != null ? `$${o.filled_avg_price.toFixed(2)}` : "—"}
-              </td>
-              <td className="py-1.5 text-right text-slate-400">
-                {o.stop_price != null ? `$${o.stop_price.toFixed(2)}` : "—"}
-                {o.take_profit_price != null ? ` / $${o.take_profit_price.toFixed(2)}` : ""}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 // ── Export bar ────────────────────────────────────────────────────────────────
 
 function ExportBar({ days }: { days: number }) {
@@ -322,8 +245,6 @@ export function PositionsPage() {
   const [showPendingOnly, setShowPendingOnly] = useState(false);
   const { orders, fetchError: ordersError, loading: ordersLoading } = useOrders(showPendingOnly ? "open" : "all");
   const market = usMarketStatus();
-  const [auditDays, setAuditDays] = useState(90);
-  const { orders: auditOrders, loading: auditLoading, error: auditError } = useOrderHistory(auditDays);
   const { years: archiveYears, loading: archiveLoading } = useArchiveYears();
 
   const portfolioError = portfolio?.fetch_error ?? null;
@@ -424,28 +345,27 @@ export function PositionsPage() {
         ))}
       </div>
 
-      {/* Alpaca live orders — real-time feed */}
+      {/* Recent Orders */}
       <div className="glass rounded-2xl p-5 space-y-4">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-2">
           <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 flex items-center gap-2">
             <Clock className="w-3.5 h-3.5" />
-            {showPendingOnly ? "Pending Orders" : "Recent Orders (Alpaca · Last 50)"}
+            {showPendingOnly ? "Pending Orders" : "Recent Orders"}
             {hasPendingOrders && (
               <span className="px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 text-[9px] font-bold">
                 {pendingOrders.length} PENDING
               </span>
             )}
           </h2>
-          <div className="flex items-center gap-2">
-            {ordersLoading && (
-              <RefreshCw className="w-3 h-3 text-slate-500 animate-spin" />
-            )}
+          <div className="flex items-center gap-3 flex-wrap">
+            {ordersLoading && <RefreshCw className="w-3 h-3 text-slate-500 animate-spin" />}
             <button
               onClick={() => setShowPendingOnly((v) => !v)}
               className="text-[10px] font-mono text-slate-500 hover:text-slate-300 underline underline-offset-2 transition-colors"
             >
               {showPendingOnly ? "Show full history" : "Show pending only"}
             </button>
+            <ExportBar days={365} />
           </div>
         </div>
 
@@ -457,43 +377,6 @@ export function PositionsPage() {
         )}
 
         <OrdersTable orders={orders} />
-      </div>
-
-      {/* Order History — persistent audit store, all brokers, exportable */}
-      <div className="glass rounded-2xl p-5 space-y-4">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 flex items-center gap-2">
-            <Clock className="w-3.5 h-3.5" />
-            Order History
-            {auditLoading && <RefreshCw className="w-3 h-3 text-slate-500 animate-spin" />}
-            <span className="text-slate-600 font-normal normal-case tracking-normal">
-              · {auditOrders.length} record{auditOrders.length !== 1 ? "s" : ""}
-            </span>
-          </h2>
-          <div className="flex items-center gap-3 flex-wrap">
-            <select
-              value={auditDays}
-              onChange={(e) => setAuditDays(Number(e.target.value))}
-              className="text-[10px] font-mono bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-slate-400 focus:outline-none focus:ring-1 focus:ring-brand-500/40"
-            >
-              <option value={7}>Last 7 days</option>
-              <option value={30}>Last 30 days</option>
-              <option value={90}>Last 90 days</option>
-              <option value={180}>Last 180 days</option>
-              <option value={365}>Last 365 days</option>
-            </select>
-            <ExportBar days={auditDays} />
-          </div>
-        </div>
-
-        {auditError && (
-          <div className="flex items-center gap-2 text-xs text-red-400">
-            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-            {auditError}
-          </div>
-        )}
-
-        <AuditTable orders={auditOrders} />
       </div>
 
       {/* Archive — completed calendar years, downloadable as ZIP */}
