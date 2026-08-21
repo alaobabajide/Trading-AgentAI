@@ -432,6 +432,7 @@ _RATE_LIMITS: dict[str, tuple[int, int]] = {
     "/webhook-settings": (10, 60),
     "/broker-settings":       (20, 60),
     "/tastytrade-settings":   (20, 60),
+    "/polygon-settings":      (20, 60),
 }
 _DEFAULT_RATE = (120, 60)
 
@@ -727,18 +728,54 @@ class TastytradeSettingsPayload(BaseModel):
     paper_mode:     bool = True
 
 
+class PolygonSettingsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    api_key: str = ""   # plaintext; empty = "don't change stored key"
+
+
 def _get_market_snapshot(fetcher, symbol: str, days: int):
-    """Return a cached bar snapshot (TTL %ds) to avoid re-fetching on every signal."""
-    key = f"{symbol}:{days}"
+    """Return a cached bar snapshot (TTL %ds) to avoid re-fetching on every signal.
+
+    Cache key includes the fetcher type so Alpaca and Polygon snapshots are stored
+    separately — prevents stale Alpaca bars from being served when a user switches
+    to Polygon mid-session.
+    """
+    source = type(fetcher).__name__
+    key = f"{source}:{symbol}:{days}"
     now = _time.monotonic()
     if key in _bar_cache:
         snap, ts = _bar_cache[key]
         if now - ts < _BAR_CACHE_TTL:
-            log.debug("Bar cache hit for %s (%ds)", symbol, days)
+            log.debug("Bar cache hit [%s] for %s (%ds)", source, symbol, days)
             return snap
     snap = fetcher.snapshot(symbol, days)
     _bar_cache[key] = (snap, now)
     return snap
+
+
+def _resolve_stock_data(user_id: str | None, cfg, fallback):
+    """Return the best stock market data client for this request.
+
+    Priority:
+      1. Per-user Polygon key (JWT user with key stored)
+      2. System POLYGON_API_KEY env var / config
+      3. fallback (the system AlpacaMarketData passed in from shared services)
+    """
+    polygon_key = None
+    if user_id:
+        try:
+            enc_key = _get_enc_key()
+            from brain.polygon_creds import get_effective_polygon_key
+            polygon_key = get_effective_polygon_key(user_id, enc_key, cfg)
+        except Exception as exc:
+            log.debug("Polygon key resolution failed for user %s: %s", user_id, exc)
+    if not polygon_key:
+        polygon_key = getattr(cfg, "polygon_api_key", "") or None
+    if polygon_key:
+        from data.polygon_data import PolygonMarketData
+        log.debug("Using Polygon.io for %s market data", "per-user" if user_id else "system")
+        return PolygonMarketData(polygon_key)
+    return fallback
 
 
 @app.get("/")
@@ -1237,6 +1274,53 @@ def save_tastytrade_settings(req: TastytradeSettingsPayload, request: Request):
     }
 
 
+@app.get("/polygon-settings")
+def get_polygon_settings(request: Request):
+    """Return the user's Polygon.io configuration (key presence only — value never returned)."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for Polygon settings")
+    from brain.polygon_creds import load_user_polygon_settings
+    from config import get_settings
+    s   = load_user_polygon_settings(user_id)
+    cfg = get_settings()
+    return {
+        "user_key_configured":   bool(s.api_key_enc),
+        "system_key_configured": bool(getattr(cfg, "polygon_api_key", "")),
+        "effective_source":      (
+            "user"   if s.api_key_enc
+            else "system" if getattr(cfg, "polygon_api_key", "")
+            else "none"
+        ),
+    }
+
+
+@app.post("/polygon-settings")
+def save_polygon_settings(req: PolygonSettingsPayload, request: Request):
+    """Save the user's Polygon API key (encrypted at rest, never returned)."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for Polygon settings")
+    if not req.api_key:
+        raise HTTPException(400, "api_key is required")
+    enc_key = _get_enc_key()
+    from brain.polygon_creds import save_user_polygon_key
+    save_user_polygon_key(user_id, req.api_key, enc_key)
+    log.info("Polygon API key saved for user %s", user_id[:8])
+    return {"saved": True, "user_key_configured": True}
+
+
+@app.delete("/polygon-settings")
+def delete_polygon_settings(request: Request):
+    """Remove the user's Polygon API key (reverts to system key or Alpaca fallback)."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for Polygon settings")
+    from brain.polygon_creds import delete_user_polygon_key
+    existed = delete_user_polygon_key(user_id)
+    return {"deleted": True, "had_key": existed}
+
+
 @app.get("/risk-settings")
 def get_risk_settings(request: Request):
     """Return the user's per-user risk overrides alongside the effective merged config.
@@ -1358,10 +1442,13 @@ def generate_signal(req: SignalRequest, request: Request):
         log.error("Service initialisation failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Service init failed: {exc}")
 
-    # ── Fetch market data (bar cache reduces Alpaca round-trip to ~0 ms after first call) ──
+    # ── Resolve market data source (Polygon if configured, else Alpaca) ────────
+    stock_md = _resolve_stock_data(user_id, cfg, alpaca)
+
+    # ── Fetch market data (bar cache reduces network round-trip to ~0 ms after first call) ──
     try:
         if req.asset_class == "stock":
-            market = _get_market_snapshot(alpaca, req.symbol, req.lookback_days)
+            market = _get_market_snapshot(stock_md, req.symbol, req.lookback_days)
             onchain_snap = None
         else:
             market = _get_market_snapshot(alpaca_crypto, req.symbol, req.lookback_days)
@@ -1373,7 +1460,7 @@ def generate_signal(req: SignalRequest, request: Request):
     # ── Refresh latest_quote outside bar cache (bar cache TTL=5min retains yesterday's close;
     # indicators must reflect the live intraday price to avoid acting on stale signals) ──
     try:
-        fetcher = alpaca if req.asset_class == "stock" else alpaca_crypto
+        fetcher = stock_md if req.asset_class == "stock" else alpaca_crypto
         live_quote = fetcher.get_latest_quote(req.symbol)
         if live_quote and float(getattr(live_quote, "mid", 0) or 0) > 0:
             market = _dc_replace(market, latest_quote=live_quote)

@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # On-chain
     eth_rpc_url: str = Field("", env="ETH_RPC_URL")
 
+    # Polygon.io — optional market data upgrade (replaces Alpaca bars when set)
+    polygon_api_key: str = Field("", env="POLYGON_API_KEY")
+
     # Sentiment — Finnhub free tier fallback (optional; used when Yahoo RSS < 5 headlines)
     finnhub_api_key: str = Field("", env="FINNHUB_API_KEY")
 

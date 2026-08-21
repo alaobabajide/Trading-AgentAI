@@ -1,10 +1,10 @@
 import clsx from "clsx";
-import { Brain, Clock, Landmark, Link, Package, RefreshCw, Shield, TrendingUp, Zap } from "lucide-react";
+import { Brain, Clock, Database, Landmark, Link, Package, RefreshCw, Shield, TrendingUp, Zap } from "lucide-react";
 import {
   HITLMode, UserProfile, DEFAULT_PROFILE,
   MODE_CONFIG, loadProfile, saveProfile,
 } from "../lib/hitl";
-import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload, useWebhookSettings, useBrokerSettings, useTastytradeSettings, TastytradeSavePayload } from "../lib/api";
+import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload, useWebhookSettings, useBrokerSettings, useTastytradeSettings, TastytradeSavePayload, usePolygonSettings } from "../lib/api";
 import { useEffect, useState } from "react";
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
@@ -389,6 +389,77 @@ function BrokerPanel() {
       {saving && <p className="text-xs text-brand-400/60">Saving…</p>}
       {saved  && <p className="text-xs text-green-400">Active broker updated.</p>}
       {error  && <p className="text-xs text-red-400">{error}</p>}
+    </div>
+  );
+}
+
+function PolygonPanel() {
+  const poly = usePolygonSettings();
+  const [apiKeyVal, setApiKeyVal] = useState("");
+
+  const sourceLabel: Record<string, string> = {
+    user:   "Your key — real-time data",
+    system: "System key — real-time data",
+    none:   "Not configured — using Alpaca (15-min delayed)",
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Status badge */}
+      <div className={clsx(
+        "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border",
+        poly.settings?.effective_source === "none"
+          ? "border-white/10 bg-white/5 text-slate-400"
+          : "border-green-400/30 bg-green-500/10 text-green-400",
+      )}>
+        <span className={clsx("w-1.5 h-1.5 rounded-full", poly.settings?.effective_source === "none" ? "bg-slate-500" : "bg-green-400")} />
+        {poly.settings ? sourceLabel[poly.settings.effective_source] : "Loading…"}
+      </div>
+
+      {/* API key input */}
+      <div className="space-y-1">
+        <label className="text-[11px] text-slate-400 uppercase tracking-wide">
+          Polygon API Key {poly.settings?.user_key_configured && <span className="text-green-400/80 ml-1 normal-case">(saved)</span>}
+        </label>
+        <div className="flex gap-2">
+          <input
+            type="password"
+            autoComplete="off"
+            placeholder={poly.settings?.user_key_configured ? "leave blank to keep saved key" : "pk_xxxxxxxxxxxxxxxx"}
+            value={apiKeyVal}
+            onChange={(e) => setApiKeyVal(e.target.value)}
+            className="flex-1 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-brand-100 placeholder-slate-500 focus:outline-none focus:border-brand-400/50"
+          />
+          <button
+            type="button"
+            onClick={() => { poly.saveKey(apiKeyVal); setApiKeyVal(""); }}
+            disabled={poly.saving || !apiKeyVal.trim()}
+            className="px-4 py-2 rounded-lg bg-brand-500/20 border border-brand-400/30 text-sm text-brand-300 hover:bg-brand-500/30 transition-colors disabled:opacity-40 shrink-0"
+          >
+            {poly.saving ? "Saving…" : "Save"}
+          </button>
+          {poly.settings?.user_key_configured && (
+            <button
+              type="button"
+              onClick={poly.removeKey}
+              disabled={poly.saving}
+              className="px-3 py-2 rounded-lg border border-white/10 text-xs text-slate-400 hover:text-red-400 hover:border-red-400/30 transition-colors disabled:opacity-40 shrink-0"
+            >
+              Remove
+            </button>
+          )}
+        </div>
+      </div>
+
+      {poly.saved  && <p className="text-xs text-green-400">Saved — signals will now use Polygon data.</p>}
+      {poly.error  && <p className="text-xs text-red-400">{poly.error}</p>}
+
+      <p className="text-[11px] text-slate-500 leading-relaxed">
+        Polygon.io provides adjusted daily bars for equity signals.
+        Free tier: 15-min delayed.
+        Starter plan: real-time. Without a key, the system falls back to Alpaca market data.
+        Get a free key at <span className="text-brand-400/70">polygon.io</span>.
+      </p>
     </div>
   );
 }
@@ -1199,6 +1270,15 @@ export function SettingsPage() {
         subtitle="Receive TradingView alerts and execute trades automatically via your active broker"
       >
         <WebhookPanel />
+      </Section>
+
+      {/* ── Market Data ──────────────────────────────────────────────────── */}
+      <Section
+        icon={<Database className="w-4 h-4" />}
+        title="Market Data"
+        subtitle="Polygon.io provides higher-quality adjusted bars for signal generation — falls back to Alpaca if not configured"
+      >
+        <PolygonPanel />
       </Section>
 
       {/* ── Brain / LLM ───────────────────────────────────────────────────── */}

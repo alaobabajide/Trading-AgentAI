@@ -1024,6 +1024,102 @@ export function useBrokerSettings() {
   return { settings, saving, saved, error, selectBroker, resetBroker };
 }
 
+// ── Polygon.io market data settings ──────────────────────────────────────────
+
+export interface PolygonSettings {
+  user_key_configured:   boolean;
+  system_key_configured: boolean;
+  effective_source:      "user" | "system" | "none";
+}
+
+export async function fetchPolygonSettings(): Promise<PolygonSettings> {
+  const res = await fetch(`${BASE}/polygon-settings`, {
+    signal:  AbortSignal.timeout(8000),
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export async function savePolygonKey(
+  apiKey: string,
+): Promise<{ saved: boolean }> {
+  const res = await fetch(`${BASE}/polygon-settings`, {
+    method:  "POST",
+    headers: apiHeaders({ "Content-Type": "application/json" }),
+    body:    JSON.stringify({ api_key: apiKey }),
+    signal:  AbortSignal.timeout(10000),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  return safeJson(res);
+}
+
+export async function deletePolygonKey(): Promise<{ deleted: boolean }> {
+  const res = await fetch(`${BASE}/polygon-settings`, {
+    method:  "DELETE",
+    headers: apiHeaders(),
+    signal:  AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export function usePolygonSettings() {
+  const [settings, setSettings] = useState<PolygonSettings | null>(null);
+  const [saving,   setSaving]   = useState(false);
+  const [saved,    setSaved]    = useState(false);
+  const [error,    setError]    = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const s = await fetchPolygonSettings();
+        if (!cancelled) setSettings(s);
+      } catch { /* not authenticated or backend not up */ }
+    }
+    load();
+  }, []);
+
+  async function saveKey(apiKey: string) {
+    setSaving(true);
+    setError(null);
+    try {
+      await savePolygonKey(apiKey);
+      setSettings((prev) => prev ? { ...prev, user_key_configured: true, effective_source: "user" } : null);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeKey() {
+    setSaving(true);
+    setError(null);
+    try {
+      await deletePolygonKey();
+      setSettings((prev) => prev
+        ? { ...prev, user_key_configured: false, effective_source: prev.system_key_configured ? "system" : "none" }
+        : null
+      );
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return { settings, saving, saved, error, saveKey, removeKey };
+}
+
 // ── tastytrade settings ────────────────────────────────────────────────────────
 
 export interface TastytradeSettings {
