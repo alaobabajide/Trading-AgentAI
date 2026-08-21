@@ -443,6 +443,7 @@ _RATE_LIMITS: dict[str, tuple[int, int]] = {
     "/ibkr-settings":         (20, 60),
     "/orders/history":        (30, 60),
     "/orders/history/export": (5,  60),
+    "/orders/history/years":  (20, 60),
 }
 _DEFAULT_RATE = (120, 60)
 
@@ -2510,6 +2511,171 @@ def export_order_history(request: Request, format: str = "csv", days: int = 365)
         content=bytes(pdf_bytes),
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=\"order_history_{days}d.pdf\""},
+    )
+
+
+@app.get("/orders/history/years")
+def get_order_history_years(request: Request):
+    """Return list of past complete calendar years that have stored orders.
+
+    Used by the dashboard Archive panel to show which years have downloadable data.
+    Requires JWT authentication.
+    """
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required")
+    from brain.order_history import get_available_years
+    years = get_available_years()
+    return {"years": years}
+
+
+@app.get("/orders/archive/{year}")
+def download_archive_zip(request: Request, year: int):
+    """Download a ZIP archive of all orders for the given past calendar year.
+
+    The ZIP contains two files:
+      orders_{year}.csv — machine-readable data
+      orders_{year}.pdf — formatted audit report
+
+    Only past complete years are allowed (not the current year).
+    Requires JWT authentication.
+    """
+    from fastapi.responses import Response as _Response
+    import io, csv, zipfile
+    from datetime import datetime as _dt, timezone as _tz, date as _date
+
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required")
+
+    current_year = _dt.now(_tz.utc).year
+    if year >= current_year:
+        raise HTTPException(400, "Only past calendar years can be archived")
+    if year < 2020:
+        raise HTTPException(400, "Year out of supported range")
+
+    from brain.order_history import get_orders_for_year
+    orders = get_orders_for_year(year)
+
+    # ── CSV ───────────────────────────────────────────────────────────────────
+    csv_buf = io.StringIO()
+    csv_writer = csv.DictWriter(csv_buf, fieldnames=[
+        "submitted_at", "symbol", "side", "order_type", "qty", "filled_qty",
+        "status", "filled_at", "broker", "stop_price", "take_profit_price",
+        "filled_avg_price", "notional", "source", "order_id",
+    ], extrasaction="ignore")
+    csv_writer.writeheader()
+    for o in orders:
+        csv_writer.writerow(o)
+    csv_bytes = csv_buf.getvalue().encode("utf-8")
+
+    # ── PDF ───────────────────────────────────────────────────────────────────
+    pdf_bytes: bytes = b""
+    try:
+        from fpdf import FPDF
+
+        COLS = [
+            ("Date",    38), ("Symbol",  18), ("Side",    12), ("Type",    16),
+            ("Qty",     14), ("Filled",  14), ("Status",  20), ("Broker",  18),
+            ("Source",  20), ("Avg $",   20), ("Stop $",  20), ("TP $",    20),
+        ]
+
+        pdf = FPDF(orientation="L", unit="mm", format="A4")
+        pdf.set_auto_page_break(auto=True, margin=12)
+        pdf.set_margins(10, 10, 10)
+
+        def _arch_header():
+            pdf.set_font("Helvetica", "B", 13)
+            pdf.set_text_color(255, 255, 255)
+            pdf.set_fill_color(30, 41, 59)
+            pdf.cell(0, 9, f"TradeAgent — Order Archive {year}", align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(148, 163, 184)
+            pdf.cell(0, 5, f"Generated {_date.today().isoformat()} · {year} full year · {len(orders)} orders", align="C", new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(2)
+            pdf.set_font("Helvetica", "B", 7)
+            pdf.set_text_color(200, 210, 220)
+            pdf.set_fill_color(15, 23, 42)
+            for col, w in COLS:
+                pdf.cell(w, 6, col, border=0, fill=True, align="C")
+            pdf.ln()
+            pdf.set_text_color(226, 232, 240)
+
+        pdf.add_page()
+        _arch_header()
+
+        def _fmt(val, prefix="") -> str:
+            if val is None:
+                return "—"
+            if isinstance(val, float):
+                return f"{prefix}{val:,.4f}".rstrip("0").rstrip(".")
+            return str(val)
+
+        def _short_date(iso) -> str:
+            if not iso:
+                return "—"
+            try:
+                return str(iso)[:16].replace("T", " ")
+            except Exception:
+                return str(iso)
+
+        for i, o in enumerate(orders):
+            if pdf.get_y() > 185:
+                pdf.add_page()
+                _arch_header()
+            fill_color = (30, 41, 59) if i % 2 == 0 else (15, 23, 42)
+            pdf.set_fill_color(*fill_color)
+            side = str(o.get("side", "")).upper()
+            pdf.set_font("Helvetica", "B", 7)
+            pdf.set_text_color(52, 211, 153) if side == "BUY" else pdf.set_text_color(248, 113, 113)
+            pdf.cell(COLS[0][1], 5, _short_date(o.get("submitted_at")), fill=True, align="L")
+            pdf.cell(COLS[1][1], 5, str(o.get("symbol", "")),           fill=True, align="C")
+            pdf.set_font("Helvetica", "B", 7)
+            pdf.cell(COLS[2][1], 5, side,                                fill=True, align="C")
+            pdf.set_font("Helvetica", "", 7)
+            pdf.set_text_color(226, 232, 240)
+            pdf.cell(COLS[3][1], 5, str(o.get("order_type", "")),        fill=True, align="C")
+            pdf.cell(COLS[4][1], 5, _fmt(o.get("qty")),                  fill=True, align="R")
+            pdf.cell(COLS[5][1], 5, _fmt(o.get("filled_qty")),           fill=True, align="R")
+            status = str(o.get("status", ""))
+            if status == "filled":
+                pdf.set_text_color(52, 211, 153)
+            elif status in ("canceled", "cancelled", "expired"):
+                pdf.set_text_color(148, 163, 184)
+            elif status == "rejected":
+                pdf.set_text_color(248, 113, 113)
+            else:
+                pdf.set_text_color(251, 191, 36)
+            pdf.cell(COLS[6][1], 5, status.capitalize(),                 fill=True, align="C")
+            pdf.set_text_color(226, 232, 240)
+            pdf.cell(COLS[7][1], 5, str(o.get("broker", "")),            fill=True, align="C")
+            pdf.cell(COLS[8][1], 5, str(o.get("source", "")),            fill=True, align="C")
+            pdf.cell(COLS[9][1],  5, _fmt(o.get("filled_avg_price"), "$"), fill=True, align="R")
+            pdf.cell(COLS[10][1], 5, _fmt(o.get("stop_price"),      "$"), fill=True, align="R")
+            pdf.cell(COLS[11][1], 5, _fmt(o.get("take_profit_price"), "$"), fill=True, align="R")
+            pdf.ln()
+
+        pdf.set_y(-10)
+        pdf.set_font("Helvetica", "I", 7)
+        pdf.set_text_color(100, 116, 139)
+        pdf.cell(0, 5, f"Page {pdf.page_no()} — TradeAgent Archive {year} — 1-year retention policy", align="C")
+        pdf_bytes = bytes(pdf.output())
+
+    except ImportError:
+        pass  # PDF missing — ZIP will only contain CSV
+
+    # ── Pack ZIP ──────────────────────────────────────────────────────────────
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"orders_{year}.csv", csv_bytes)
+        if pdf_bytes:
+            zf.writestr(f"orders_{year}.pdf", pdf_bytes)
+    zip_buf.seek(0)
+
+    return _Response(
+        content=zip_buf.read(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=\"orders_archive_{year}.zip\""},
     )
 
 

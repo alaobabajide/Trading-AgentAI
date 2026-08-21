@@ -147,6 +147,41 @@ def get_all_orders(days: int | None = None) -> list[dict]:
     return list(reversed(records))
 
 
+def get_available_years() -> list[int]:
+    """Return sorted (newest-first) list of past complete calendar years that have orders."""
+    records = _load()
+    current_year = datetime.now(timezone.utc).year
+    years: set[int] = set()
+    for r in records:
+        ts = r.get("submitted_at")
+        if not ts:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+            if dt.year < current_year:
+                years.add(dt.year)
+        except Exception:
+            continue
+    return sorted(years, reverse=True)
+
+
+def get_orders_for_year(year: int) -> list[dict]:
+    """Return all stored orders whose submitted_at falls in the given calendar year, newest-first."""
+    records = _load()
+    result = []
+    for r in records:
+        ts = r.get("submitted_at")
+        if not ts:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+            if dt.year == year:
+                result.append(r)
+        except Exception:
+            continue
+    return list(reversed(result))
+
+
 def record_from_broker_result(
     *,
     order_id:          str,

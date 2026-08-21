@@ -734,6 +734,51 @@ export function useOrderHistory(days = 365) {
   return { orders, loading, error };
 }
 
+// ── Archive (per-year ZIP download) ──────────────────────────────────────────
+
+export async function fetchArchiveYears(): Promise<number[]> {
+  const res = await fetch(`${BASE}/orders/history/years`, {
+    headers: apiHeaders(),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) throw new Error(`Archive years: ${res.status}`);
+  const data = await safeJson<{ years: number[] }>(res);
+  return data?.years ?? [];
+}
+
+export async function downloadArchiveZip(year: number): Promise<void> {
+  const res = await fetch(`${BASE}/orders/archive/${year}`, {
+    headers: apiHeaders(),
+    signal: AbortSignal.timeout(60000),
+  });
+  if (!res.ok) throw new Error(`Archive ${year}: ${res.status}`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `orders_archive_${year}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export function useArchiveYears() {
+  const [years,   setYears]   = useState<number[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchArchiveYears()
+      .then((y) => { if (!cancelled) { setYears(y); setLoading(false); } })
+      .catch((e) => { if (!cancelled) { setError((e as Error).message); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, []);
+
+  return { years, loading, error };
+}
+
 // ── API usage & credit tracking ───────────────────────────────────────────────
 
 export interface ModelUsage {

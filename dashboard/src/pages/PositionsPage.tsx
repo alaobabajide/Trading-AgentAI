@@ -3,7 +3,7 @@ import { BarChart2, AlertCircle, Clock, RefreshCw, Download, FileText } from "lu
 import { format } from "date-fns";
 import clsx from "clsx";
 import { PositionsTable } from "../components/PositionsTable";
-import { usePortfolio, useOrders, useOrderHistory, exportOrderHistory } from "../lib/api";
+import { usePortfolio, useOrders, useOrderHistory, exportOrderHistory, useArchiveYears, downloadArchiveZip } from "../lib/api";
 import type { AlpacaOrder, StoredOrder } from "../lib/api";
 
 function usMarketStatus(): { open: boolean; nextOpen: string } {
@@ -123,6 +123,74 @@ function OrdersTable({ orders }: { orders: AlpacaOrder[] }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// ── Archive panel (past calendar years → ZIP download) ────────────────────────
+
+function ArchivePanel({ years, loading }: { years: number[]; loading: boolean }) {
+  const [downloading, setDownloading] = useState<number | null>(null);
+  const [dlError, setDlError] = useState<string | null>(null);
+
+  async function handleDownload(year: number) {
+    setDownloading(year);
+    setDlError(null);
+    try {
+      await downloadArchiveZip(year);
+    } catch (e) {
+      setDlError((e as Error).message);
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  return (
+    <div className="glass rounded-2xl p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 flex items-center gap-2">
+          <FileText className="w-3.5 h-3.5" />
+          Archive
+          {loading && <RefreshCw className="w-3 h-3 text-slate-500 animate-spin" />}
+        </h2>
+        <span className="text-[10px] text-slate-600 font-mono">ZIP · CSV + PDF per year</span>
+      </div>
+
+      {dlError && (
+        <div className="flex items-center gap-2 text-xs text-red-400">
+          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+          {dlError}
+        </div>
+      )}
+
+      {!loading && years.length === 0 ? (
+        <p className="text-sm text-slate-500 text-center py-4">
+          No completed calendar years in the archive yet — past-year orders will appear here automatically.
+        </p>
+      ) : (
+        <div className="flex flex-wrap gap-3">
+          {years.map((year) => (
+            <button
+              key={year}
+              onClick={() => handleDownload(year)}
+              disabled={downloading !== null}
+              className={clsx(
+                "flex flex-col items-center justify-center gap-1 w-28 h-20 rounded-xl border transition-all",
+                downloading === year
+                  ? "border-brand-500/40 bg-brand-500/10 text-brand-300"
+                  : "border-white/10 bg-white/5 text-slate-300 hover:border-brand-500/30 hover:bg-brand-500/10 hover:text-white",
+                downloading !== null && downloading !== year && "opacity-40"
+              )}
+            >
+              <Download className={clsx("w-4 h-4", downloading === year && "animate-bounce")} />
+              <span className="text-sm font-semibold font-mono">{year}</span>
+              <span className="text-[10px] text-slate-500">
+                {downloading === year ? "Downloading…" : ".zip"}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -256,6 +324,7 @@ export function PositionsPage() {
   const market = usMarketStatus();
   const [auditDays, setAuditDays] = useState(90);
   const { orders: auditOrders, loading: auditLoading, error: auditError } = useOrderHistory(auditDays);
+  const { years: archiveYears, loading: archiveLoading } = useArchiveYears();
 
   const portfolioError = portfolio?.fetch_error ?? null;
   const pendingOrders = orders.filter(
@@ -355,12 +424,12 @@ export function PositionsPage() {
         ))}
       </div>
 
-      {/* Orders section */}
+      {/* Alpaca live orders — real-time feed */}
       <div className="glass rounded-2xl p-5 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 flex items-center gap-2">
             <Clock className="w-3.5 h-3.5" />
-            {showPendingOnly ? "Pending Orders" : "Order History (Last 50)"}
+            {showPendingOnly ? "Pending Orders" : "Recent Orders (Alpaca · Last 50)"}
             {hasPendingOrders && (
               <span className="px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 text-[9px] font-bold">
                 {pendingOrders.length} PENDING
@@ -390,12 +459,12 @@ export function PositionsPage() {
         <OrdersTable orders={orders} />
       </div>
 
-      {/* Audit history — 1-year persistent store, all brokers */}
+      {/* Order History — persistent audit store, all brokers, exportable */}
       <div className="glass rounded-2xl p-5 space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 flex items-center gap-2">
             <Clock className="w-3.5 h-3.5" />
-            Audit History
+            Order History
             {auditLoading && <RefreshCw className="w-3 h-3 text-slate-500 animate-spin" />}
             <span className="text-slate-600 font-normal normal-case tracking-normal">
               · {auditOrders.length} record{auditOrders.length !== 1 ? "s" : ""}
@@ -426,6 +495,9 @@ export function PositionsPage() {
 
         <AuditTable orders={auditOrders} />
       </div>
+
+      {/* Archive — completed calendar years, downloadable as ZIP */}
+      <ArchivePanel years={archiveYears} loading={archiveLoading} />
     </div>
   );
 }
