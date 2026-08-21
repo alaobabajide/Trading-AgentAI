@@ -206,9 +206,11 @@ def _read_store() -> dict:
 
 def _write_store(data: dict) -> None:
     path = _store_path()
+    tmp = path + ".tmp"
     try:
-        with open(path, "w") as f:
+        with open(tmp, "w") as f:
             json.dump(data, f)
+        os.replace(tmp, path)
         os.chmod(path, 0o600)
     except Exception as exc:
         log.warning("Could not write LLM settings store %s: %s", path, exc)

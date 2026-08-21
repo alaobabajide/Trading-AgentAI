@@ -1298,9 +1298,23 @@ def generate_signal(req: SignalRequest, request: Request):
     # ── Run debate (paper mode = rule-based; live mode = full LLM) ────────
     # Paper mode doesn't need an LLM client — build a default orchestrator if
     # none was resolved (e.g. paper_mode=True request with no LLM config).
+    # Browser users (user_id=str) get their per-user risk params even in paper mode.
     if orchestrator is None:
         from brain.debate import DebateOrchestrator
-        orchestrator = DebateOrchestrator(openrouter_api_key="")
+        if user_id:
+            from brain.risk_config import get_effective_risk_for_user as _paper_risk_fn
+            _paper_eff = _paper_risk_fn(user_id, _effective_config(cfg))
+            orchestrator = DebateOrchestrator(
+                openrouter_api_key="",
+                confidence_threshold=_paper_eff.get("signal_confidence_threshold", cfg.signal_confidence_threshold),
+                max_position_pct=_paper_eff["max_position_pct"],
+                max_crypto_pct=_paper_eff["max_crypto_allocation_pct"],
+                circuit_breaker_drawdown=_paper_eff["circuit_breaker_drawdown"],
+                stop_loss_pct=_paper_eff["stop_loss_pct"],
+                take_profit_pct=_paper_eff["take_profit_pct"],
+            )
+        else:
+            orchestrator = DebateOrchestrator(openrouter_api_key="")
     try:
         signal = orchestrator.run(
             market, sentiment_bundle, onchain_snap, portfolio_state,
@@ -1422,6 +1436,9 @@ def execute_trade(req: ExecuteRequest, request: Request):
     cfg = get_settings()
     _exec_user_id = getattr(request.state, "user_id", None)
     _ak, _sk, _base_url, _is_paper = _resolve_alpaca_creds(_exec_user_id, cfg)
+    # Per-user risk: user_id=None (orchestrator) → returns global config unchanged
+    from brain.risk_config import get_effective_risk_for_user as _exec_risk_fn
+    _exec_eff = _exec_risk_fn(_exec_user_id, _effective_config(cfg))
 
     # The orchestrator already applies all risk adjustments (correlation halving,
     # regime-based sl/tp scaling) before sending this request. Always use the
@@ -1462,12 +1479,12 @@ def execute_trade(req: ExecuteRequest, request: Request):
                 try:
                     _positions_pf = _tc_pf.get_all_positions()
                     _deployed_pf  = sum(abs(float(p.market_value or 0)) for p in _positions_pf)
-                    if _deployed_pf / _equity_pf >= cfg.max_exposure_pct:
+                    if _deployed_pf / _equity_pf >= _exec_eff["max_exposure_pct"]:
                         raise HTTPException(
                             status_code=409,
                             detail=(
                                 f"Max exposure reached: {_deployed_pf/_equity_pf*100:.0f}% of equity "
-                                f"is deployed (limit {cfg.max_exposure_pct*100:.0f}%). "
+                                f"is deployed (limit {_exec_eff['max_exposure_pct']*100:.0f}%). "
                                 "Close or take profit on existing positions to free capital."
                             ),
                         )
@@ -1513,17 +1530,16 @@ def execute_trade(req: ExecuteRequest, request: Request):
                         req.symbol, _exec_quote.mid, bars[-1].close if bars else 0,
                     )
 
-            eff = _effective_config(cfg)
             engine = StockExecutionEngine(
                 alpaca_api_key=_ak,
                 alpaca_secret_key=_sk,
                 alpaca_base_url=_base_url,
-                max_position_pct=eff["max_position_pct"],
-                circuit_breaker_drawdown=eff["circuit_breaker_drawdown"],
-                trailing_stop_pct=eff["trailing_stop_pct"],
-                atr_multiplier=eff["atr_multiplier"],
-                atr_stop_floor=eff["atr_stop_floor"],
-                atr_stop_cap=eff["atr_stop_cap"],
+                max_position_pct=_exec_eff["max_position_pct"],
+                circuit_breaker_drawdown=_exec_eff["circuit_breaker_drawdown"],
+                trailing_stop_pct=_exec_eff["trailing_stop_pct"],
+                atr_multiplier=_exec_eff["atr_multiplier"],
+                atr_stop_floor=_exec_eff["atr_stop_floor"],
+                atr_stop_cap=_exec_eff["atr_stop_cap"],
             )
             result = engine.execute(signal, bars_highs, bars_lows, bars_closes)
 
@@ -1553,13 +1569,12 @@ def execute_trade(req: ExecuteRequest, request: Request):
         else:  # crypto — Alpaca (same API key, no geo-blocks)
             from execution.crypto.engine import CryptoExecutionEngine
 
-            eff = _effective_config(cfg)
             engine = CryptoExecutionEngine(
                 alpaca_api_key=_ak,
                 alpaca_secret_key=_sk,
                 alpaca_base_url=_base_url,
-                max_position_pct=eff["max_position_pct"],
-                max_crypto_allocation_pct=eff["max_crypto_allocation_pct"],
+                max_position_pct=_exec_eff["max_position_pct"],
+                max_crypto_allocation_pct=_exec_eff["max_crypto_allocation_pct"],
                 cash_buffer=cfg.crypto_cash_buffer,
                 min_notional_usd=cfg.crypto_min_notional_usd,
                 fallback_equity_usd=cfg.crypto_fallback_equity_usd,
