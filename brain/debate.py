@@ -1962,60 +1962,73 @@ class DebateOrchestrator:
 
     def __init__(
         self,
-        openrouter_api_key: str,
+        openrouter_api_key: str = "",
         confidence_threshold: float = 0.7,   # retained for Risk Manager compat; not used for gating
         max_position_pct: float = 0.05,
         max_crypto_pct: float = 0.30,
         circuit_breaker_drawdown: float = 0.10,
         stop_loss_pct: float = 0.02,
         take_profit_pct: float = 0.05,
+        tactical_client: Any = None,   # pre-built unified client for the 25 tactical agents
+        synthesis_client: Any = None,  # pre-built unified client for StrategyCoach + RiskManager
+        tactical_model: str | None = None,   # override model for tactical agents
+        synthesis_model: str | None = None,  # override model for synthesis agents
     ) -> None:
-        from openai import OpenAI  # lazy: paper mode works without the package
-        client = OpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=openrouter_api_key,
-        )
+        # Build OpenRouter fallback clients if per-user clients are not provided.
+        if tactical_client is None or synthesis_client is None:
+            from openai import OpenAI  # lazy: paper mode works without the package
+            _default = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=openrouter_api_key,
+            )
+            if tactical_client is None:
+                tactical_client = _default
+            if synthesis_client is None:
+                synthesis_client = _default
+
+        tc = tactical_client
+        sc = synthesis_client
 
         # Panel A — analyst agents
-        self._fundamental     = FundamentalAnalyst(client)
-        self._technical       = TechnicalAnalyst(client)
-        self._sentiment_agent = SentimentAnalyst(client)
-        self._macro           = MacroEconomist(client)
-        self._quant           = QuantAnalyst(client)
-        self._options_flow    = OptionsFlowAnalyst(client)
-        self._regime          = RegimeDetector(client)   # deterministic — client ignored
+        self._fundamental     = FundamentalAnalyst(tc, model=tactical_model)
+        self._technical       = TechnicalAnalyst(tc, model=tactical_model)
+        self._sentiment_agent = SentimentAnalyst(tc, model=tactical_model)
+        self._macro           = MacroEconomist(tc, model=tactical_model)
+        self._quant           = QuantAnalyst(tc, model=tactical_model)
+        self._options_flow    = OptionsFlowAnalyst(tc, model=tactical_model)
+        self._regime          = RegimeDetector(tc)   # deterministic — client/model ignored
 
         # Panel B — investor persona agents
-        self._buffett = BuffettInvestor(client)
-        self._munger  = MungerInvestor(client)
-        self._lynch   = LynchInvestor(client)
-        self._ackman  = AckmanInvestor(client)
-        self._cohen   = CohenInvestor(client)
-        self._dalio   = DalioInvestor(client)
-        self._wood    = WoodInvestor(client)
-        self._bogle   = BogleInvestor(client)
+        self._buffett = BuffettInvestor(tc, model=tactical_model)
+        self._munger  = MungerInvestor(tc, model=tactical_model)
+        self._lynch   = LynchInvestor(tc, model=tactical_model)
+        self._ackman  = AckmanInvestor(tc, model=tactical_model)
+        self._cohen   = CohenInvestor(tc, model=tactical_model)
+        self._dalio   = DalioInvestor(tc, model=tactical_model)
+        self._wood    = WoodInvestor(tc, model=tactical_model)
+        self._bogle   = BogleInvestor(tc, model=tactical_model)
 
         # Panel A — Wave 2 specialist agents
-        self._breakout        = BreakoutAnalyst(client)
-        self._trend_strength  = TrendStrengthAnalyst(client)
-        self._sector_rotation = SectorRotationAnalyst(client)
-        self._earnings_event  = EarningsEventAnalyst(client)
+        self._breakout        = BreakoutAnalyst(tc, model=tactical_model)
+        self._trend_strength  = TrendStrengthAnalyst(tc, model=tactical_model)
+        self._sector_rotation = SectorRotationAnalyst(tc, model=tactical_model)
+        self._earnings_event  = EarningsEventAnalyst(tc, model=tactical_model)
 
         # Panel A — Wave 3 specialist agents (27-agent pool)
-        self._momentum_scorer = MomentumScorerAnalyst(client)
-        self._supply_demand   = SupplyDemandAnalyst(client)
-        self._volume_analyst  = VolumeAnalyst(client)
-        self._risk_reward     = RiskRewardAnalyst(client)
+        self._momentum_scorer = MomentumScorerAnalyst(tc, model=tactical_model)
+        self._supply_demand   = SupplyDemandAnalyst(tc, model=tactical_model)
+        self._volume_analyst  = VolumeAnalyst(tc, model=tactical_model)
+        self._risk_reward     = RiskRewardAnalyst(tc, model=tactical_model)
 
         # Panel B — Wave 3 investor personas (27-agent pool)
-        self._soros           = SorosInvestor(client)
-        self._druckenmiller   = DruckenmillerInvestor(client)
-        self._simons          = SimonsInvestor(client)
-        self._templeton       = TempletonInvestor(client)
+        self._soros           = SorosInvestor(tc, model=tactical_model)
+        self._druckenmiller   = DruckenmillerInvestor(tc, model=tactical_model)
+        self._simons          = SimonsInvestor(tc, model=tactical_model)
+        self._templeton       = TempletonInvestor(tc, model=tactical_model)
 
-        # Synthesis agents (not part of vote pool)
-        self._strategy = StrategyCoach(client)
-        self._risk     = RiskManager(client)
+        # Synthesis agents (not part of vote pool) — use synthesis client
+        self._strategy = StrategyCoach(sc, model=synthesis_model)
+        self._risk     = RiskManager(sc, model=synthesis_model)
 
         self._threshold      = confidence_threshold
         self._max_pos        = max_position_pct

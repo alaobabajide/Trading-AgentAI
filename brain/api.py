@@ -32,8 +32,16 @@ log = logging.getLogger(__name__)
 # ── Kill switch ────────────────────────────────────────────────────────────────
 _TRADING_PAUSED: bool = False
 
-# ── Service singleton (rebuilt once per process, not per request) ─────────────
-_services_cache: Any = None
+# ── Service singletons ────────────────────────────────────────────────────────
+# Shared data-layer services (Alpaca market data, sentiment, etc.) — one per process.
+_shared_services_cache: Any = None
+# Per-LLM-config DebateOrchestrators — keyed by hash of (t_provider, t_model, s_provider, s_model).
+_debate_cache: dict[str, Any] = {}
+# Legacy alias kept so PATCH /config still invalidates everything
+_services_cache: Any = None  # not used directly; kept for _services_cache = None in config reset
+
+# ── Encryption key (derived at startup from BRAIN_API_KEY via HKDF) ───────────
+_enc_key: bytes | None = None
 
 # ── Bar data cache (5-min TTL — avoids re-fetching 300 days on every signal) ──
 _bar_cache: dict[str, tuple[Any, float]] = {}
@@ -369,11 +377,25 @@ async def lifespan(app: FastAPI):
     log.info("Config file:    %s", _CONFIG_FILE)
 
     # Load dynamic config from disk at startup (picks up any pre-existing overrides)
-    global _dynamic_config
+    global _dynamic_config, _enc_key
     disk_cfg = _load_dynamic_config()
     if disk_cfg:
         _dynamic_config = disk_cfg
         log.info("Dynamic config loaded at startup: %s", list(disk_cfg.keys()))
+
+    # Derive AES-256 encryption key for LLM credentials from BRAIN_API_KEY.
+    # This is idempotent and fast — no external calls needed.
+    from config import get_settings as _startup_gs
+    _startup_cfg = _startup_gs()
+    if _startup_cfg.brain_api_key:
+        try:
+            from brain.llm_creds import _derive_enc_key
+            _enc_key = _derive_enc_key(_startup_cfg.brain_api_key)
+            log.info("LLM credential encryption key derived (AES-256).")
+        except Exception as _kexc:
+            log.warning("Could not derive LLM encryption key: %s", _kexc)
+    else:
+        log.warning("BRAIN_API_KEY not set — LLM credential encryption unavailable.")
 
     yield
     log.info("Brain API shutting down.")
@@ -399,11 +421,12 @@ app.add_middleware(
 
 # ── Rate limiting (outermost — runs first, cheapest check) ────────────────────
 _RATE_LIMITS: dict[str, tuple[int, int]] = {
-    "/execute": (5,  60),
-    "/signal":  (10, 60),
-    "/kill":    (5,  60),
-    "/resume":  (5,  60),
-    "/config":  (20, 60),
+    "/execute":      (5,  60),
+    "/signal":       (10, 60),
+    "/kill":         (5,  60),
+    "/resume":       (5,  60),
+    "/config":       (20, 60),
+    "/llm-settings": (20, 60),
 }
 _DEFAULT_RATE = (120, 60)
 
@@ -510,42 +533,94 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
-def _build_services(cfg):
-    # Heavy imports done here (inside a request handler) so a bad import never
-    # prevents the health endpoint from starting.
+def _build_shared_services(cfg):
+    """Build the shared data-layer services. Called once per process."""
     from data.market_data import AlpacaMarketData, AlpacaCryptoMarketData
     from data.sentiment import SentimentFetcher
     from data.onchain import OnChainFetcher
     from data.portfolio import PortfolioFetcher
-    from brain.debate import DebateOrchestrator
 
     alpaca        = AlpacaMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)
     alpaca_crypto = AlpacaCryptoMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)
-    sentiment = SentimentFetcher(finnhub_api_key=cfg.finnhub_api_key)
-    onchain = OnChainFetcher(eth_rpc_url=cfg.eth_rpc_url)
-    portfolio = PortfolioFetcher(
+    sentiment     = SentimentFetcher(finnhub_api_key=cfg.finnhub_api_key)
+    onchain       = OnChainFetcher(eth_rpc_url=cfg.eth_rpc_url)
+    portfolio     = PortfolioFetcher(
         cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,
     )
+    return alpaca, alpaca_crypto, sentiment, onchain, portfolio
+
+
+def _get_shared_services(cfg):
+    """Return (or lazily build) the shared data-layer service singleton."""
+    global _shared_services_cache
+    if _shared_services_cache is None:
+        log.info("Building shared service singleton (first request this process)")
+        _shared_services_cache = _build_shared_services(cfg)
+    return _shared_services_cache
+
+
+def _build_debate(cfg, tactical_client, synthesis_client,
+                  tactical_model, synthesis_model) -> Any:
+    """Build a DebateOrchestrator for the given LLM clients and models."""
+    from brain.debate import DebateOrchestrator
     eff = _effective_config(cfg)
-    orchestrator = DebateOrchestrator(
-        openrouter_api_key=cfg.openrouter_api_key,
+    return DebateOrchestrator(
         confidence_threshold=cfg.signal_confidence_threshold,
         max_position_pct=eff["max_position_pct"],
         max_crypto_pct=eff["max_crypto_allocation_pct"],
         circuit_breaker_drawdown=eff["circuit_breaker_drawdown"],
         stop_loss_pct=eff["stop_loss_pct"],
         take_profit_pct=eff["take_profit_pct"],
+        tactical_client=tactical_client,
+        synthesis_client=synthesis_client,
+        tactical_model=tactical_model,
+        synthesis_model=synthesis_model,
     )
-    return alpaca, alpaca_crypto, sentiment, onchain, portfolio, orchestrator
 
 
-def _get_services(cfg):
-    """Return the service singleton, building it once per process."""
-    global _services_cache
-    if _services_cache is None:
-        log.info("Building service singleton (first request this process)")
-        _services_cache = _build_services(cfg)
-    return _services_cache
+def _debate_cache_key(t_prov: str, t_model: str, s_prov: str, s_model: str) -> str:
+    import hashlib
+    raw = f"{t_prov}|{t_model}|{s_prov}|{s_model}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _get_debate(cfg, effective_llm) -> Any:
+    """Return (or lazily build) a DebateOrchestrator for the given LLM config."""
+    key = _debate_cache_key(
+        effective_llm.tactical_provider, effective_llm.tactical_model,
+        effective_llm.synthesis_provider, effective_llm.synthesis_model,
+    )
+    if key not in _debate_cache:
+        log.info("Building DebateOrchestrator for config %s (%s/%s + %s/%s)",
+                 key, effective_llm.tactical_provider, effective_llm.tactical_model,
+                 effective_llm.synthesis_provider, effective_llm.synthesis_model)
+        _debate_cache[key] = _build_debate(
+            cfg,
+            effective_llm.tactical_client,
+            effective_llm.synthesis_client,
+            effective_llm.tactical_model,
+            effective_llm.synthesis_model,
+        )
+    return _debate_cache[key]
+
+
+# ── Encryption key accessor ───────────────────────────────────────────────────
+
+def _get_enc_key() -> bytes:
+    """Return the AES-256 encryption key, deriving it lazily if needed."""
+    global _enc_key
+    if _enc_key is not None:
+        return _enc_key
+    from config import get_settings as _gs
+    _secret = _gs().brain_api_key
+    if not _secret:
+        raise HTTPException(
+            status_code=503,
+            detail="LLM credential encryption not available — BRAIN_API_KEY is not set.",
+        )
+    from brain.llm_creds import _derive_enc_key
+    _enc_key = _derive_enc_key(_secret)
+    return _enc_key
 
 
 def _get_market_snapshot(fetcher, symbol: str, days: int):
@@ -696,7 +771,7 @@ def update_risk_config(body: RiskConfigUpdate):
     Values persist to disk and survive process restarts within the same container.
     On a full redeploy, Railway env vars re-seed the defaults.
     """
-    global _dynamic_config, _services_cache
+    global _dynamic_config
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No fields provided to update")
@@ -710,8 +785,10 @@ def update_risk_config(body: RiskConfigUpdate):
             updates[key] = max(lo, min(hi, int(val)))
     _dynamic_config.update(updates)
     _save_dynamic_config(_dynamic_config)
-    # Invalidate service singleton so DebateOrchestrator rebuilds with new values
-    _services_cache = None
+    # Invalidate orchestrator caches so risk params take effect immediately
+    global _shared_services_cache, _debate_cache
+    _shared_services_cache = None
+    _debate_cache.clear()
     log.info("Dynamic risk config updated: %s", updates)
     from config import get_settings
     return {"updated": updates, "current": _effective_config(get_settings())}
@@ -720,17 +797,18 @@ def update_risk_config(body: RiskConfigUpdate):
 @app.delete("/config")
 def reset_risk_config():
     """Reset all dynamic overrides — reverts to Railway env var defaults."""
-    global _dynamic_config, _services_cache
+    global _dynamic_config, _shared_services_cache, _debate_cache
     _dynamic_config = {}
     _save_dynamic_config({})
-    _services_cache = None
+    _shared_services_cache = None
+    _debate_cache.clear()
     log.info("Dynamic risk config reset to env var defaults")
     from config import get_settings
     return {"reset": True, "current": _effective_config(get_settings())}
 
 
 @app.get("/config-status")
-def config_status():
+def config_status(request: Request):
     """Returns which API keys are configured (true/false only — never exposes values)
     plus runtime metadata so the frontend never needs to hardcode facts about the engine."""
     from config import get_settings
@@ -738,15 +816,36 @@ def config_status():
         STOCK_WATCHLIST, ETF_WATCHLIST, CRYPTO_WATCHLIST,
         HOT_MIN_VOTES, WARM_MIN_VOTES, AGENT_COUNT,
         CYCLE_INTERVAL_MINUTES, LLM_PROVIDER_NAME, LLM_PROVIDER_URL,
+        PROVIDER_DISPLAY, PROVIDER_BILLING_URLS,
     )
     cfg = get_settings()
-    llm_ok = bool(cfg.openrouter_api_key)
+    system_llm_ok = bool(cfg.openrouter_api_key)
     alpaca_ok = bool(cfg.alpaca_api_key and cfg.alpaca_secret_key)
+
+    # Check if this browser user has their own LLM config
+    user_id: str | None = getattr(request.state, "user_id", None)
+    user_llm_provider = "openrouter"
+    user_llm_name = LLM_PROVIDER_NAME
+    user_llm_url  = LLM_PROVIDER_URL
+    user_llm_ok   = system_llm_ok
+    if user_id:
+        try:
+            from brain.llm_creds import load_user_settings, get_keys_configured
+            _us = load_user_settings(user_id)
+            _configured = get_keys_configured(user_id)
+            if _configured:
+                user_llm_provider = _us.tactical_provider
+                user_llm_name = PROVIDER_DISPLAY.get(_us.tactical_provider, _us.tactical_provider)
+                user_llm_url  = PROVIDER_BILLING_URLS.get(_us.tactical_provider, "")
+                user_llm_ok   = _us.tactical_provider in _configured
+        except Exception:
+            pass
+
     return {
         # Key presence (boolean only — values never exposed)
-        "llm_provider":    llm_ok,
-        "llm_provider_name": LLM_PROVIDER_NAME,
-        "llm_provider_url":  LLM_PROVIDER_URL,
+        "llm_provider":    user_llm_ok,
+        "llm_provider_name": user_llm_name,
+        "llm_provider_url":  user_llm_url,
         "llm_env_var":     "OPENROUTER_API_KEY",
         "alpaca":          alpaca_ok,
         "binance":         bool(cfg.binance_api_key and cfg.binance_secret_key),
@@ -754,8 +853,8 @@ def config_status():
         "alpaca_base_url": cfg.alpaca_base_url,
         "binance_testnet": cfg.binance_testnet,
         "auto_trade":      os.environ.get("AUTO_TRADE", "true").lower() != "false",
-        "ready_for_signals":  llm_ok,
-        "ready_for_trading":  llm_ok and alpaca_ok,
+        "ready_for_signals":  user_llm_ok,
+        "ready_for_trading":  user_llm_ok and alpaca_ok,
         # Engine metadata — used by the dashboard instead of hardcoded values
         "agent_count":            AGENT_COUNT,
         "hot_min_votes":          HOT_MIN_VOTES,
@@ -768,22 +867,148 @@ def config_status():
     }
 
 
+# ── LLM provider / model catalogue ────────────────────────────────────────────
+
+@app.get("/models")
+def list_models():
+    """Return the curated model list for each provider.
+    Also returns provider display names and confidence notes for Kimi and Qwen."""
+    from watchlist import PROVIDER_MODELS, PROVIDER_DISPLAY
+    return {
+        "providers": PROVIDER_DISPLAY,
+        "models": PROVIDER_MODELS,
+        "confidence_notes": {
+            "qwen": "Endpoint confidence 92% — verify the base URL before use.",
+            "kimi": "Endpoint confidence 90% — verify the base URL before use.",
+        },
+    }
+
+
+# ── Per-user LLM settings ──────────────────────────────────────────────────────
+
+class _LLMSettingsWrite(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    tactical_provider:  str = "openrouter"
+    tactical_model:     str = "google/gemini-2.5-flash-lite"
+    synthesis_provider: str = "openrouter"
+    synthesis_model:    str = "deepseek/deepseek-chat-v3-0324"
+    # API keys — only sent when the user is updating a key.
+    # Empty string = "don't change the stored key for this provider."
+    openrouter_key: str = ""
+    anthropic_key:  str = ""
+    openai_key:     str = ""
+    deepseek_key:   str = ""
+    xai_key:        str = ""
+    qwen_key:       str = ""
+    kimi_key:       str = ""
+
+
+@app.get("/llm-settings")
+def get_llm_settings(request: Request):
+    """Return the user's LLM settings (key presence only — values never returned)."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="JWT authentication required for LLM settings.")
+    from brain.llm_creds import load_user_settings, get_keys_configured
+    settings = load_user_settings(user_id)
+    keys_configured = get_keys_configured(user_id)
+    return {
+        "tactical_provider":  settings.tactical_provider,
+        "tactical_model":     settings.tactical_model,
+        "synthesis_provider": settings.synthesis_provider,
+        "synthesis_model":    settings.synthesis_model,
+        "keys_configured":    keys_configured,
+    }
+
+
+@app.post("/llm-settings")
+def save_llm_settings(req: _LLMSettingsWrite, request: Request):
+    """Save the user's LLM provider, model, and API key selections.
+
+    Keys are write-only: once saved they are encrypted at rest and never returned.
+    Only send a key field when the user is explicitly updating it.
+    """
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="JWT authentication required for LLM settings.")
+
+    from watchlist import PROVIDER_BASE_URLS
+    if req.tactical_provider not in PROVIDER_BASE_URLS:
+        raise HTTPException(status_code=400, detail=f"Unknown tactical provider: {req.tactical_provider}")
+    if req.synthesis_provider not in PROVIDER_BASE_URLS:
+        raise HTTPException(status_code=400, detail=f"Unknown synthesis provider: {req.synthesis_provider}")
+
+    enc_key = _get_enc_key()
+
+    new_keys = {
+        "openrouter": req.openrouter_key,
+        "anthropic":  req.anthropic_key,
+        "openai":     req.openai_key,
+        "deepseek":   req.deepseek_key,
+        "xai":        req.xai_key,
+        "qwen":       req.qwen_key,
+        "kimi":       req.kimi_key,
+    }
+
+    from brain.llm_creds import save_user_settings, get_keys_configured
+    save_user_settings(
+        user_id=user_id,
+        tactical_provider=req.tactical_provider,
+        tactical_model=req.tactical_model,
+        synthesis_provider=req.synthesis_provider,
+        synthesis_model=req.synthesis_model,
+        new_api_keys={k: v for k, v in new_keys.items() if v},
+        enc_key=enc_key,
+    )
+    # Invalidate any cached DebateOrchestrator for this LLM config so the next
+    # signal request builds a fresh one with the new key/model.
+    _debate_cache.clear()
+    log.info("LLM settings saved for user %s (providers: %s / %s)",
+             user_id, req.tactical_provider, req.synthesis_provider)
+    return {
+        "saved": True,
+        "keys_configured": get_keys_configured(user_id),
+    }
+
+
 @app.post("/signal", response_model=SignalResponse)
-def generate_signal(req: SignalRequest):
+def generate_signal(req: SignalRequest, request: Request):
     req.symbol = _validate_symbol(req.symbol)
     if req.asset_class not in ("stock", "crypto"):
         raise HTTPException(400, "asset_class must be 'stock' or 'crypto'")
     from config import get_settings
     cfg = get_settings()
-    # Only require OpenRouter key for LLM (live) mode — paper mode is rule-based and needs no key
-    if not req.paper_mode and not cfg.openrouter_api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="OPENROUTER_API_KEY is not configured. Set it in Railway env vars, or enable paper_mode for rule-based signals.",
-        )
+
+    # Resolve the LLM configuration for this request.
+    # Browser users (JWT) → their per-user settings (falls back to system defaults if none set).
+    # Orchestrator (X-Api-Key) → always system defaults (no user_id in state).
+    user_id: str | None = getattr(request.state, "user_id", None)
+    effective_llm = None
+    if not req.paper_mode:
+        try:
+            from brain.llm_creds import get_effective_llm_config
+            effective_llm = get_effective_llm_config(
+                user_id, cfg.openrouter_api_key, _get_enc_key() if cfg.brain_api_key else b"",
+            )
+        except Exception as _llm_exc:
+            log.warning("LLM config resolution failed (%s) — falling back to system OpenRouter key", _llm_exc)
+
+        if effective_llm is None or (effective_llm.using_system_keys and not cfg.openrouter_api_key):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "No LLM provider configured. Enter your API key in Settings → Brain / LLM, "
+                    "or ask the admin to set OPENROUTER_API_KEY in Railway env vars."
+                ),
+            )
+
     try:
-        alpaca, alpaca_crypto, sentiment_fetcher, onchain_fetcher, portfolio_fetcher, orchestrator = (
-            _get_services(cfg)
+        alpaca, alpaca_crypto, sentiment_fetcher, onchain_fetcher, portfolio_fetcher = (
+            _get_shared_services(cfg)
+        )
+        orchestrator = (
+            _get_debate(cfg, effective_llm) if effective_llm is not None
+            else None  # paper mode — orchestrator not used
         )
     except Exception as exc:
         log.error("Service initialisation failed: %s", exc, exc_info=True)
@@ -833,33 +1058,37 @@ def generate_signal(req: SignalRequest):
             cash=100_000.0,
         )
 
-    # ── Billing probe: verify OpenRouter credits before spawning 27 LLM agents ──
+    # ── Billing probe: verify LLM credits before spawning 27 agents ──────────
     # If billing fails, fall back to rule-based paper mode so signals are still
     # useful rather than returning 27×NEUTRAL and a HOLD/COLD result.
     effective_paper_mode = req.paper_mode
     billing_fallback = False
-    if not req.paper_mode and cfg.openrouter_api_key:
+    if not req.paper_mode and effective_llm is not None:
         try:
-            from openai import OpenAI as _OpenAI
-            _probe = _OpenAI(base_url="https://openrouter.ai/api/v1", api_key=cfg.openrouter_api_key)
-            from watchlist import TACTICAL_MODEL as _TACTICAL_MODEL
-            _probe.chat.completions.create(
-                model=_TACTICAL_MODEL,
+            _probe_response = effective_llm.tactical_client.chat.completions.create(
+                model=effective_llm.tactical_model,
                 max_tokens=1,
                 messages=[{"role": "user", "content": "x"}],
             )
         except Exception as _probe_exc:
             _msg = str(_probe_exc)
             if "credit" in _msg.lower() or "insufficient_quota" in _msg or "billing" in _msg.lower() or "402" in _msg:
+                from watchlist import PROVIDER_BILLING_URLS as _PBURL
+                _billing_url = _PBURL.get(effective_llm.tactical_provider, "your provider dashboard")
                 log.warning(
-                    "OpenRouter billing insufficient — falling back to rule-based (paper) mode for %s. "
-                    "Top up credits at openrouter.ai/settings/billing to restore full LLM debate.",
-                    req.symbol,
+                    "%s billing insufficient — falling back to rule-based (paper) mode for %s. "
+                    "Top up credits at %s to restore full LLM debate.",
+                    effective_llm.tactical_provider, req.symbol, _billing_url,
                 )
                 effective_paper_mode = True
                 billing_fallback = True
 
     # ── Run debate (paper mode = rule-based; live mode = full LLM) ────────
+    # Paper mode doesn't need an LLM client — build a default orchestrator if
+    # none was resolved (e.g. paper_mode=True request with no LLM config).
+    if orchestrator is None:
+        from brain.debate import DebateOrchestrator
+        orchestrator = DebateOrchestrator(openrouter_api_key="")
     try:
         signal = orchestrator.run(
             market, sentiment_bundle, onchain_snap, portfolio_state,
@@ -870,8 +1099,9 @@ def generate_signal(req: SignalRequest):
         raise HTTPException(status_code=500, detail=f"Agent debate failed: {exc}")
 
     if billing_fallback:
+        _prov = effective_llm.tactical_provider if effective_llm else "LLM"
         signal.rationale = (
-            "[Rule-based fallback — OpenRouter credits exhausted, LLM debate unavailable] "
+            f"[Rule-based fallback — {_prov} credits exhausted, LLM debate unavailable] "
             + signal.rationale
         )
 

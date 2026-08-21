@@ -775,3 +775,114 @@ export function useBrainHealth() {
 
   return online;
 }
+
+// ── LLM provider / model settings ────────────────────────────────────────────
+
+export interface LlmSettings {
+  tactical_provider:  string;
+  tactical_model:     string;
+  synthesis_provider: string;
+  synthesis_model:    string;
+  keys_configured:    string[];  // provider names — never the key values
+}
+
+export interface LlmSavePayload {
+  tactical_provider:  string;
+  tactical_model:     string;
+  synthesis_provider: string;
+  synthesis_model:    string;
+  // API keys — only include when user is explicitly setting/updating a key.
+  // Empty string or omitted = "don't change the stored key."
+  openrouter_key?: string;
+  anthropic_key?:  string;
+  openai_key?:     string;
+  deepseek_key?:   string;
+  xai_key?:        string;
+  qwen_key?:       string;
+  kimi_key?:       string;
+}
+
+export interface ModelsResponse {
+  providers:        Record<string, string>;
+  models:           Record<string, string[]>;
+  confidence_notes: Record<string, string>;
+}
+
+export async function fetchLlmSettings(): Promise<LlmSettings> {
+  const res = await fetch(`${BASE}/llm-settings`, {
+    signal: AbortSignal.timeout(8000),
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export async function saveLlmSettings(payload: LlmSavePayload): Promise<{ saved: boolean; keys_configured: string[] }> {
+  const res = await fetch(`${BASE}/llm-settings`, {
+    method:  "POST",
+    headers: apiHeaders({ "Content-Type": "application/json" }),
+    body:    JSON.stringify(payload),
+    signal:  AbortSignal.timeout(10000),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  return safeJson(res);
+}
+
+export async function fetchModels(): Promise<ModelsResponse> {
+  const res = await fetch(`${BASE}/models`, {
+    signal: AbortSignal.timeout(5000),
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+const _DEFAULT_LLM: LlmSettings = {
+  tactical_provider:  "openrouter",
+  tactical_model:     "google/gemini-2.5-flash-lite",
+  synthesis_provider: "openrouter",
+  synthesis_model:    "deepseek/deepseek-chat-v3-0324",
+  keys_configured:    [],
+};
+
+export function useLlmSettings() {
+  const [settings,  setSettings]  = useState<LlmSettings | null>(null);
+  const [models,    setModels]    = useState<ModelsResponse | null>(null);
+  const [saving,    setSaving]    = useState(false);
+  const [saved,     setSaved]     = useState(false);
+  const [error,     setError]     = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const [s, m] = await Promise.all([fetchLlmSettings(), fetchModels()]);
+        if (!cancelled) { setSettings(s); setModels(m); }
+      } catch { /* not authenticated or backend not up */ }
+    }
+    load();
+  }, []);
+
+  async function save(payload: LlmSavePayload) {
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await saveLlmSettings(payload);
+      setSettings((prev) => prev
+        ? { ...prev, ...payload, keys_configured: result.keys_configured }
+        : { ..._DEFAULT_LLM, ...payload, keys_configured: result.keys_configured }
+      );
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return { settings, models, saving, saved, error, save };
+}

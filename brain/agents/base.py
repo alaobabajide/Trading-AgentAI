@@ -65,17 +65,19 @@ def get_usage_stats() -> dict:
 
 
 class BaseAnalyst:
-    """Wraps a single OpenRouter call with a specialist system prompt."""
+    """Wraps a single LLM call with a specialist system prompt."""
 
     role: str    = "analyst"
     system_prompt: str = "You are a financial analyst."
     model: str   = TACTICAL_MODEL   # override in subclass for synthesis agents
 
-    def __init__(self, client: Any) -> None:
+    def __init__(self, client: Any, model: str | None = None) -> None:
         self._client = client
+        if model is not None:
+            self.model = model  # per-instance override from DebateOrchestrator
 
     def analyse(self, context: dict[str, Any]) -> str:
-        """Send context → OpenRouter → return plain-text opinion."""
+        """Send context → LLM → return plain-text opinion."""
         user_msg = json.dumps(context, indent=2, default=str)
         try:
             response = self._client.chat.completions.create(
@@ -90,8 +92,8 @@ class BaseAnalyst:
             msg = str(exc)
             if "credit" in msg.lower() or "insufficient_quota" in msg or "billing" in msg.lower() or "402" in msg:
                 raise RuntimeError(
-                    "BILLING: OpenRouter API credit balance is too low. "
-                    "Add credits at openrouter.ai/settings/billing"
+                    "BILLING: LLM API credit balance is too low. "
+                    "Check your provider's billing dashboard."
                 ) from exc
             raise
         text = response.choices[0].message.content.strip()

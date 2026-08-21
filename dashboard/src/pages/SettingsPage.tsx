@@ -4,7 +4,7 @@ import {
   HITLMode, UserProfile, DEFAULT_PROFILE,
   MODE_CONFIG, loadProfile, saveProfile,
 } from "../lib/hitl";
-import { useConfigStatus, useRiskConfig, RiskConfigFields } from "../lib/api";
+import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload } from "../lib/api";
 import { useState } from "react";
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
@@ -201,6 +201,246 @@ function NumberSlider({ label, value, options, onChange }: {
           >{o}%</button>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ── Brain / LLM configuration panel ──────────────────────────────────────────
+
+const PROVIDER_LABELS: Record<string, string> = {
+  openrouter: "OpenRouter",
+  openai:     "OpenAI",
+  anthropic:  "Anthropic",
+  deepseek:   "DeepSeek",
+  xai:        "xAI (Grok)",
+  qwen:       "Qwen (Alibaba)",
+  kimi:       "Kimi (Moonshot)",
+};
+
+const LOW_CONFIDENCE_PROVIDERS = new Set(["qwen", "kimi"]);
+
+const PROVIDER_KEY_FIELDS: { provider: string; field: keyof LlmSavePayload }[] = [
+  { provider: "openrouter", field: "openrouter_key" },
+  { provider: "openai",     field: "openai_key" },
+  { provider: "anthropic",  field: "anthropic_key" },
+  { provider: "deepseek",   field: "deepseek_key" },
+  { provider: "xai",        field: "xai_key" },
+  { provider: "qwen",       field: "qwen_key" },
+  { provider: "kimi",       field: "kimi_key" },
+];
+
+function BrainLLMPanel() {
+  const llm = useLlmSettings();
+
+  // Local draft — tracks in-progress changes before Save
+  const [draft, setDraft] = useState<LlmSavePayload | null>(null);
+  // Tracks which key fields have been touched (to know if a value should be sent)
+  const [keyDraft, setKeyDraft] = useState<Record<string, string>>({});
+  // Controls key field visibility (show/hide per provider)
+  const [keyVisible, setKeyVisible] = useState<Record<string, boolean>>({});
+
+  const base: LlmSavePayload = draft ?? {
+    tactical_provider:  llm.settings?.tactical_provider  ?? "openrouter",
+    tactical_model:     llm.settings?.tactical_model     ?? "google/gemini-2.5-flash-lite",
+    synthesis_provider: llm.settings?.synthesis_provider ?? "openrouter",
+    synthesis_model:    llm.settings?.synthesis_model    ?? "deepseek/deepseek-chat-v3-0324",
+  };
+
+  function updateDraft(partial: Partial<LlmSavePayload>) {
+    setDraft((prev) => ({ ...(prev ?? base), ...partial }));
+  }
+
+  const providers = llm.models?.providers ?? PROVIDER_LABELS;
+  const modelsByProvider = llm.models?.models ?? {};
+  const confidenceNotes = llm.models?.confidence_notes ?? {};
+  const keysConfigured = new Set(llm.settings?.keys_configured ?? []);
+
+  function modelsFor(provider: string): string[] {
+    return modelsByProvider[provider] ?? [];
+  }
+
+  async function handleSave() {
+    const payload: LlmSavePayload = {
+      ...base,
+      ...keyDraft,  // include any key fields the user typed
+    };
+    await llm.save(payload);
+    setKeyDraft({});
+    setKeyVisible({});
+  }
+
+  if (!llm.settings && !llm.models) {
+    return (
+      <div className="text-xs text-slate-500 font-mono animate-pulse">
+        Loading Brain settings… (requires login)
+      </div>
+    );
+  }
+
+  function ProviderSelect({ label, value, onChange }: {
+    label: string; value: string; onChange: (v: string) => void;
+  }) {
+    return (
+      <div className="space-y-1.5">
+        <span className="text-xs text-slate-400">{label}</span>
+        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+          {Object.entries(providers).map(([key, name]) => (
+            <button key={key} onClick={() => onChange(key)}
+              className={clsx(
+                "py-2 px-2 rounded-xl text-xs font-medium border transition-all text-center leading-tight",
+                value === key
+                  ? "bg-brand-500/20 border-brand-500/40 text-brand-300"
+                  : "border-white/5 text-slate-400 hover:text-slate-200 hover:border-white/10",
+              )}
+            >
+              {name}
+              {LOW_CONFIDENCE_PROVIDERS.has(key) && (
+                <div className="text-[9px] text-amber-400/70 mt-0.5">~{key === "qwen" ? "92" : "90"}% conf</div>
+              )}
+            </button>
+          ))}
+        </div>
+        {LOW_CONFIDENCE_PROVIDERS.has(value) && (
+          <SectionNote variant="warn">{confidenceNotes[value] ?? `${value} endpoint confidence is below 95% — verify the URL before use.`}</SectionNote>
+        )}
+      </div>
+    );
+  }
+
+  function ModelSelect({ label, provider, value, onChange }: {
+    label: string; provider: string; value: string; onChange: (v: string) => void;
+  }) {
+    const [custom, setCustom] = useState(false);
+    const models = modelsFor(provider);
+    const isKnown = models.includes(value);
+    return (
+      <div className="space-y-1.5">
+        <span className="text-xs text-slate-400">{label}</span>
+        {models.length > 0 && !custom ? (
+          <>
+            <div className="space-y-1">
+              {models.map((m) => (
+                <button key={m} onClick={() => onChange(m)}
+                  className={clsx(
+                    "w-full text-left px-3 py-2 rounded-lg text-xs font-mono border transition-all",
+                    value === m
+                      ? "bg-brand-500/15 border-brand-500/30 text-brand-300"
+                      : "border-white/5 text-slate-400 hover:text-slate-200 hover:border-white/10",
+                  )}
+                >{m}</button>
+              ))}
+            </div>
+            <button onClick={() => setCustom(true)} className="text-[11px] text-slate-500 hover:text-slate-300 font-mono underline">
+              Enter custom model ID
+            </button>
+          </>
+        ) : (
+          <>
+            <input
+              type="text"
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              placeholder="e.g. provider/model-name"
+              className="w-full bg-surface-700 border border-white/10 rounded-xl px-3 py-2 text-xs font-mono text-slate-200 outline-none focus:ring-1 focus:ring-brand-500"
+            />
+            {models.length > 0 && (
+              <button onClick={() => { setCustom(false); if (!isKnown) onChange(models[0]); }}
+                className="text-[11px] text-slate-500 hover:text-slate-300 font-mono underline">
+                Choose from list
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <SectionNote>
+        Each user configures their own LLM provider and API key — stored encrypted in your session.
+        Keys are <strong>write-only</strong>: once saved, values are never returned.
+        The auto-trader orchestrator always uses the system OpenRouter key; only browser-initiated
+        signals use these per-user settings.
+      </SectionNote>
+
+      {/* ── Tactical agents (25 analysts + personas) ─────────────────────── */}
+      <SubSection title="Tactical Agents (25 analysts)" />
+      <ProviderSelect
+        label="Provider"
+        value={base.tactical_provider}
+        onChange={(v) => updateDraft({ tactical_provider: v, tactical_model: modelsFor(v)[0] ?? base.tactical_model })}
+      />
+      <ModelSelect
+        label="Model"
+        provider={base.tactical_provider}
+        value={base.tactical_model}
+        onChange={(v) => updateDraft({ tactical_model: v })}
+      />
+
+      {/* ── Synthesis agents (StrategyCoach + RiskManager) ───────────────── */}
+      <SubSection title="Synthesis Agents (StrategyCoach + RiskManager)" />
+      <ProviderSelect
+        label="Provider"
+        value={base.synthesis_provider}
+        onChange={(v) => updateDraft({ synthesis_provider: v, synthesis_model: modelsFor(v)[0] ?? base.synthesis_model })}
+      />
+      <ModelSelect
+        label="Model"
+        provider={base.synthesis_provider}
+        value={base.synthesis_model}
+        onChange={(v) => updateDraft({ synthesis_model: v })}
+      />
+
+      {/* ── API Keys (write-only) ─────────────────────────────────────────── */}
+      <SubSection title="API Keys" />
+      <SectionNote>
+        Enter the API key for each provider you use. Leave blank to keep the stored key unchanged.
+        A green dot indicates a key is already saved.
+      </SectionNote>
+      <div className="space-y-2">
+        {PROVIDER_KEY_FIELDS.map(({ provider, field }) => {
+          const isSet = keysConfigured.has(provider);
+          const isVisible = keyVisible[provider];
+          return (
+            <div key={provider} className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-400 w-28 shrink-0 font-mono">{PROVIDER_LABELS[provider]}</span>
+                {isSet && !keyDraft[field as string] && (
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" title="Key saved" />
+                )}
+                <div className="flex-1 relative">
+                  <input
+                    type={isVisible ? "text" : "password"}
+                    value={keyDraft[field as string] ?? ""}
+                    onChange={(e) => setKeyDraft((prev) => ({ ...prev, [field as string]: e.target.value }))}
+                    placeholder={isSet ? "••••••••  (stored — leave blank to keep)" : "Paste API key…"}
+                    autoComplete="off"
+                    className="w-full bg-surface-700 border border-white/10 rounded-lg px-3 py-1.5 text-xs font-mono text-slate-200 outline-none focus:ring-1 focus:ring-brand-500 pr-16"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setKeyVisible((p) => ({ ...p, [provider]: !p[provider] }))}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-500 hover:text-slate-300 font-mono"
+                  >
+                    {isVisible ? "hide" : "show"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ── Error / Save ──────────────────────────────────────────────────── */}
+      {llm.error && <p className="text-xs text-red-400 font-mono">{llm.error}</p>}
+      <button
+        onClick={handleSave}
+        disabled={llm.saving}
+        className="w-full py-2 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-xs font-medium transition-colors"
+      >
+        {llm.saving ? "Saving…" : llm.saved ? "Saved ✓" : "Save Brain settings"}
+      </button>
     </div>
   );
 }
@@ -485,6 +725,15 @@ export function SettingsPage() {
             ? `Signal tier logic: HOT = ${configStatus.hot_min_votes}+/${configStatus.agent_count} votes · WARM = ${configStatus.warm_min_votes}–${configStatus.hot_min_votes - 1}/${configStatus.agent_count} · COLD = <${configStatus.warm_min_votes} or panels conflict`
             : "Signal tier logic: loading…"}
         </SectionNote>
+      </Section>
+
+      {/* ── Brain / LLM ───────────────────────────────────────────────────── */}
+      <Section
+        icon={<Brain className="w-4 h-4" />}
+        title="Brain / LLM"
+        subtitle="Per-user LLM provider, model, and API key — stored encrypted in your session"
+      >
+        <BrainLLMPanel />
       </Section>
 
       {/* ── Engine Config (all parameters) ───────────────────────────────── */}
