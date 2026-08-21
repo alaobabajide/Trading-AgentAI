@@ -9,6 +9,7 @@ python-dotenv>=1.0.0
 # Data
 alpaca-py>=0.35.0
 tastytrade>=8.0.0
+ib_insync>=0.9.86
 python-binance>=1.0.19
 yfinance>=0.2.40
 feedparser>=6.0.11

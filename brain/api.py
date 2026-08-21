@@ -440,6 +440,7 @@ _RATE_LIMITS: dict[str, tuple[int, int]] = {
     "/polygon-settings":      (20, 60),
     "/schwab-settings":       (20, 60),
     "/schwab-auth/url":       (10, 60),
+    "/ibkr-settings":         (20, 60),
 }
 _DEFAULT_RATE = (120, 60)
 
@@ -728,6 +729,20 @@ def _resolve_broker(user_id: str | None, cfg):
             account_hash=tokens.account_hash or None,
         )
 
+    if broker_type == "ibkr":
+        from brain.ibkr_creds import load_ibkr_settings
+        s = load_ibkr_settings(user_id)
+        if not s.configured:
+            raise HTTPException(400, "IB Gateway not configured — enter your IB Gateway host and port in Settings → Interactive Brokers")
+        from broker.adapters.ibkr import IBKRBrokerAdapter
+        return IBKRBrokerAdapter(
+            host=s.host,
+            port=s.port,
+            client_id=s.client_id,
+            account_id=s.account_id,
+            paper=s.paper_mode,
+        )
+
     # Default path: Alpaca
     ak, sk, base_url, _ = _resolve_alpaca_creds(user_id, cfg)
     from broker.adapters.alpaca import AlpacaBrokerAdapter
@@ -816,6 +831,15 @@ class TastytradeSettingsPayload(BaseModel):
 class PolygonSettingsPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     api_key: str = ""   # plaintext; empty = "don't change stored key"
+
+
+class IBKRSettingsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    host:       str  = "127.0.0.1"
+    port:       int  = 4002          # 4001 = live, 4002 = paper
+    client_id:  int  = 1             # unique per simultaneous connection to the same gateway
+    account_id: str  = ""            # IBKR account ID; empty = auto-detected
+    paper_mode: bool = True
 
 
 def _get_market_snapshot(fetcher, symbol: str, days: int):
@@ -1586,6 +1610,65 @@ def delete_schwab_settings(request: Request):
     from brain.schwab_creds import delete_schwab_tokens
     existed = delete_schwab_tokens(user_id)
     return {"disconnected": True, "had_tokens": existed}
+
+
+# ── Interactive Brokers IB Gateway endpoints ──────────────────────────────────
+
+@app.get("/ibkr-settings")
+def get_ibkr_settings(request: Request):
+    """Return the user's IB Gateway connection settings.
+
+    Connection parameters are not secret (no passwords stored), so values
+    are returned for display. Returns defaults if not configured.
+    """
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for IBKR settings")
+    from brain.ibkr_creds import load_ibkr_settings
+    s = load_ibkr_settings(user_id)
+    return {
+        "host":       s.host,
+        "port":       s.port,
+        "client_id":  s.client_id,
+        "account_id": s.account_id,
+        "paper_mode": s.paper_mode,
+        "configured": s.configured,
+    }
+
+
+@app.post("/ibkr-settings")
+def save_ibkr_settings(req: IBKRSettingsPayload, request: Request):
+    """Save the user's IB Gateway connection settings."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for IBKR settings")
+    if not req.host:
+        raise HTTPException(400, "host is required")
+    if not (1 <= req.port <= 65535):
+        raise HTTPException(400, "port must be between 1 and 65535")
+    if not (0 <= req.client_id <= 32):
+        raise HTTPException(400, "client_id must be between 0 and 32")
+    from brain.ibkr_creds import save_ibkr_settings as _save
+    _save(
+        user_id=user_id,
+        host=req.host,
+        port=req.port,
+        client_id=req.client_id,
+        account_id=req.account_id,
+        paper_mode=req.paper_mode,
+    )
+    return {"saved": True, "configured": True}
+
+
+@app.delete("/ibkr-settings")
+def delete_ibkr_settings(request: Request):
+    """Remove the user's IB Gateway settings (reverts to unconfigured)."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for IBKR settings")
+    from brain.ibkr_creds import delete_ibkr_settings as _delete
+    existed = _delete(user_id)
+    return {"deleted": True, "had_settings": existed}
 
 
 @app.get("/risk-settings")

@@ -1298,6 +1298,106 @@ export function useSchwabSettings() {
   return { settings, loading, connecting, disconnecting, error, connect, disconnect, refresh };
 }
 
+// ── Interactive Brokers settings ───────────────────────────────────────────────
+
+export interface IBKRSettings {
+  host:       string;
+  port:       number;
+  client_id:  number;
+  account_id: string;
+  paper_mode: boolean;
+  configured: boolean;
+}
+
+export type IBKRSavePayload = Omit<IBKRSettings, "configured">;
+
+export async function fetchIBKRSettings(): Promise<IBKRSettings> {
+  const res = await fetch(`${BASE}/ibkr-settings`, { headers: apiHeaders() });
+  if (!res.ok) throw new Error(`IBKR settings fetch failed (${res.status})`);
+  return safeJson<IBKRSettings>(res);
+}
+
+export async function saveIBKRSettings(payload: IBKRSavePayload): Promise<{ saved: boolean }> {
+  const res = await fetch(`${BASE}/ibkr-settings`, {
+    method:  "POST",
+    headers: { ...apiHeaders(), "Content-Type": "application/json" },
+    body:    JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Save failed" }));
+    throw new Error(err.detail ?? "Save failed");
+  }
+  return safeJson(res);
+}
+
+export async function deleteIBKRSettings(): Promise<{ deleted: boolean }> {
+  const res = await fetch(`${BASE}/ibkr-settings`, {
+    method: "DELETE", headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(`IBKR settings delete failed (${res.status})`);
+  return safeJson(res);
+}
+
+export function useIBKRSettings() {
+  const defaults: IBKRSavePayload = { host: "127.0.0.1", port: 4002, client_id: 1, account_id: "", paper_mode: true };
+  const [settings, setSettings] = useState<IBKRSettings | null>(null);
+  const [draft,    setDraft]    = useState<IBKRSavePayload>(defaults);
+  const [saving,   setSaving]   = useState(false);
+  const [saved,    setSaved]    = useState(false);
+  const [dirty,    setDirty]    = useState(false);
+  const [error,    setError]    = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetchIBKRSettings()
+      .then((s) => {
+        if (!active) return;
+        setSettings(s);
+        setDraft({ host: s.host, port: s.port, client_id: s.client_id, account_id: s.account_id, paper_mode: s.paper_mode });
+      })
+      .catch((e) => { if (active) setError((e as Error).message); });
+    return () => { active = false; };
+  }, []);
+
+  function update<K extends keyof IBKRSavePayload>(key: K, value: IBKRSavePayload[K]) {
+    setDraft((d) => ({ ...d, [key]: value }));
+    setDirty(true);
+  }
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      await saveIBKRSettings(draft);
+      setSettings((prev) => prev ? { ...prev, ...draft, configured: true } : { ...draft, configured: true });
+      setSaved(true);
+      setDirty(false);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove() {
+    setSaving(true);
+    setError(null);
+    try {
+      await deleteIBKRSettings();
+      setSettings((prev) => prev ? { ...prev, configured: false } : null);
+      setDraft(defaults);
+      setDirty(false);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return { settings, draft, saving, saved, dirty, error, update, save, remove };
+}
+
 export function useLlmSettings() {
   const [settings,  setSettings]  = useState<LlmSettings | null>(null);
   const [models,    setModels]    = useState<ModelsResponse | null>(null);

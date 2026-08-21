@@ -33,9 +33,9 @@ BROKER_CATALOG: list[dict] = [
     {
         "id":            "ibkr",
         "name":          "Interactive Brokers",
-        "tagline":       "Global markets — stocks, options, futures, forex, bonds",
+        "tagline":       "Global markets — stocks, options, futures, forex, bonds — self-hosted IB Gateway",
         "supports_paper": True,
-        "status":        "coming_soon",
+        "status":        "live",
     },
     {
         "id":            "schwab",
@@ -46,7 +46,7 @@ BROKER_CATALOG: list[dict] = [
     },
 ]
 
-LIVE_BROKERS: set[str] = {"alpaca", "tastytrade", "schwab"}
+LIVE_BROKERS: set[str] = {"alpaca", "tastytrade", "schwab", "ibkr"}
 DEFAULT_BROKER = "alpaca"
 
 # ── File path ────────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ import {
   HITLMode, UserProfile, DEFAULT_PROFILE,
   MODE_CONFIG, loadProfile, saveProfile,
 } from "../lib/hitl";
-import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload, useWebhookSettings, useBrokerSettings, useTastytradeSettings, TastytradeSavePayload, usePolygonSettings, useSchwabSettings } from "../lib/api";
+import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload, useWebhookSettings, useBrokerSettings, useTastytradeSettings, TastytradeSavePayload, usePolygonSettings, useSchwabSettings, useIBKRSettings } from "../lib/api";
 import { useEffect, useState } from "react";
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
@@ -650,6 +650,114 @@ function SchwabPanel() {
         Charles Schwab Individual Trader API is live-only — paper trading is not available.
         Only use with funds you intend to trade.
       </p>
+    </div>
+  );
+}
+
+function IBKRPanel() {
+  const ibkr = useIBKRSettings();
+
+  return (
+    <div className="space-y-5">
+      <p className="text-xs text-slate-400 leading-relaxed">
+        Run IB Gateway on your machine or a VPS, then enter its address here.
+        IB Gateway handles authentication — no password is stored.
+        Default port 4002 = paper; 4001 = live.
+      </p>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-1">
+          <label className="text-xs text-slate-400">IB Gateway Host</label>
+          <input
+            type="text"
+            placeholder="127.0.0.1"
+            value={ibkr.draft.host}
+            onChange={(e) => ibkr.update("host", e.target.value)}
+            className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-brand-100 placeholder-slate-500 focus:outline-none focus:border-brand-400/50"
+          />
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-xs text-slate-400">Port</label>
+          <input
+            type="number"
+            min={1}
+            max={65535}
+            value={ibkr.draft.port}
+            onChange={(e) => ibkr.update("port", parseInt(e.target.value, 10) || 4002)}
+            className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-brand-100 focus:outline-none focus:border-brand-400/50"
+          />
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-xs text-slate-400">Client ID <span className="text-slate-500">(0–32, unique per connection)</span></label>
+          <input
+            type="number"
+            min={0}
+            max={32}
+            value={ibkr.draft.client_id}
+            onChange={(e) => ibkr.update("client_id", parseInt(e.target.value, 10) || 1)}
+            className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-brand-100 focus:outline-none focus:border-brand-400/50"
+          />
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-xs text-slate-400">Account ID <span className="text-slate-500">(optional — auto-detected)</span></label>
+          <input
+            type="text"
+            placeholder="U1234567"
+            value={ibkr.draft.account_id}
+            onChange={(e) => ibkr.update("account_id", e.target.value)}
+            className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-brand-100 placeholder-slate-500 focus:outline-none focus:border-brand-400/50"
+          />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => ibkr.update("paper_mode", !ibkr.draft.paper_mode)}
+          className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+            ibkr.draft.paper_mode
+              ? "bg-blue-500/20 border-blue-400/30 text-blue-300"
+              : "bg-orange-500/20 border-orange-400/30 text-orange-300"
+          }`}
+        >
+          {ibkr.draft.paper_mode ? "Paper mode" : "Live mode"}
+        </button>
+        <span className="text-xs text-slate-500">
+          {ibkr.draft.paper_mode ? "Port 4002 / TWS 7497" : "Port 4001 / TWS 7496"}
+        </span>
+      </div>
+
+      <div className="flex items-center gap-3 flex-wrap">
+        <button
+          type="button"
+          onClick={ibkr.save}
+          disabled={ibkr.saving || !ibkr.dirty}
+          className="px-4 py-2 rounded-xl bg-brand-500/20 border border-brand-400/30 text-sm text-brand-300 hover:bg-brand-500/30 transition-colors disabled:opacity-40"
+        >
+          {ibkr.saving ? "Saving…" : "Save"}
+        </button>
+        {ibkr.settings?.configured && (
+          <button
+            type="button"
+            onClick={ibkr.remove}
+            disabled={ibkr.saving}
+            className="px-4 py-2 rounded-xl bg-red-500/10 border border-red-400/20 text-sm text-red-400 hover:bg-red-500/20 transition-colors disabled:opacity-40"
+          >
+            Remove
+          </button>
+        )}
+        {ibkr.saved  && <span className="text-xs text-green-400">Saved.</span>}
+        {ibkr.error  && <span className="text-xs text-red-400">{ibkr.error}</span>}
+      </div>
+
+      {!ibkr.draft.paper_mode && (
+        <p className="text-[11px] text-orange-400/70">
+          Live mode — ensure IB Gateway is connected to a live account and has real funds before enabling auto-trading.
+        </p>
+      )}
     </div>
   );
 }
@@ -1346,6 +1454,17 @@ export function SettingsPage() {
           subtitle="Connect via OAuth — no password stored; tokens encrypted at rest"
         >
           <SchwabPanel />
+        </Section>
+      )}
+
+      {/* ── Interactive Brokers (shown when ibkr is selected) ────────────── */}
+      {currentBroker === "ibkr" && (
+        <Section
+          icon={<Landmark className="w-4 h-4" />}
+          title="Interactive Brokers Gateway"
+          subtitle="Point to your running IB Gateway or TWS — no credentials stored here"
+        >
+          <IBKRPanel />
         </Section>
       )}
 
