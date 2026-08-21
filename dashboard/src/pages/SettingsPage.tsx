@@ -4,7 +4,7 @@ import {
   HITLMode, UserProfile, DEFAULT_PROFILE,
   MODE_CONFIG, loadProfile, saveProfile,
 } from "../lib/hitl";
-import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload } from "../lib/api";
+import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload } from "../lib/api";
 import { useState } from "react";
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
@@ -204,6 +204,137 @@ function NumberSlider({ label, value, options, onChange }: {
     </div>
   );
 }
+
+// ── Alpaca account panel ──────────────────────────────────────────────────────
+
+function AlpacaPanel() {
+  const alpaca = useAlpacaSettings();
+
+  const [draft, setDraft]         = useState<AlpacaSavePayload | null>(null);
+  const [apiKeyVal, setApiKeyVal] = useState("");
+  const [secKeyVal, setSecKeyVal] = useState("");
+  const [apiVisible, setApiVisible] = useState(false);
+  const [secVisible, setSecVisible] = useState(false);
+
+  const paperMode = draft?.paper_mode ?? alpaca.settings?.paper_mode ?? true;
+  const configured = alpaca.settings?.keys_configured ?? false;
+
+  async function handleSave() {
+    const payload: AlpacaSavePayload = {
+      paper_mode: paperMode,
+      ...(apiKeyVal ? { api_key: apiKeyVal } : {}),
+      ...(secKeyVal ? { secret_key: secKeyVal } : {}),
+    };
+    await alpaca.save(payload);
+    setApiKeyVal("");
+    setSecKeyVal("");
+    setApiVisible(false);
+    setSecVisible(false);
+    setDraft(null);
+  }
+
+  if (!alpaca.settings) {
+    return (
+      <div className="text-xs text-slate-500 font-mono animate-pulse">
+        Loading Alpaca settings… (requires login)
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <SectionNote variant="warn">
+        This only affects signals you run manually from the dashboard. The background
+        orchestrator always uses the system Alpaca key set in Railway — your open
+        positions are never impacted.
+      </SectionNote>
+
+      {/* Paper / Live toggle */}
+      <div className="space-y-1.5">
+        <div className="text-[10px] text-slate-500 uppercase tracking-widest font-mono">Account mode</div>
+        <div className="flex gap-2">
+          {(["paper", "live"] as const).map((mode) => {
+            const active = mode === "paper" ? paperMode : !paperMode;
+            return (
+              <button
+                key={mode}
+                onClick={() => setDraft({ paper_mode: mode === "paper" })}
+                className={clsx(
+                  "flex-1 py-2 rounded-xl text-xs font-mono font-semibold transition-all border",
+                  active
+                    ? mode === "paper"
+                      ? "border-sky-500/60 bg-sky-500/15 text-sky-300"
+                      : "border-amber-500/60 bg-amber-500/15 text-amber-300"
+                    : "border-white/5 bg-surface-700 text-slate-500 hover:border-white/10",
+                )}
+              >
+                {mode === "paper" ? "Paper trading" : "Live trading"}
+              </button>
+            );
+          })}
+        </div>
+        {!paperMode && (
+          <SectionNote variant="warn">
+            Live mode places real orders. Double-check your key is scoped to the correct Alpaca account.
+          </SectionNote>
+        )}
+      </div>
+
+      {/* Key fields */}
+      <div className="space-y-2">
+        <div className="text-[10px] text-slate-500 uppercase tracking-widest font-mono">API credentials</div>
+        {([
+          { label: "API Key",    val: apiKeyVal, setVal: setApiKeyVal, visible: apiVisible, setVisible: setApiVisible },
+          { label: "Secret Key", val: secKeyVal, setVal: setSecKeyVal, visible: secVisible, setVisible: setSecVisible },
+        ]).map(({ label, val, setVal, visible, setVisible }) => (
+          <div key={label} className="flex items-center gap-2">
+            <div className={clsx(
+              "w-2 h-2 rounded-full shrink-0",
+              configured ? "bg-emerald-400" : "bg-slate-600",
+            )} title={configured ? "Keys saved" : "No keys saved"} />
+            <span className="text-xs text-slate-400 w-20 shrink-0 font-mono">{label}</span>
+            <div className="flex-1 relative">
+              <input
+                type={visible ? "text" : "password"}
+                value={val}
+                onChange={(e) => setVal(e.target.value)}
+                placeholder={configured ? "••••••••  (leave blank to keep saved key)" : "Paste key…"}
+                className="w-full bg-surface-700 border border-white/5 rounded-xl px-3 py-1.5 text-xs font-mono text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-brand-500/40 pr-8"
+              />
+              <button
+                type="button"
+                onClick={() => setVisible((v) => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-600 hover:text-slate-400 text-[10px] font-mono"
+              >
+                {visible ? "hide" : "show"}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Save button */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleSave}
+          disabled={alpaca.saving}
+          className={clsx(
+            "px-4 py-2 rounded-xl text-xs font-mono font-semibold transition-all",
+            alpaca.saving
+              ? "bg-surface-700 text-slate-500 cursor-not-allowed"
+              : "bg-brand-500 hover:bg-brand-400 text-white",
+          )}
+        >
+          {alpaca.saving ? "Saving…" : alpaca.saved ? "Saved ✓" : "Save Alpaca settings"}
+        </button>
+        {alpaca.error && (
+          <span className="text-xs text-red-400 font-mono">{alpaca.error}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 
 // ── Brain / LLM configuration panel ──────────────────────────────────────────
 
@@ -725,6 +856,15 @@ export function SettingsPage() {
             ? `Signal tier logic: HOT = ${configStatus.hot_min_votes}+/${configStatus.agent_count} votes · WARM = ${configStatus.warm_min_votes}–${configStatus.hot_min_votes - 1}/${configStatus.agent_count} · COLD = <${configStatus.warm_min_votes} or panels conflict`
             : "Signal tier logic: loading…"}
         </SectionNote>
+      </Section>
+
+      {/* ── Alpaca Account ────────────────────────────────────────────────── */}
+      <Section
+        icon={<Zap className="w-4 h-4" />}
+        title="Alpaca Account"
+        subtitle="Per-user Alpaca key for manual signals from the dashboard — stored encrypted"
+      >
+        <AlpacaPanel />
       </Section>
 
       {/* ── Brain / LLM ───────────────────────────────────────────────────── */}

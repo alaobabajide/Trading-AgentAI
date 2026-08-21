@@ -421,12 +421,13 @@ app.add_middleware(
 
 # ── Rate limiting (outermost — runs first, cheapest check) ────────────────────
 _RATE_LIMITS: dict[str, tuple[int, int]] = {
-    "/execute":      (5,  60),
-    "/signal":       (10, 60),
-    "/kill":         (5,  60),
-    "/resume":       (5,  60),
-    "/config":       (20, 60),
-    "/llm-settings": (20, 60),
+    "/execute":         (5,  60),
+    "/signal":          (10, 60),
+    "/kill":            (5,  60),
+    "/resume":          (5,  60),
+    "/config":          (20, 60),
+    "/llm-settings":    (20, 60),
+    "/alpaca-settings": (20, 60),
 }
 _DEFAULT_RATE = (120, 60)
 
@@ -621,6 +622,37 @@ def _get_enc_key() -> bytes:
     from brain.llm_creds import _derive_enc_key
     _enc_key = _derive_enc_key(_secret)
     return _enc_key
+
+
+def _resolve_alpaca_creds(user_id: str | None, cfg) -> tuple[str, str, str, bool]:
+    """Return (api_key, secret_key, base_url, is_paper) for the given user.
+
+    user_id = None  (orchestrator / X-Api-Key) → always system credentials.
+    user_id = str   (JWT browser user)          → per-user if configured, else system.
+    """
+    if user_id:
+        try:
+            enc_key = _get_enc_key()
+            from brain.alpaca_creds import get_effective_alpaca_creds
+            creds = get_effective_alpaca_creds(user_id, enc_key, cfg)
+            return creds.api_key, creds.secret_key, creds.alpaca_base_url, creds.is_paper
+        except HTTPException:
+            raise
+        except Exception as exc:
+            log.warning("Could not resolve per-user Alpaca creds for %s: %s", user_id, exc)
+    return (
+        cfg.alpaca_api_key or "",
+        cfg.alpaca_secret_key or "",
+        cfg.alpaca_base_url or "https://paper-api.alpaca.markets",
+        "paper" in (cfg.alpaca_base_url or "").lower(),
+    )
+
+
+class AlpacaSettingsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    paper_mode:  bool = True
+    api_key:     str  = ""    # plaintext; empty = "don't change stored key"
+    secret_key:  str  = ""    # plaintext; empty = "don't change stored key"
 
 
 def _get_market_snapshot(fetcher, symbol: str, days: int):
@@ -971,6 +1003,43 @@ def save_llm_settings(req: _LLMSettingsWrite, request: Request):
     }
 
 
+@app.get("/alpaca-settings")
+def get_alpaca_settings(request: Request):
+    """Return the current user's Alpaca configuration (presence only — keys never returned)."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for Alpaca settings")
+    from brain.alpaca_creds import load_user_alpaca_settings
+    settings = load_user_alpaca_settings(user_id)
+    return {
+        "paper_mode":     settings.paper_mode,
+        "keys_configured": bool(settings.api_key_enc and settings.secret_key_enc),
+    }
+
+
+@app.post("/alpaca-settings")
+def save_alpaca_settings_endpoint(req: AlpacaSettingsPayload, request: Request):
+    """Save the current user's Alpaca credentials (encrypted at rest, never returned)."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for Alpaca settings")
+    enc_key = _get_enc_key()
+    from brain.alpaca_creds import save_user_alpaca_settings, load_user_alpaca_settings
+    save_user_alpaca_settings(
+        user_id=user_id,
+        paper_mode=req.paper_mode,
+        new_api_key=req.api_key,
+        new_secret_key=req.secret_key,
+        enc_key=enc_key,
+    )
+    settings = load_user_alpaca_settings(user_id)
+    log.info("Alpaca settings saved for user %s (paper=%s)", user_id, req.paper_mode)
+    return {
+        "saved": True,
+        "keys_configured": bool(settings.api_key_enc and settings.secret_key_enc),
+    }
+
+
 @app.post("/signal", response_model=SignalResponse)
 def generate_signal(req: SignalRequest, request: Request):
     req.symbol = _validate_symbol(req.symbol)
@@ -1194,7 +1263,7 @@ class ExecuteRequest(BaseModel):
 
 
 @app.post("/execute")
-def execute_trade(req: ExecuteRequest):
+def execute_trade(req: ExecuteRequest, request: Request):
     """Place a bracket order (entry + stop-loss + take-profit) via the execution engines."""
     req.symbol = _validate_symbol(req.symbol)
     if req.asset_class not in ("stock", "crypto"):
@@ -1208,6 +1277,8 @@ def execute_trade(req: ExecuteRequest):
     from brain.signal import TradingSignal
 
     cfg = get_settings()
+    _exec_user_id = getattr(request.state, "user_id", None)
+    _ak, _sk, _base_url, _is_paper = _resolve_alpaca_creds(_exec_user_id, cfg)
 
     # The orchestrator already applies all risk adjustments (correlation halving,
     # regime-based sl/tp scaling) before sending this request. Always use the
@@ -1236,13 +1307,11 @@ def execute_trade(req: ExecuteRequest):
             from data.market_data import AlpacaMarketData
             from execution.stock.engine import StockExecutionEngine
 
-            is_paper = "paper" in cfg.alpaca_base_url.lower()
-
             # Pre-flight: block BUY if already at max_exposure_pct.
             # Previously checked buying_power < $1, which passes on margin accounts even
             # when cash is deeply negative — allowing 174% NAV allocation via borrowed funds.
             if req.action == "BUY":
-                _tc_pf = _TC(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
+                _tc_pf = _TC(_ak, _sk, paper=_is_paper)
                 _acct  = _tc_pf.get_account()
                 _equity_pf = float(_acct.equity or 0)
                 if _equity_pf <= 0:
@@ -1266,7 +1335,7 @@ def execute_trade(req: ExecuteRequest):
 
             # Fetch recent bars for ATR-based sizing; fall back to latest quote
             # if the bar fetch returns empty (e.g. data feed permission gap).
-            market = AlpacaMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)
+            market = AlpacaMarketData(_ak, _sk)
             bars   = market.get_bars(req.symbol.upper(), days=30)
             bars_highs  = [b.high  for b in bars]
             bars_lows   = [b.low   for b in bars]
@@ -1303,9 +1372,9 @@ def execute_trade(req: ExecuteRequest):
 
             eff = _effective_config(cfg)
             engine = StockExecutionEngine(
-                alpaca_api_key=cfg.alpaca_api_key,
-                alpaca_secret_key=cfg.alpaca_secret_key,
-                alpaca_base_url=cfg.alpaca_base_url,
+                alpaca_api_key=_ak,
+                alpaca_secret_key=_sk,
+                alpaca_base_url=_base_url,
                 max_position_pct=eff["max_position_pct"],
                 circuit_breaker_drawdown=eff["circuit_breaker_drawdown"],
                 trailing_stop_pct=eff["trailing_stop_pct"],
@@ -1321,7 +1390,7 @@ def execute_trade(req: ExecuteRequest):
                     detail="Order blocked by risk controls (circuit breaker, sizing, or invalid price)",
                 )
 
-            exchange = "alpaca_paper" if is_paper else "alpaca_live"
+            exchange = "alpaca_paper" if _is_paper else "alpaca_live"
             _write_audit(result.symbol, result.action, result.qty,
                          result.qty * result.submitted_price, "api", result.order_id)
             return {
@@ -1343,9 +1412,9 @@ def execute_trade(req: ExecuteRequest):
 
             eff = _effective_config(cfg)
             engine = CryptoExecutionEngine(
-                alpaca_api_key=cfg.alpaca_api_key,
-                alpaca_secret_key=cfg.alpaca_secret_key,
-                alpaca_base_url=cfg.alpaca_base_url,
+                alpaca_api_key=_ak,
+                alpaca_secret_key=_sk,
+                alpaca_base_url=_base_url,
                 max_position_pct=eff["max_position_pct"],
                 max_crypto_allocation_pct=eff["max_crypto_allocation_pct"],
                 cash_buffer=cfg.crypto_cash_buffer,
@@ -1384,7 +1453,7 @@ def execute_trade(req: ExecuteRequest):
 
 
 @app.get("/portfolio")
-def get_portfolio():
+def get_portfolio(request: Request):
     """Return current portfolio state (positions, equity, P&L).
 
     Returns a zeroed default with fetch_error set if credentials are missing or
@@ -1396,15 +1465,17 @@ def get_portfolio():
     from datetime import timezone
 
     cfg = get_settings()
+    _pf_user_id = getattr(request.state, "user_id", None)
+    _pf_ak, _pf_sk, _pf_base_url, _ = _resolve_alpaca_creds(_pf_user_id, cfg)
     fetch_error: str | None = None
 
-    if not cfg.alpaca_api_key:
+    if not _pf_ak:
         fetch_error = "ALPACA_API_KEY is not configured — check Settings"
-        log.warning("/portfolio: no ALPACA_API_KEY — returning empty state")
+        log.warning("/portfolio: no Alpaca API key — returning empty state")
         state = PortfolioState(timestamp=datetime.now(timezone.utc), equity=0.0, cash=0.0)
     else:
         portfolio_fetcher = PortfolioFetcher(
-            cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url,
+            _pf_ak, _pf_sk, _pf_base_url,
         )
         try:
             state = portfolio_fetcher.snapshot()
@@ -1439,7 +1510,7 @@ def get_portfolio():
 
 
 @app.get("/orders")
-def get_orders(status: str = "open"):
+def get_orders(request: Request, status: str = "open"):
     """Return open or recent orders from Alpaca.
 
     status=open   — pending / partially-filled / new (default)
@@ -1459,11 +1530,13 @@ def get_orders(status: str = "open"):
     from alpaca.trading.enums import QueryOrderStatus
 
     cfg = get_settings()
-    if not cfg.alpaca_api_key:
+    _ord_user_id = getattr(request.state, "user_id", None)
+    _ord_ak, _ord_sk, _, _ord_paper = _resolve_alpaca_creds(_ord_user_id, cfg)
+
+    if not _ord_ak:
         return {"orders": [], "fetch_error": "ALPACA_API_KEY is not configured"}
 
-    is_paper = "paper" in cfg.alpaca_base_url.lower()
-    client = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper)
+    client = TradingClient(_ord_ak, _ord_sk, paper=_ord_paper)
 
     status_map = {
         "open":   QueryOrderStatus.OPEN,

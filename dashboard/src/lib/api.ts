@@ -848,6 +848,82 @@ const _DEFAULT_LLM: LlmSettings = {
   keys_configured:    [],
 };
 
+// ── Alpaca credential settings ────────────────────────────────────────────────
+
+export interface AlpacaSettings {
+  paper_mode:      boolean;
+  keys_configured: boolean;
+}
+
+export interface AlpacaSavePayload {
+  paper_mode:   boolean;
+  api_key?:     string;  // plaintext; empty or omitted = "don't change stored key"
+  secret_key?:  string;  // plaintext; empty or omitted = "don't change stored key"
+}
+
+export async function fetchAlpacaSettings(): Promise<AlpacaSettings> {
+  const res = await fetch(`${BASE}/alpaca-settings`, {
+    signal: AbortSignal.timeout(8000),
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export async function saveAlpacaSettings(
+  payload: AlpacaSavePayload,
+): Promise<{ saved: boolean; keys_configured: boolean }> {
+  const res = await fetch(`${BASE}/alpaca-settings`, {
+    method:  "POST",
+    headers: apiHeaders({ "Content-Type": "application/json" }),
+    body:    JSON.stringify(payload),
+    signal:  AbortSignal.timeout(10000),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  return safeJson(res);
+}
+
+export function useAlpacaSettings() {
+  const [settings, setSettings] = useState<AlpacaSettings | null>(null);
+  const [saving,   setSaving]   = useState(false);
+  const [saved,    setSaved]    = useState(false);
+  const [error,    setError]    = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const s = await fetchAlpacaSettings();
+        if (!cancelled) setSettings(s);
+      } catch { /* not authenticated or backend not up */ }
+    }
+    load();
+  }, []);
+
+  async function save(payload: AlpacaSavePayload) {
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await saveAlpacaSettings(payload);
+      setSettings((prev) => prev
+        ? { ...prev, paper_mode: payload.paper_mode, keys_configured: result.keys_configured }
+        : { paper_mode: payload.paper_mode, keys_configured: result.keys_configured }
+      );
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return { settings, saving, saved, error, save };
+}
+
 export function useLlmSettings() {
   const [settings,  setSettings]  = useState<LlmSettings | null>(null);
   const [models,    setModels]    = useState<ModelsResponse | null>(null);
