@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from datetime import date, datetime, timezone
 from typing import Any
@@ -22,6 +23,56 @@ _usage_lock = threading.Lock()
 # Keyed by ISO date string, e.g. "2026-08-13"
 # Inner dict: {input_tokens, output_tokens, cost_usd, calls, by_model}
 _daily_usage: dict[str, dict] = {}
+
+
+def _usage_file(day: str) -> str | None:
+    """Return path for the usage file for `day`, or None if no writable dir."""
+    for candidate in ("/data", os.path.dirname(os.path.abspath(__file__)), "/tmp"):
+        try:
+            if os.path.isdir(candidate) and os.access(candidate, os.W_OK):
+                return os.path.join(candidate, f"ta_usage_{day}.json")
+        except Exception:
+            pass
+    return None
+
+
+def _load_persisted_usage() -> None:
+    """Load today's usage from disk at startup (best-effort, never raises)."""
+    try:
+        today = date.today().isoformat()
+        path = _usage_file(today)
+        if not path or not os.path.exists(path):
+            return
+        with open(path) as f:
+            data = json.load(f)
+        if isinstance(data, dict) and data.get("date") == today:
+            with _usage_lock:
+                _daily_usage[today] = data
+            log.info("usage: restored %d calls from %s", data.get("calls", 0), path)
+    except Exception as exc:
+        log.debug("usage: could not load persisted data: %s", exc)
+
+
+def _persist_usage(day: str) -> None:
+    """Write one day's usage to disk (best-effort, never raises)."""
+    try:
+        path = _usage_file(day)
+        if not path:
+            return
+        with _usage_lock:
+            snapshot = dict(_daily_usage.get(day, {}))
+        if not snapshot:
+            return
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(snapshot, f)
+        os.replace(tmp, path)
+    except Exception as exc:
+        log.debug("usage: could not persist data: %s", exc)
+
+
+# Load any usage accumulated before the last restart.
+_load_persisted_usage()
 
 
 def _record_usage(model: str, prompt_tokens: int, completion_tokens: int) -> None:
@@ -50,6 +101,7 @@ def _record_usage(model: str, prompt_tokens: int, completion_tokens: int) -> Non
         m["output_tokens"] += completion_tokens
         m["cost_usd"] = round(m["cost_usd"] + cost, 6)
         m["calls"] += 1
+    _persist_usage(today)
 
 
 def get_usage_stats() -> dict:

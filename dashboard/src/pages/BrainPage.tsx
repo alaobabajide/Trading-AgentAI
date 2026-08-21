@@ -109,7 +109,7 @@ function UsagePanel() {
 
         {!today || today.calls === 0 ? (
           <div className="text-xs text-slate-500 font-mono">
-            No LLM calls recorded today yet — runs accumulate in-process after the first live signal.
+            No LLM calls recorded today yet — usage appears here after the first live signal runs.
           </div>
         ) : (
           <div className="space-y-3">

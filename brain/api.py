@@ -2067,8 +2067,8 @@ def get_fundamentals(symbol: str, asset_class: str = "stock"):
 @app.get("/usage")
 def get_api_usage():
     """Return daily LLM token usage and cost statistics.
-    Data accumulates in-process since last restart; resets to zero on deploy.
-    All costs are estimates based on OpenRouter published pricing.
+    Usage is persisted to disk so it survives container restarts within the same day.
+    All costs are estimates based on published provider pricing.
     """
     from brain.agents.base import get_usage_stats
     return get_usage_stats()
