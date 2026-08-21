@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
-import { BarChart2, AlertCircle, Clock, RefreshCw } from "lucide-react";
+import { BarChart2, AlertCircle, Clock, RefreshCw, Download, FileText } from "lucide-react";
 import { format } from "date-fns";
 import clsx from "clsx";
 import { PositionsTable } from "../components/PositionsTable";
-import { usePortfolio, useOrders } from "../lib/api";
-import type { AlpacaOrder } from "../lib/api";
+import { usePortfolio, useOrders, useOrderHistory, exportOrderHistory } from "../lib/api";
+import type { AlpacaOrder, StoredOrder } from "../lib/api";
 
 function usMarketStatus(): { open: boolean; nextOpen: string } {
   return useMemo(() => {
@@ -127,6 +127,126 @@ function OrdersTable({ orders }: { orders: AlpacaOrder[] }) {
   );
 }
 
+// ── Audit history table (persistent store — all brokers) ─────────────────────
+
+const AUDIT_STATUS_COLOR: Record<string, string> = {
+  filled:           "text-emerald-400",
+  submitted:        "text-amber-400",
+  canceled:         "text-slate-500",
+  cancelled:        "text-slate-500",
+  expired:          "text-slate-500",
+  rejected:         "text-red-400",
+  broker_sync:      "text-slate-400",
+};
+
+function AuditTable({ orders }: { orders: StoredOrder[] }) {
+  if (orders.length === 0) {
+    return (
+      <p className="text-sm text-slate-500 text-center py-6">
+        No audit records yet — orders placed through the platform appear here.
+      </p>
+    );
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-[10px] uppercase tracking-widest text-slate-500 border-b border-white/5">
+            <th className="text-left pb-2 pr-3">Date</th>
+            <th className="text-left pb-2 pr-3">Symbol</th>
+            <th className="text-left pb-2 pr-3">Side</th>
+            <th className="text-left pb-2 pr-3">Type</th>
+            <th className="text-right pb-2 pr-3">Qty</th>
+            <th className="text-right pb-2 pr-3">Filled</th>
+            <th className="text-left pb-2 pr-3">Status</th>
+            <th className="text-left pb-2 pr-3">Broker</th>
+            <th className="text-left pb-2 pr-3">Source</th>
+            <th className="text-right pb-2 pr-3">Avg $</th>
+            <th className="text-right pb-2">Stop / TP</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-white/5">
+          {orders.map((o, i) => (
+            <tr key={o.order_id || i} className="font-mono text-xs">
+              <td className="py-1.5 pr-3 text-slate-500">
+                {o.submitted_at ? format(new Date(o.submitted_at), "MMM d · HH:mm") : "—"}
+              </td>
+              <td className="py-1.5 pr-3 font-semibold text-slate-200">{o.symbol}</td>
+              <td className={clsx("py-1.5 pr-3 font-semibold",
+                o.side === "BUY" ? "text-emerald-400" : "text-red-400"
+              )}>
+                {o.side}
+              </td>
+              <td className="py-1.5 pr-3 text-slate-400">{o.order_type}</td>
+              <td className="py-1.5 pr-3 text-right text-slate-300">{o.qty}</td>
+              <td className={clsx("py-1.5 pr-3 text-right",
+                o.filled_qty > 0 ? "text-emerald-400" : "text-slate-500"
+              )}>
+                {o.filled_qty}
+              </td>
+              <td className={clsx("py-1.5 pr-3", AUDIT_STATUS_COLOR[o.status] ?? "text-slate-400")}>
+                {o.status.charAt(0).toUpperCase() + o.status.slice(1)}
+              </td>
+              <td className="py-1.5 pr-3 text-slate-400">{o.broker}</td>
+              <td className="py-1.5 pr-3 text-slate-500">{o.source}</td>
+              <td className="py-1.5 pr-3 text-right text-slate-300">
+                {o.filled_avg_price != null ? `$${o.filled_avg_price.toFixed(2)}` : "—"}
+              </td>
+              <td className="py-1.5 text-right text-slate-400">
+                {o.stop_price != null ? `$${o.stop_price.toFixed(2)}` : "—"}
+                {o.take_profit_price != null ? ` / $${o.take_profit_price.toFixed(2)}` : ""}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── Export bar ────────────────────────────────────────────────────────────────
+
+function ExportBar({ days }: { days: number }) {
+  const [exporting, setExporting] = useState<"csv" | "pdf" | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  async function handleExport(fmt: "csv" | "pdf") {
+    setExporting(fmt);
+    setExportError(null);
+    try {
+      await exportOrderHistory(fmt, days);
+    } catch (e) {
+      setExportError((e as Error).message);
+    } finally {
+      setExporting(null);
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <button
+        onClick={() => handleExport("csv")}
+        disabled={exporting !== null}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-xs font-mono text-slate-300 hover:bg-white/10 hover:text-white transition-colors disabled:opacity-40"
+      >
+        <Download className="w-3 h-3" />
+        {exporting === "csv" ? "Exporting…" : "Export CSV"}
+      </button>
+      <button
+        onClick={() => handleExport("pdf")}
+        disabled={exporting !== null}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-xs font-mono text-slate-300 hover:bg-white/10 hover:text-white transition-colors disabled:opacity-40"
+      >
+        <FileText className="w-3 h-3" />
+        {exporting === "pdf" ? "Exporting…" : "Export PDF"}
+      </button>
+      {exportError && (
+        <span className="text-xs text-red-400 font-mono">{exportError}</span>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export function PositionsPage() {
@@ -134,6 +254,8 @@ export function PositionsPage() {
   const [showPendingOnly, setShowPendingOnly] = useState(false);
   const { orders, fetchError: ordersError, loading: ordersLoading } = useOrders(showPendingOnly ? "open" : "all");
   const market = usMarketStatus();
+  const [auditDays, setAuditDays] = useState(90);
+  const { orders: auditOrders, loading: auditLoading, error: auditError } = useOrderHistory(auditDays);
 
   const portfolioError = portfolio?.fetch_error ?? null;
   const pendingOrders = orders.filter(
@@ -266,6 +388,43 @@ export function PositionsPage() {
         )}
 
         <OrdersTable orders={orders} />
+      </div>
+
+      {/* Audit history — 1-year persistent store, all brokers */}
+      <div className="glass rounded-2xl p-5 space-y-4">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 flex items-center gap-2">
+            <Clock className="w-3.5 h-3.5" />
+            Audit History
+            {auditLoading && <RefreshCw className="w-3 h-3 text-slate-500 animate-spin" />}
+            <span className="text-slate-600 font-normal normal-case tracking-normal">
+              · {auditOrders.length} record{auditOrders.length !== 1 ? "s" : ""}
+            </span>
+          </h2>
+          <div className="flex items-center gap-3 flex-wrap">
+            <select
+              value={auditDays}
+              onChange={(e) => setAuditDays(Number(e.target.value))}
+              className="text-[10px] font-mono bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-slate-400 focus:outline-none focus:ring-1 focus:ring-brand-500/40"
+            >
+              <option value={7}>Last 7 days</option>
+              <option value={30}>Last 30 days</option>
+              <option value={90}>Last 90 days</option>
+              <option value={180}>Last 180 days</option>
+              <option value={365}>Last 365 days</option>
+            </select>
+            <ExportBar days={auditDays} />
+          </div>
+        </div>
+
+        {auditError && (
+          <div className="flex items-center gap-2 text-xs text-red-400">
+            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+            {auditError}
+          </div>
+        )}
+
+        <AuditTable orders={auditOrders} />
       </div>
     </div>
   );

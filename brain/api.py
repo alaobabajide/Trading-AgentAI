@@ -441,6 +441,8 @@ _RATE_LIMITS: dict[str, tuple[int, int]] = {
     "/schwab-settings":       (20, 60),
     "/schwab-auth/url":       (10, 60),
     "/ibkr-settings":         (20, 60),
+    "/orders/history":        (30, 60),
+    "/orders/history/export": (5,  60),
 }
 _DEFAULT_RATE = (120, 60)
 
@@ -1992,6 +1994,7 @@ def _execute_order(
     broker,
     exec_eff: dict, cfg, signal, sl_pct: float, tp_pct: float,
     source: str = "api",
+    user_id: str | None = None,
 ) -> dict:
     """Run the execution engine for a resolved TradingSignal. Raises HTTPException on failure.
 
@@ -2073,6 +2076,23 @@ def _execute_order(
 
             _write_audit(result.symbol, result.action, result.qty,
                          result.qty * result.submitted_price, source, result.order_id)
+            try:
+                from brain.order_history import record_from_broker_result
+                record_from_broker_result(
+                    order_id=result.order_id,
+                    symbol=result.symbol,
+                    side=result.action,
+                    order_type="bracket",
+                    qty=result.qty,
+                    submitted_at=result.timestamp.isoformat() if result.timestamp else None,
+                    broker=getattr(broker, "broker_name", result.exchange or "unknown"),
+                    stop_price=result.stop_price or None,
+                    take_profit_price=result.take_profit_price or None,
+                    source=source,
+                    user_id=user_id or "system",
+                )
+            except Exception as _rec_exc:
+                log.debug("Order history record failed (non-fatal): %s", _rec_exc)
             return {
                 "order_id":          result.order_id,
                 "status":            "submitted",
@@ -2108,6 +2128,23 @@ def _execute_order(
 
             _write_audit(result.symbol, result.action, result.qty,
                          result.qty * result.submitted_price, source, result.order_id)
+            try:
+                from brain.order_history import record_from_broker_result
+                record_from_broker_result(
+                    order_id=result.order_id,
+                    symbol=result.symbol,
+                    side=result.action,
+                    order_type="market",
+                    qty=result.qty,
+                    submitted_at=result.timestamp.isoformat() if result.timestamp else None,
+                    broker=getattr(broker, "broker_name", result.exchange or "unknown"),
+                    stop_price=result.stop_price or None,
+                    take_profit_price=result.take_profit_price or None,
+                    source=source,
+                    user_id=user_id or "system",
+                )
+            except Exception as _rec_exc:
+                log.debug("Order history record failed (non-fatal): %s", _rec_exc)
             return {
                 "order_id":          result.order_id,
                 "status":            "submitted",
@@ -2166,7 +2203,7 @@ def execute_trade(req: ExecuteRequest, request: Request):
     )
 
     broker = _resolve_broker(_exec_user_id, cfg)
-    return _execute_order(broker, _exec_eff, cfg, signal, sl_pct, tp_pct)
+    return _execute_order(broker, _exec_eff, cfg, signal, sl_pct, tp_pct, user_id=_exec_user_id)
 
 
 @app.get("/portfolio")
@@ -2270,10 +2307,210 @@ def get_orders(request: Request, status: str = "open"):
             }
             for o in orders
         ]
+        # Passive backfill: record fetched orders into the audit store (non-blocking)
+        try:
+            from brain.order_history import record_from_broker_result
+            _passive_uid = _ord_user_id or "system"
+            for o in orders:
+                if o.order_id:
+                    record_from_broker_result(
+                        order_id=o.order_id,
+                        symbol=o.symbol,
+                        side=o.side,
+                        order_type=o.order_type or "market",
+                        qty=float(o.qty or 0),
+                        filled_qty=float(o.filled_qty or 0),
+                        status=o.status or "unknown",
+                        submitted_at=o.submitted_at.isoformat() if o.submitted_at else None,
+                        filled_at=o.filled_at.isoformat() if o.filled_at else None,
+                        broker="alpaca",
+                        stop_price=o.stop_price,
+                        filled_avg_price=o.filled_avg_price,
+                        source="broker_sync",
+                        user_id=_passive_uid,
+                    )
+        except Exception as _bp_exc:
+            log.debug("Passive order backfill failed (non-fatal): %s", _bp_exc)
         return {"orders": result, "fetch_error": None}
     except Exception as exc:
         log.error("Orders fetch failed: %s", exc, exc_info=True)
         return {"orders": [], "fetch_error": f"Orders fetch failed: {exc}"}
+
+
+# ── Order history (persistent audit store) ────────────────────────────────────
+
+@app.get("/orders/history")
+def get_order_history(request: Request, days: int = 365):
+    """Return stored order history (up to 1 year) from the persistent audit store.
+
+    Unlike GET /orders, this is not limited to 50 and covers all brokers and sources.
+    Requires JWT authentication.
+    """
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for order history")
+    if not (1 <= days <= 365):
+        raise HTTPException(400, "days must be between 1 and 365")
+    from brain.order_history import get_all_orders
+    orders = get_all_orders(days=days)
+    return {"orders": orders, "total": len(orders), "days": days}
+
+
+@app.get("/orders/history/export")
+def export_order_history(request: Request, format: str = "csv", days: int = 365):
+    """Export order history as CSV or PDF attachment.
+
+    ?format=csv  — returns a UTF-8 CSV file
+    ?format=pdf  — returns a PDF file (requires fpdf2)
+    ?days=N      — limit to last N days (max 365)
+    Requires JWT authentication.
+    """
+    from fastapi.responses import Response, StreamingResponse
+    import io
+
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for order history export")
+    if format not in ("csv", "pdf"):
+        raise HTTPException(400, "format must be csv or pdf")
+    if not (1 <= days <= 365):
+        raise HTTPException(400, "days must be between 1 and 365")
+
+    from brain.order_history import get_all_orders
+    orders = get_all_orders(days=days)
+
+    if format == "csv":
+        import csv
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=[
+            "submitted_at", "symbol", "side", "order_type", "qty", "filled_qty",
+            "status", "filled_at", "broker", "stop_price", "take_profit_price",
+            "filled_avg_price", "notional", "source", "order_id",
+        ], extrasaction="ignore")
+        writer.writeheader()
+        for o in orders:
+            writer.writerow(o)
+        content = buf.getvalue().encode("utf-8")
+        return Response(
+            content=content,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=\"order_history_{days}d.csv\""},
+        )
+
+    # PDF
+    try:
+        from fpdf import FPDF
+    except ImportError:
+        raise HTTPException(503, "PDF export requires fpdf2 — install it with: pip install fpdf2")
+
+    from datetime import date as _date
+
+    COLS = [
+        ("Date",    38),
+        ("Symbol",  18),
+        ("Side",    12),
+        ("Type",    16),
+        ("Qty",     14),
+        ("Filled",  14),
+        ("Status",  20),
+        ("Broker",  18),
+        ("Source",  20),
+        ("Avg $",   20),
+        ("Stop $",  20),
+        ("TP $",    20),
+    ]
+
+    pdf = FPDF(orientation="L", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=12)
+    pdf.set_margins(10, 10, 10)
+
+    def _header_page():
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_fill_color(30, 41, 59)   # slate-800
+        pdf.cell(0, 9, "TradeAgent — Order Audit History", align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(148, 163, 184)  # slate-400
+        pdf.cell(0, 5, f"Exported {_date.today().isoformat()} · Last {days} days · {len(orders)} orders", align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(2)
+        # Column headers
+        pdf.set_font("Helvetica", "B", 7)
+        pdf.set_text_color(200, 210, 220)
+        pdf.set_fill_color(15, 23, 42)   # slate-900
+        for col, w in COLS:
+            pdf.cell(w, 6, col, border=0, fill=True, align="C")
+        pdf.ln()
+        pdf.set_text_color(226, 232, 240)  # slate-200
+
+    pdf.add_page()
+    _header_page()
+
+    def _fmt(val, prefix="") -> str:
+        if val is None:
+            return "—"
+        if isinstance(val, float):
+            return f"{prefix}{val:,.4f}".rstrip("0").rstrip(".")
+        return str(val)
+
+    def _short_date(iso: str | None) -> str:
+        if not iso:
+            return "—"
+        try:
+            return iso[:16].replace("T", " ")
+        except Exception:
+            return str(iso)
+
+    row_even = (30, 41, 59)    # slate-700 tint
+    row_odd  = (15, 23, 42)    # slate-900 tint
+
+    for i, o in enumerate(orders):
+        if pdf.get_y() > 185:
+            pdf.add_page()
+            _header_page()
+        fill_color = row_even if i % 2 == 0 else row_odd
+        pdf.set_fill_color(*fill_color)
+        side = str(o.get("side", "")).upper()
+        pdf.set_text_color(52, 211, 153) if side == "BUY" else pdf.set_text_color(248, 113, 113)
+        pdf.set_font("Helvetica", "B", 7)
+        # Side column
+        pdf.cell(COLS[0][1], 5, _short_date(o.get("submitted_at")), fill=True, align="L")
+        pdf.cell(COLS[1][1], 5, str(o.get("symbol", "")), fill=True, align="C")
+        pdf.set_font("Helvetica", "B", 7)
+        pdf.cell(COLS[2][1], 5, side, fill=True, align="C")
+        pdf.set_font("Helvetica", "", 7)
+        pdf.set_text_color(226, 232, 240)
+        pdf.cell(COLS[3][1], 5, str(o.get("order_type", "")),       fill=True, align="C")
+        pdf.cell(COLS[4][1], 5, _fmt(o.get("qty")),                  fill=True, align="R")
+        pdf.cell(COLS[5][1], 5, _fmt(o.get("filled_qty")),           fill=True, align="R")
+        status = str(o.get("status", ""))
+        if status in ("filled",):
+            pdf.set_text_color(52, 211, 153)
+        elif status in ("canceled", "cancelled", "expired"):
+            pdf.set_text_color(148, 163, 184)
+        elif status in ("rejected",):
+            pdf.set_text_color(248, 113, 113)
+        else:
+            pdf.set_text_color(251, 191, 36)
+        pdf.cell(COLS[6][1], 5, status.capitalize(),              fill=True, align="C")
+        pdf.set_text_color(226, 232, 240)
+        pdf.cell(COLS[7][1], 5, str(o.get("broker", "")),            fill=True, align="C")
+        pdf.cell(COLS[8][1], 5, str(o.get("source", "")),            fill=True, align="C")
+        pdf.cell(COLS[9][1], 5,  _fmt(o.get("filled_avg_price"), "$"), fill=True, align="R")
+        pdf.cell(COLS[10][1], 5, _fmt(o.get("stop_price"),      "$"), fill=True, align="R")
+        pdf.cell(COLS[11][1], 5, _fmt(o.get("take_profit_price"), "$"), fill=True, align="R")
+        pdf.ln()
+
+    pdf.set_y(-10)
+    pdf.set_font("Helvetica", "I", 7)
+    pdf.set_text_color(100, 116, 139)
+    pdf.cell(0, 5, f"Page {pdf.page_no()} — TradeAgent Audit Export — Retention: 1 year", align="C")
+
+    pdf_bytes = pdf.output()
+    return Response(
+        content=bytes(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=\"order_history_{days}d.pdf\""},
+    )
 
 
 def _alpaca_portfolio_history(broker, period: str, timeframe: str) -> list:
@@ -3071,7 +3308,7 @@ async def tradingview_webhook(user_id: str, secret: str, request: Request):
              user_id[:8], symbol, action_raw, asset_class)
 
     broker = _resolve_broker(user_id, cfg)
-    return _execute_order(broker, _wh_eff, cfg, signal, sl_pct, tp_pct, source="tradingview")
+    return _execute_order(broker, _wh_eff, cfg, signal, sl_pct, tp_pct, source="tradingview", user_id=user_id)
 
 
 if __name__ == "__main__":

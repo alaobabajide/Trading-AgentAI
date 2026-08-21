@@ -667,6 +667,73 @@ export function useOrders(statusFilter: "open" | "all" | "closed" = "open") {
   return { orders, fetchError, loading };
 }
 
+// ── Persistent order history (audit store) ────────────────────────────────────
+
+export interface StoredOrder {
+  order_id:          string;
+  symbol:            string;
+  side:              string;
+  order_type:        string;
+  qty:               number;
+  filled_qty:        number;
+  status:            string;
+  submitted_at:      string | null;
+  filled_at:         string | null;
+  broker:            string;
+  stop_price:        number | null;
+  take_profit_price: number | null;
+  filled_avg_price:  number | null;
+  notional:          number | null;
+  source:            string;
+  user_id:           string;
+}
+
+export async function fetchOrderHistory(days = 365): Promise<StoredOrder[]> {
+  const res = await fetch(`${BASE}/orders/history?days=${days}`, {
+    headers: apiHeaders(),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) throw new Error(`Order history fetch failed (${res.status})`);
+  const data = await safeJson<{ orders: StoredOrder[] }>(res);
+  return data.orders ?? [];
+}
+
+export async function exportOrderHistory(format: "csv" | "pdf", days = 365): Promise<void> {
+  const res = await fetch(`${BASE}/orders/history/export?format=${format}&days=${days}`, {
+    headers: apiHeaders(),
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Export failed" }));
+    throw new Error((err as { detail?: string }).detail ?? "Export failed");
+  }
+  const blob = await res.blob();
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = `order_history_${days}d.${format}`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export function useOrderHistory(days = 365) {
+  const [orders,  setOrders]  = useState<StoredOrder[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchOrderHistory(days)
+      .then((o) => { if (!cancelled) { setOrders(o); setLoading(false); } })
+      .catch((e) => { if (!cancelled) { setError((e as Error).message); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, [days]);
+
+  return { orders, loading, error };
+}
+
 // ── API usage & credit tracking ───────────────────────────────────────────────
 
 export interface ModelUsage {
