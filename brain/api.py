@@ -421,14 +421,15 @@ app.add_middleware(
 
 # ── Rate limiting (outermost — runs first, cheapest check) ────────────────────
 _RATE_LIMITS: dict[str, tuple[int, int]] = {
-    "/execute":         (5,  60),
-    "/signal":          (10, 60),
-    "/kill":            (5,  60),
-    "/resume":          (5,  60),
-    "/config":          (20, 60),
-    "/llm-settings":    (20, 60),
-    "/alpaca-settings": (20, 60),
-    "/risk-settings":   (20, 60),
+    "/execute":          (5,  60),
+    "/signal":           (10, 60),
+    "/kill":             (5,  60),
+    "/resume":           (5,  60),
+    "/config":           (20, 60),
+    "/llm-settings":     (20, 60),
+    "/alpaca-settings":  (20, 60),
+    "/risk-settings":    (20, 60),
+    "/webhook-settings": (10, 60),
 }
 _DEFAULT_RATE = (120, 60)
 
@@ -501,7 +502,7 @@ def _verify_supabase_jwt(token: str) -> str | None:
 
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
-    if request.url.path in _PUBLIC_PATHS:
+    if request.url.path in _PUBLIC_PATHS or request.url.path.startswith("/webhook/tradingview/"):
         return await call_next(request)
 
     from config import get_settings
@@ -1419,59 +1420,25 @@ class ExecuteRequest(BaseModel):
     qty: float = Field(0.0, ge=0.0, description="Fixed share/unit count. 0 = use notional (equity × position_pct)")
 
 
-@app.post("/execute")
-def execute_trade(req: ExecuteRequest, request: Request):
-    """Place a bracket order (entry + stop-loss + take-profit) via the execution engines."""
-    req.symbol = _validate_symbol(req.symbol)
-    if req.asset_class not in ("stock", "crypto"):
-        raise HTTPException(400, "asset_class must be 'stock' or 'crypto'")
-    if req.action not in ("BUY", "SELL"):
-        raise HTTPException(status_code=400, detail="action must be BUY or SELL")
-    if _TRADING_PAUSED:
-        raise HTTPException(status_code=503, detail="Trading paused — POST /resume to restart")
+def _execute_order(
+    ak: str, sk: str, base_url: str, is_paper: bool,
+    exec_eff: dict, cfg, signal, sl_pct: float, tp_pct: float,
+    source: str = "api",
+) -> dict:
+    """Run the execution engine for a resolved TradingSignal. Raises HTTPException on failure.
 
-    from config import get_settings
-    from brain.signal import TradingSignal
-
-    cfg = get_settings()
-    _exec_user_id = getattr(request.state, "user_id", None)
-    _ak, _sk, _base_url, _is_paper = _resolve_alpaca_creds(_exec_user_id, cfg)
-    # Per-user risk: user_id=None (orchestrator) → returns global config unchanged
-    from brain.risk_config import get_effective_risk_for_user as _exec_risk_fn
-    _exec_eff = _exec_risk_fn(_exec_user_id, _effective_config(cfg))
-
-    # The orchestrator already applies all risk adjustments (correlation halving,
-    # regime-based sl/tp scaling) before sending this request. Always use the
-    # request values so those adjustments aren't silently overwritten by the cache.
-    # Fall back to cache only for the rationale text (informational only).
-    cached   = _signal_cache.get(req.symbol.upper(), {})
-    pos_pct  = req.suggested_position_pct
-    sl_pct   = req.stop_loss_pct
-    tp_pct   = req.take_profit_pct
-
-    # Build a TradingSignal from the request so the execution engines can use it
-    signal = TradingSignal(
-        symbol=req.symbol.upper(),
-        asset_class=req.asset_class,  # type: ignore[arg-type]
-        action=req.action,            # type: ignore[arg-type]
-        confidence=1.0,
-        rationale=cached.get("rationale", "Manual execute via API"),
-        suggested_position_pct=pos_pct,
-        stop_loss_pct=sl_pct,
-        take_profit_pct=tp_pct,
-    )
-
+    Shared by /execute and /webhook/tradingview so both routes use identical execution
+    logic — no drift risk from duplicated code paths.
+    """
     try:
-        if req.asset_class == "stock":
+        if signal.asset_class == "stock":
             from alpaca.trading.client import TradingClient as _TC
             from data.market_data import AlpacaMarketData
             from execution.stock.engine import StockExecutionEngine
 
             # Pre-flight: block BUY if already at max_exposure_pct.
-            # Previously checked buying_power < $1, which passes on margin accounts even
-            # when cash is deeply negative — allowing 174% NAV allocation via borrowed funds.
-            if req.action == "BUY":
-                _tc_pf = _TC(_ak, _sk, paper=_is_paper)
+            if signal.action == "BUY":
+                _tc_pf = _TC(ak, sk, paper=is_paper)
                 _acct  = _tc_pf.get_account()
                 _equity_pf = float(_acct.equity or 0)
                 if _equity_pf <= 0:
@@ -1479,12 +1446,12 @@ def execute_trade(req: ExecuteRequest, request: Request):
                 try:
                     _positions_pf = _tc_pf.get_all_positions()
                     _deployed_pf  = sum(abs(float(p.market_value or 0)) for p in _positions_pf)
-                    if _deployed_pf / _equity_pf >= _exec_eff["max_exposure_pct"]:
+                    if _deployed_pf / _equity_pf >= exec_eff["max_exposure_pct"]:
                         raise HTTPException(
                             status_code=409,
                             detail=(
                                 f"Max exposure reached: {_deployed_pf/_equity_pf*100:.0f}% of equity "
-                                f"is deployed (limit {_exec_eff['max_exposure_pct']*100:.0f}%). "
+                                f"is deployed (limit {exec_eff['max_exposure_pct']*100:.0f}%). "
                                 "Close or take profit on existing positions to free capital."
                             ),
                         )
@@ -1493,18 +1460,14 @@ def execute_trade(req: ExecuteRequest, request: Request):
                 except Exception:
                     pass  # fall through if positions fetch fails
 
-            # Fetch recent bars for ATR-based sizing; fall back to latest quote
-            # if the bar fetch returns empty (e.g. data feed permission gap).
-            market = AlpacaMarketData(_ak, _sk)
-            bars   = market.get_bars(req.symbol.upper(), days=30)
+            market = AlpacaMarketData(ak, sk)
+            bars   = market.get_bars(signal.symbol, days=30)
             bars_highs  = [b.high  for b in bars]
             bars_lows   = [b.low   for b in bars]
             bars_closes = [b.close for b in bars]
 
             if not bars_closes:
-                # No historical bars — use latest quote for current price.
-                # ATR sizing will fall back to fixed stop_loss_pct (correct behaviour).
-                quote = market.get_latest_quote(req.symbol.upper())
+                quote = market.get_latest_quote(signal.symbol)
                 if quote and quote.mid > 0:
                     bars_closes = [quote.mid]
                     bars_highs  = [quote.ask or quote.mid]
@@ -1512,34 +1475,29 @@ def execute_trade(req: ExecuteRequest, request: Request):
                 else:
                     raise HTTPException(
                         status_code=502,
-                        detail=f"Could not fetch market price for {req.symbol.upper()} — data feed unavailable",
+                        detail=f"Could not fetch market price for {signal.symbol} — data feed unavailable",
                     )
             else:
-                # Inject live quote into the last bar so ATR sizing, stop price, and
-                # take-profit price are anchored to the current intraday market price —
-                # not yesterday's 4pm close. Without this fix a stock that gaps down 3%
-                # at open gets a bracket stop already ABOVE the entry price, which
-                # triggers an immediate fill the moment the order is placed.
-                _exec_quote = market.get_latest_quote(req.symbol.upper())
+                _exec_quote = market.get_latest_quote(signal.symbol)
                 if _exec_quote and _exec_quote.mid > 0:
                     bars_closes[-1] = _exec_quote.mid
                     bars_highs[-1]  = max(bars_highs[-1], _exec_quote.mid)
                     bars_lows[-1]   = min(bars_lows[-1],  _exec_quote.mid)
                     log.debug(
                         "Execute live price inject: %s mid=%.4f (bar close was %.4f)",
-                        req.symbol, _exec_quote.mid, bars[-1].close if bars else 0,
+                        signal.symbol, _exec_quote.mid, bars[-1].close if bars else 0,
                     )
 
             engine = StockExecutionEngine(
-                alpaca_api_key=_ak,
-                alpaca_secret_key=_sk,
-                alpaca_base_url=_base_url,
-                max_position_pct=_exec_eff["max_position_pct"],
-                circuit_breaker_drawdown=_exec_eff["circuit_breaker_drawdown"],
-                trailing_stop_pct=_exec_eff["trailing_stop_pct"],
-                atr_multiplier=_exec_eff["atr_multiplier"],
-                atr_stop_floor=_exec_eff["atr_stop_floor"],
-                atr_stop_cap=_exec_eff["atr_stop_cap"],
+                alpaca_api_key=ak,
+                alpaca_secret_key=sk,
+                alpaca_base_url=base_url,
+                max_position_pct=exec_eff["max_position_pct"],
+                circuit_breaker_drawdown=exec_eff["circuit_breaker_drawdown"],
+                trailing_stop_pct=exec_eff["trailing_stop_pct"],
+                atr_multiplier=exec_eff["atr_multiplier"],
+                atr_stop_floor=exec_eff["atr_stop_floor"],
+                atr_stop_cap=exec_eff["atr_stop_cap"],
             )
             result = engine.execute(signal, bars_highs, bars_lows, bars_closes)
 
@@ -1549,32 +1507,32 @@ def execute_trade(req: ExecuteRequest, request: Request):
                     detail="Order blocked by risk controls (circuit breaker, sizing, or invalid price)",
                 )
 
-            exchange = "alpaca_paper" if _is_paper else "alpaca_live"
+            exchange = "alpaca_paper" if is_paper else "alpaca_live"
             _write_audit(result.symbol, result.action, result.qty,
-                         result.qty * result.submitted_price, "api", result.order_id)
+                         result.qty * result.submitted_price, source, result.order_id)
             return {
-                "order_id":        result.order_id,
-                "status":          "submitted",
-                "symbol":          result.symbol,
-                "action":          result.action,
-                "qty":             result.qty,
-                "submitted_price": result.submitted_price,
-                "stop_price":      result.stop_price,
+                "order_id":          result.order_id,
+                "status":            "submitted",
+                "symbol":            result.symbol,
+                "action":            result.action,
+                "qty":               result.qty,
+                "submitted_price":   result.submitted_price,
+                "stop_price":        result.stop_price,
                 "take_profit_price": result.take_profit_price,
-                "exchange":        exchange,
-                "stop_pct":        sl_pct,
-                "target_pct":      tp_pct,
+                "exchange":          exchange,
+                "stop_pct":          sl_pct,
+                "target_pct":        tp_pct,
             }
 
-        else:  # crypto — Alpaca (same API key, no geo-blocks)
+        else:  # crypto
             from execution.crypto.engine import CryptoExecutionEngine
 
             engine = CryptoExecutionEngine(
-                alpaca_api_key=_ak,
-                alpaca_secret_key=_sk,
-                alpaca_base_url=_base_url,
-                max_position_pct=_exec_eff["max_position_pct"],
-                max_crypto_allocation_pct=_exec_eff["max_crypto_allocation_pct"],
+                alpaca_api_key=ak,
+                alpaca_secret_key=sk,
+                alpaca_base_url=base_url,
+                max_position_pct=exec_eff["max_position_pct"],
+                max_crypto_allocation_pct=exec_eff["max_crypto_allocation_pct"],
                 cash_buffer=cfg.crypto_cash_buffer,
                 min_notional_usd=cfg.crypto_min_notional_usd,
                 fallback_equity_usd=cfg.crypto_fallback_equity_usd,
@@ -1588,7 +1546,7 @@ def execute_trade(req: ExecuteRequest, request: Request):
                 )
 
             _write_audit(result.symbol, result.action, result.qty,
-                         result.qty * result.submitted_price, "api", result.order_id)
+                         result.qty * result.submitted_price, source, result.order_id)
             return {
                 "order_id":          result.order_id,
                 "status":            "submitted",
@@ -1606,8 +1564,48 @@ def execute_trade(req: ExecuteRequest, request: Request):
     except HTTPException:
         raise
     except Exception as exc:
-        log.error("Trade execution failed for %s: %s", req.symbol, exc, exc_info=True)
+        log.error("Trade execution failed for %s: %s", signal.symbol, exc, exc_info=True)
         raise HTTPException(status_code=502, detail=f"Execution failed: {exc}")
+
+
+@app.post("/execute")
+def execute_trade(req: ExecuteRequest, request: Request):
+    """Place a bracket order (entry + stop-loss + take-profit) via the execution engines."""
+    req.symbol = _validate_symbol(req.symbol)
+    if req.asset_class not in ("stock", "crypto"):
+        raise HTTPException(400, "asset_class must be 'stock' or 'crypto'")
+    if req.action not in ("BUY", "SELL"):
+        raise HTTPException(status_code=400, detail="action must be BUY or SELL")
+    if _TRADING_PAUSED:
+        raise HTTPException(status_code=503, detail="Trading paused — POST /resume to restart")
+
+    from config import get_settings
+    from brain.signal import TradingSignal
+
+    cfg = get_settings()
+    _exec_user_id = getattr(request.state, "user_id", None)
+    _ak, _sk, _base_url, _is_paper = _resolve_alpaca_creds(_exec_user_id, cfg)
+    from brain.risk_config import get_effective_risk_for_user as _exec_risk_fn
+    _exec_eff = _exec_risk_fn(_exec_user_id, _effective_config(cfg))
+
+    # The orchestrator already applies all risk adjustments before sending this request.
+    # Always use request values; fall back to cache only for the rationale (informational).
+    cached  = _signal_cache.get(req.symbol.upper(), {})
+    sl_pct  = req.stop_loss_pct
+    tp_pct  = req.take_profit_pct
+
+    signal = TradingSignal(
+        symbol=req.symbol.upper(),
+        asset_class=req.asset_class,  # type: ignore[arg-type]
+        action=req.action,            # type: ignore[arg-type]
+        confidence=1.0,
+        rationale=cached.get("rationale", "Manual execute via API"),
+        suggested_position_pct=req.suggested_position_pct,
+        stop_loss_pct=sl_pct,
+        take_profit_pct=tp_pct,
+    )
+
+    return _execute_order(_ak, _sk, _base_url, _is_paper, _exec_eff, cfg, signal, sl_pct, tp_pct)
 
 
 @app.get("/portfolio")
@@ -2400,6 +2398,153 @@ def get_audit_log(limit: int = 50):
         return list(reversed(entries[-limit:]))
     except FileNotFoundError:
         return []
+
+
+# ── TradingView webhook settings (JWT-required) ───────────────────────────────
+
+@app.get("/webhook-settings")
+def get_webhook_settings(request: Request):
+    """Return whether this user has a webhook secret configured.
+
+    The frontend constructs the full webhook URL as:
+      window.location.origin + webhook_path
+    """
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="JWT authentication required for webhook settings.")
+    from brain.webhook_store import has_secret
+    configured = has_secret(user_id)
+    webhook_path = f"/webhook/tradingview/{user_id}/<your-secret>" if configured else None
+    return {"configured": configured, "user_id": user_id, "webhook_path": webhook_path}
+
+
+@app.post("/webhook-settings")
+def generate_webhook_secret(request: Request):
+    """Generate a new webhook secret for this user (replaces any existing one).
+
+    The plaintext secret is returned ONCE in this response — it is never stored
+    and cannot be retrieved again. Store it somewhere safe before navigating away.
+    """
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="JWT authentication required for webhook settings.")
+    from brain.webhook_store import generate_secret
+    plaintext = generate_secret(user_id)
+    webhook_path = f"/webhook/tradingview/{user_id}/{plaintext}"
+    log.info("Webhook secret generated for user %s", user_id[:8])
+    return {
+        "generated": True,
+        "secret": plaintext,
+        "webhook_path": webhook_path,
+        "warning": "Save this secret now — it will not be shown again.",
+    }
+
+
+@app.delete("/webhook-settings")
+def revoke_webhook_secret(request: Request):
+    """Revoke this user's webhook secret. Subsequent webhook calls will return 401."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="JWT authentication required for webhook settings.")
+    from brain.webhook_store import revoke_secret
+    existed = revoke_secret(user_id)
+    log.info("Webhook secret revoked for user %s (existed=%s)", user_id[:8], existed)
+    return {"revoked": existed}
+
+
+# ── TradingView public webhook (authenticated by per-user secret in URL) ───────
+
+@app.post("/webhook/tradingview/{user_id}/{secret}")
+async def tradingview_webhook(user_id: str, secret: str, request: Request):
+    """Receive TradingView alerts and execute trades for the matching user.
+
+    This endpoint is public (no X-Api-Key / JWT) — the per-user secret in the
+    URL path is the sole authentication token. It is validated with a timing-safe
+    comparison against the stored SHA-256 hash.
+
+    Expected JSON body (paste as TradingView alert message):
+      {
+        "symbol":     "{{ticker}}",
+        "action":     "{{strategy.order.action}}",
+        "asset_class": "stock",
+        "qty":         0
+      }
+
+    Fields:
+      symbol      — uppercase ticker (e.g. "AAPL"). {{ticker}} fills it automatically.
+      action      — "buy" or "sell" (case-insensitive). {{strategy.order.action}} fills it.
+      asset_class — "stock" (default) or "crypto"
+      qty         — fixed share/unit count; 0 = size by equity × position_pct (recommended)
+    """
+    from brain.webhook_store import validate_secret
+
+    # Per-user-id rate limit (TradingView IPs vary — keying on IP would throttle all users)
+    if not _rate_limiter.is_allowed(f"webhook:{user_id}", 10, 60):
+        return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
+
+    # Timing-safe secret check — 401 reveals nothing about whether the user_id exists
+    if not validate_secret(user_id, secret):
+        log.warning("Webhook: invalid secret attempt for user prefix %s", user_id[:8])
+        raise HTTPException(status_code=401, detail="Invalid webhook credentials")
+
+    # Parse body — TradingView sends application/json or text/plain
+    try:
+        raw = await request.body()
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            raise ValueError("expected JSON object")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Request body must be a valid JSON object")
+
+    # Extract and validate fields
+    symbol = _validate_symbol(str(payload.get("symbol") or payload.get("ticker") or ""))
+
+    action_raw = str(payload.get("action") or payload.get("side") or "").strip().upper()
+    if action_raw not in ("BUY", "SELL"):
+        raise HTTPException(status_code=400, detail="action must be 'buy' or 'sell'")
+
+    asset_class = str(payload.get("asset_class") or "stock").strip().lower()
+    if asset_class not in ("stock", "crypto"):
+        raise HTTPException(status_code=400, detail="asset_class must be 'stock' or 'crypto'")
+
+    try:
+        qty = float(payload.get("qty") or 0)
+        if qty < 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="qty must be a non-negative number")
+
+    if _TRADING_PAUSED:
+        raise HTTPException(status_code=503, detail="Trading paused — POST /resume to restart")
+
+    from config import get_settings
+    from brain.signal import TradingSignal
+    from brain.risk_config import get_effective_risk_for_user as _wh_risk_fn
+
+    cfg = get_settings()
+    _ak, _sk, _base_url, _is_paper = _resolve_alpaca_creds(user_id, cfg)
+    _wh_eff = _wh_risk_fn(user_id, _effective_config(cfg))
+
+    sl_pct  = _wh_eff.get("stop_loss_pct",  cfg.stop_loss_pct)
+    tp_pct  = _wh_eff.get("take_profit_pct", cfg.take_profit_pct)
+    pos_pct = _wh_eff.get("max_position_pct", cfg.max_position_pct)
+
+    signal = TradingSignal(
+        symbol=symbol,
+        asset_class=asset_class,  # type: ignore[arg-type]
+        action=action_raw,        # type: ignore[arg-type]
+        confidence=1.0,
+        rationale="TradingView alert",
+        suggested_position_pct=pos_pct,
+        stop_loss_pct=sl_pct,
+        take_profit_pct=tp_pct,
+    )
+
+    log.info("TradingView webhook: user=%s symbol=%s action=%s asset=%s",
+             user_id[:8], symbol, action_raw, asset_class)
+
+    return _execute_order(_ak, _sk, _base_url, _is_paper, _wh_eff, cfg, signal,
+                          sl_pct, tp_pct, source="tradingview")
 
 
 if __name__ == "__main__":

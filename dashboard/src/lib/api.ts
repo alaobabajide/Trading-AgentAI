@@ -962,3 +962,105 @@ export function useLlmSettings() {
 
   return { settings, models, saving, saved, error, save };
 }
+
+// ── TradingView webhook settings ──────────────────────────────────────────────
+
+export interface WebhookSettings {
+  configured:   boolean;
+  user_id:      string;
+  webhook_path: string | null;
+}
+
+export interface WebhookGenerated {
+  generated:    boolean;
+  secret:       string;
+  webhook_path: string;
+  warning:      string;
+}
+
+export async function fetchWebhookSettings(): Promise<WebhookSettings> {
+  const res = await fetch(`${BASE}/webhook-settings`, {
+    signal:  AbortSignal.timeout(8000),
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export async function generateWebhookSecret(): Promise<WebhookGenerated> {
+  const res = await fetch(`${BASE}/webhook-settings`, {
+    method:  "POST",
+    headers: apiHeaders(),
+    signal:  AbortSignal.timeout(10000),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  return safeJson(res);
+}
+
+export async function revokeWebhookSecret(): Promise<{ revoked: boolean }> {
+  const res = await fetch(`${BASE}/webhook-settings`, {
+    method:  "DELETE",
+    headers: apiHeaders(),
+    signal:  AbortSignal.timeout(10000),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  return safeJson(res);
+}
+
+export function useWebhookSettings() {
+  const [settings,   setSettings]   = useState<WebhookSettings | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [revoking,   setRevoking]   = useState(false);
+  const [revealed,   setRevealed]   = useState<WebhookGenerated | null>(null);
+  const [error,      setError]      = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const s = await fetchWebhookSettings();
+        if (!cancelled) setSettings(s);
+      } catch { /* not authenticated or backend not up */ }
+    }
+    load();
+  }, []);
+
+  async function generate() {
+    setGenerating(true);
+    setError(null);
+    setRevealed(null);
+    try {
+      const result = await generateWebhookSecret();
+      setRevealed(result);
+      setSettings((prev) => prev ? { ...prev, configured: true } : null);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  async function revoke() {
+    setRevoking(true);
+    setError(null);
+    setRevealed(null);
+    try {
+      await revokeWebhookSecret();
+      setSettings((prev) => prev ? { ...prev, configured: false, webhook_path: null } : null);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRevoking(false);
+    }
+  }
+
+  function dismiss() { setRevealed(null); }
+
+  return { settings, generating, revoking, revealed, error, generate, revoke, dismiss };
+}

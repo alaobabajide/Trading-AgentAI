@@ -1,10 +1,10 @@
 import clsx from "clsx";
-import { Brain, Clock, Package, RefreshCw, Shield, TrendingUp, Zap } from "lucide-react";
+import { Brain, Clock, Link, Package, RefreshCw, Shield, TrendingUp, Zap } from "lucide-react";
 import {
   HITLMode, UserProfile, DEFAULT_PROFILE,
   MODE_CONFIG, loadProfile, saveProfile,
 } from "../lib/hitl";
-import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload } from "../lib/api";
+import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload, useWebhookSettings } from "../lib/api";
 import { useState } from "react";
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
@@ -206,6 +206,139 @@ function NumberSlider({ label, value, options, onChange }: {
 }
 
 // ── Alpaca account panel ──────────────────────────────────────────────────────
+
+function WebhookPanel() {
+  const wh = useWebhookSettings();
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const fullUrl = wh.revealed
+    ? window.location.origin + wh.revealed.webhook_path
+    : null;
+
+  function copyUrl() {
+    if (!fullUrl) return;
+    navigator.clipboard.writeText(fullUrl).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    });
+  }
+
+  if (!wh.settings) {
+    return (
+      <div className="text-xs text-slate-500 font-mono animate-pulse">
+        Loading webhook settings… (requires login)
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <SectionNote variant="info">
+        TradingView alerts fire this URL to place trades directly into your Alpaca account.
+        The secret in the URL is the only auth — treat it like a password.
+      </SectionNote>
+
+      {/* Status row */}
+      <div className="flex items-center gap-2">
+        <div className={clsx(
+          "w-2 h-2 rounded-full shrink-0",
+          wh.settings.configured ? "bg-emerald-400" : "bg-slate-600",
+        )} />
+        <span className="text-xs text-slate-400 font-mono">
+          {wh.settings.configured ? "Webhook active" : "No webhook configured"}
+        </span>
+      </div>
+
+      {/* One-time revealed secret */}
+      {wh.revealed && fullUrl && (
+        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 space-y-2">
+          <p className="text-[10px] text-amber-300 font-mono uppercase tracking-widest">
+            Save this now — shown once only
+          </p>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 text-[10px] font-mono text-slate-200 break-all bg-surface-700 rounded-lg px-2 py-1.5 border border-white/5">
+              {fullUrl}
+            </code>
+            <button
+              onClick={copyUrl}
+              className="shrink-0 text-[10px] font-mono px-3 py-1.5 rounded-lg border border-white/10 bg-surface-700 text-slate-300 hover:text-white hover:border-white/20 transition-all"
+            >
+              {copied ? "Copied!" : "Copy"}
+            </button>
+          </div>
+          <p className="text-[10px] text-slate-500 font-mono">
+            Paste this URL into TradingView → Alerts → Webhook URL
+          </p>
+          <button
+            onClick={wh.dismiss}
+            className="text-[10px] text-slate-500 hover:text-slate-300 font-mono underline"
+          >
+            I've saved it — dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Alert message template */}
+      {wh.settings.configured && !wh.revealed && (
+        <div className="space-y-1">
+          <div className="text-[10px] text-slate-500 uppercase tracking-widest font-mono">TradingView alert message</div>
+          <pre className="text-[10px] font-mono text-slate-300 bg-surface-700 rounded-xl px-3 py-2 border border-white/5 overflow-x-auto">{`{
+  "symbol":      "{{ticker}}",
+  "action":      "{{strategy.order.action}}",
+  "asset_class": "stock",
+  "qty":         0
+}`}</pre>
+          <p className="text-[10px] text-slate-500 font-mono">
+            Paste this into the TradingView alert Message field. Set qty to 0 to size by your risk config.
+          </p>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="flex gap-2">
+        <button
+          onClick={wh.generate}
+          disabled={wh.generating}
+          className="flex-1 py-2 rounded-xl text-xs font-mono font-semibold border border-brand-500/40 bg-brand-500/15 text-brand-300 hover:bg-brand-500/25 disabled:opacity-50 transition-all"
+        >
+          {wh.generating ? "Generating…" : wh.settings.configured ? "Regenerate secret" : "Generate webhook URL"}
+        </button>
+
+        {wh.settings.configured && !confirmRevoke && (
+          <button
+            onClick={() => setConfirmRevoke(true)}
+            className="px-4 py-2 rounded-xl text-xs font-mono border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-all"
+          >
+            Revoke
+          </button>
+        )}
+
+        {confirmRevoke && (
+          <div className="flex gap-1">
+            <button
+              onClick={() => { wh.revoke(); setConfirmRevoke(false); }}
+              disabled={wh.revoking}
+              className="px-3 py-2 rounded-xl text-xs font-mono border border-red-500/50 bg-red-500/20 text-red-300 hover:bg-red-500/30 disabled:opacity-50 transition-all"
+            >
+              {wh.revoking ? "Revoking…" : "Confirm revoke"}
+            </button>
+            <button
+              onClick={() => setConfirmRevoke(false)}
+              className="px-3 py-2 rounded-xl text-xs font-mono border border-white/10 bg-surface-700 text-slate-400 hover:text-white transition-all"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+
+      {wh.error && (
+        <p className="text-xs text-red-400 font-mono">{wh.error}</p>
+      )}
+    </div>
+  );
+}
 
 function AlpacaPanel() {
   const alpaca = useAlpacaSettings();
@@ -865,6 +998,15 @@ export function SettingsPage() {
         subtitle="Per-user Alpaca key for manual signals from the dashboard — stored encrypted"
       >
         <AlpacaPanel />
+      </Section>
+
+      {/* ── TradingView Webhook ───────────────────────────────────────────── */}
+      <Section
+        icon={<Link className="w-4 h-4" />}
+        title="TradingView Webhook"
+        subtitle="Receive TradingView alerts and execute trades automatically via your Alpaca account"
+      >
+        <WebhookPanel />
       </Section>
 
       {/* ── Brain / LLM ───────────────────────────────────────────────────── */}
