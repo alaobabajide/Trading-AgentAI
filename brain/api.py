@@ -508,7 +508,9 @@ async def rate_limit_middleware(request: Request, call_next):
     if client_ip in ("127.0.0.1", "::1"):
         return await call_next(request)
     max_req, window = _RATE_LIMITS.get(request.url.path, _DEFAULT_RATE)
-    if not _rate_limiter.is_allowed(client_ip, max_req, window):
+    # Key includes the path so each endpoint has its own per-IP counter
+    rl_key = f"{client_ip}:{request.url.path}"
+    if not _rate_limiter.is_allowed(rl_key, max_req, window):
         return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded — slow down"})
     return await call_next(request)
 
