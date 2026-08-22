@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertCircle, ExternalLink, RefreshCw, Search } from "lucide-react";
+import { AlertCircle, ExternalLink, KeyRound, RefreshCw, Search } from "lucide-react";
 import clsx from "clsx";
 import { TradingViewFinancials } from "../components/TradingViewFinancials";
 import { useFmpData } from "../lib/api";
@@ -74,6 +74,26 @@ function pct(n: number | null | undefined): string {
   return `${(n * 100).toFixed(1)}%`;
 }
 
+function NoKeyPrompt() {
+  return (
+    <div className="flex items-start gap-3 rounded-xl border border-slate-700/60 bg-surface-800 px-4 py-3">
+      <KeyRound className="w-4 h-4 text-slate-500 mt-0.5 shrink-0" />
+      <p className="text-xs text-slate-400">
+        Add a free{" "}
+        <a
+          href="https://financialmodelingprep.com/developer/docs"
+          target="_blank"
+          rel="noreferrer"
+          className="underline text-brand-400 hover:text-brand-300"
+        >
+          Financial Modeling Prep
+        </a>{" "}
+        API key in <span className="text-slate-300">Settings → Research Data</span> to load this data.
+      </p>
+    </div>
+  );
+}
+
 function MetricTile({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
     <div className="bg-surface-700 rounded-xl p-3 text-center">
@@ -94,6 +114,7 @@ function ProfilePanel({ symbol }: { symbol: string }) {
       <RefreshCw className="w-4 h-4 animate-spin" /> Loading company data…
     </div>
   );
+  if (error === "NO_FMP_KEY") return <div className="glass rounded-2xl p-5"><NoKeyPrompt /></div>;
   if (error) return (
     <div className="glass rounded-2xl p-4 flex items-start gap-3 border border-amber-500/20 bg-amber-500/5">
       <AlertCircle className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
@@ -170,7 +191,8 @@ function MetricsPanel({ symbol }: { symbol: string }) {
     <div className="glass rounded-2xl p-5">
       <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-4">Key Metrics</h2>
       {loading && <div className="text-xs text-slate-500 flex items-center gap-2"><RefreshCw className="w-3 h-3 animate-spin" /> Loading…</div>}
-      {error   && <div className="text-xs text-amber-400 flex items-center gap-2"><AlertCircle className="w-3 h-3" />{error}</div>}
+      {error === "NO_FMP_KEY" && <NoKeyPrompt />}
+      {error && error !== "NO_FMP_KEY" && <div className="text-xs text-amber-400 flex items-center gap-2"><AlertCircle className="w-3 h-3" />{error}</div>}
       {m && (
         <div className="grid grid-cols-3 gap-2">
           {tiles.map((t) => <MetricTile key={t.label} {...t} />)}
@@ -201,7 +223,8 @@ function AnalystPanel({ symbol }: { symbol: string }) {
     <div className="glass rounded-2xl p-5">
       <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-4">Analyst Consensus</h2>
       {loading && <div className="text-xs text-slate-500 flex items-center gap-2"><RefreshCw className="w-3 h-3 animate-spin" /> Loading…</div>}
-      {error   && <div className="text-xs text-amber-400 flex items-center gap-2"><AlertCircle className="w-3 h-3" />{error}</div>}
+      {error === "NO_FMP_KEY" && <NoKeyPrompt />}
+      {error && error !== "NO_FMP_KEY" && <div className="text-xs text-amber-400 flex items-center gap-2"><AlertCircle className="w-3 h-3" />{error}</div>}
 
       {r && total > 0 && (
         <div className="space-y-3">

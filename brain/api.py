@@ -1744,9 +1744,11 @@ def fmp_proxy(data_type: str, symbol: str, request: Request,
         return []
 
     api_key = _resolve_fmp_key(user_id)
+    if not api_key:
+        raise HTTPException(402, "no_fmp_key")
 
     url = f"https://financialmodelingprep.com/api/v3/{data_type}/{sym}"
-    params: dict = {"apikey": api_key} if api_key else {}
+    params: dict = {"apikey": api_key}
     if data_type not in _FMP_SIMPLE_ENDPOINTS:
         params["period"] = period
         params["limit"]  = str(limit)
