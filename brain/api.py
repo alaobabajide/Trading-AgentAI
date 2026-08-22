@@ -485,6 +485,7 @@ _RATE_LIMITS: dict[str, tuple[int, int]] = {
     "/tastytrade-settings":   (20, 60),
     "/polygon-settings":      (20, 60),
     "/ngx-settings":          (20, 60),
+    "/fmp-settings":          (20, 60),
     "/demo/snapshot":         (5,  60),
     "/demo/snapshot-info":    (20, 60),
     "/schwab-settings":       (20, 60),
@@ -1632,6 +1633,144 @@ def delete_ngx_settings(request: Request):
     from brain.ngx_creds import delete_ngx_pulse_key
     existed = delete_ngx_pulse_key()
     return {"deleted": existed}
+
+
+# ── Financial Modeling Prep (FMP) settings + data proxy ──────────────────────
+
+class FmpSettingsPayload(BaseModel):
+    api_key: str = Field(..., min_length=1, max_length=512)
+
+
+# Whitelisted FMP endpoints — prevents arbitrary FMP API access via our proxy
+_FMP_ALLOWED_ENDPOINTS = frozenset({
+    "profile",
+    "key-metrics",
+    "income-statement",
+    "balance-sheet-statement",
+    "cash-flow-statement",
+    "analyst-stock-recommendations",
+    "price-target-consensus",
+})
+
+# Endpoints that don't accept period/limit params
+_FMP_SIMPLE_ENDPOINTS = frozenset({
+    "profile",
+    "analyst-stock-recommendations",
+    "price-target-consensus",
+})
+
+
+def _resolve_fmp_key(user_id: str | None) -> str | None:
+    """Return the best FMP API key for this user (never logged or returned to callers)."""
+    if user_id:
+        try:
+            enc_key = _get_enc_key()
+            from brain.fmp_creds import get_effective_fmp_key
+            key = get_effective_fmp_key(user_id, enc_key)
+            if key:
+                return key
+        except Exception as exc:
+            log.warning("FMP key resolution failed for user %s: %s", user_id[:8], exc)
+    return os.environ.get("FMP_API_KEY") or None
+
+
+@app.get("/fmp-settings")
+def get_fmp_settings(request: Request):
+    """Return this user's FMP key status — value is never returned."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for FMP settings")
+    from brain.fmp_creds import load_user_fmp_settings
+    s = load_user_fmp_settings(user_id)
+    system_key = bool(os.environ.get("FMP_API_KEY"))
+    return {
+        "user_key_configured":   bool(s.api_key_enc),
+        "system_key_configured": system_key,
+        "effective_source":      (
+            "user"   if s.api_key_enc
+            else "system" if system_key
+            else "none"
+        ),
+    }
+
+
+@app.post("/fmp-settings")
+def save_fmp_settings(req: FmpSettingsPayload, request: Request):
+    """Encrypt and persist this user's FMP API key — stored per-user, never shared."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for FMP settings")
+    enc_key = _get_enc_key()
+    from brain.fmp_creds import save_user_fmp_key
+    save_user_fmp_key(user_id, req.api_key, enc_key)
+    log.info("FMP API key saved for user %s", user_id[:8])
+    return {"saved": True, "user_key_configured": True}
+
+
+@app.delete("/fmp-settings")
+def delete_fmp_settings(request: Request):
+    """Remove this user's FMP API key — reverts to system key or free tier."""
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "JWT authentication required for FMP settings")
+    from brain.fmp_creds import delete_user_fmp_key
+    existed = delete_user_fmp_key(user_id)
+    return {"deleted": True, "had_key": existed}
+
+
+@app.get("/fmp/{data_type}")
+def fmp_proxy(data_type: str, symbol: str, request: Request,
+              period: str = "annual", limit: int = 5):
+    """Proxy requests to Financial Modeling Prep — key is resolved server-side.
+
+    data_type: one of profile | key-metrics | income-statement |
+               balance-sheet-statement | cash-flow-statement |
+               analyst-stock-recommendations | price-target-consensus
+    symbol: uppercase ticker (e.g. AAPL)
+    period: annual (default) or quarter
+    limit:  number of periods to return (1-10, default 5)
+    """
+    if data_type not in _FMP_ALLOWED_ENDPOINTS:
+        raise HTTPException(400, f"data_type must be one of: {', '.join(sorted(_FMP_ALLOWED_ENDPOINTS))}")
+    if period not in ("annual", "quarter"):
+        raise HTTPException(400, "period must be 'annual' or 'quarter'")
+    limit = max(1, min(limit, 10))
+
+    sym = _validate_symbol(symbol)
+    user_id: str | None = getattr(request.state, "user_id", None)
+
+    # Demo account — return empty rather than fetching live FMP data
+    if _DEMO_USER_ID and user_id == _DEMO_USER_ID:
+        return []
+
+    api_key = _resolve_fmp_key(user_id)
+
+    url = f"https://financialmodelingprep.com/api/v3/{data_type}/{sym}"
+    params: dict = {"apikey": api_key} if api_key else {}
+    if data_type not in _FMP_SIMPLE_ENDPOINTS:
+        params["period"] = period
+        params["limit"]  = str(limit)
+
+    try:
+        import httpx
+        resp = httpx.get(url, params=params, timeout=12.0)
+        if resp.status_code == 401:
+            raise HTTPException(401, "FMP API key invalid — check Settings → Research Data")
+        if resp.status_code == 403:
+            raise HTTPException(403, "FMP access denied — your key may lack permissions")
+        if resp.status_code == 429:
+            raise HTTPException(429, "FMP rate limit reached — add your own key in Settings → Research Data")
+        if not resp.is_success:
+            raise HTTPException(502, f"FMP returned HTTP {resp.status_code}")
+        data = resp.json()
+        if isinstance(data, dict) and "Error Message" in data:
+            raise HTTPException(503, data["Error Message"])
+        return data
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.warning("FMP proxy error for %s/%s: %s", data_type, sym, exc)
+        raise HTTPException(502, "FMP data temporarily unavailable")
 
 
 # ── Demo account snapshot ─────────────────────────────────────────────────────

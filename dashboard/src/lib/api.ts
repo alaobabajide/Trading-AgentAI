@@ -1382,6 +1382,146 @@ export function useNgxPulseSettings() {
   return { settings, saving, saved, error, saveKey, removeKey };
 }
 
+// ── Financial Modeling Prep (FMP) settings + data ─────────────────────────────
+
+export interface FmpSettings {
+  user_key_configured:   boolean;
+  system_key_configured: boolean;
+  effective_source:      "user" | "system" | "none";
+}
+
+export async function fetchFmpSettings(): Promise<FmpSettings> {
+  const res = await fetch(`${BASE}/fmp-settings`, {
+    signal:  AbortSignal.timeout(8000),
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export async function saveFmpKey(apiKey: string): Promise<{ saved: boolean }> {
+  const res = await fetch(`${BASE}/fmp-settings`, {
+    method:  "POST",
+    headers: apiHeaders({ "Content-Type": "application/json" }),
+    body:    JSON.stringify({ api_key: apiKey }),
+    signal:  AbortSignal.timeout(10000),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  return safeJson(res);
+}
+
+export async function deleteFmpKey(): Promise<{ deleted: boolean }> {
+  const res = await fetch(`${BASE}/fmp-settings`, {
+    method:  "DELETE",
+    headers: apiHeaders(),
+    signal:  AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export function useFmpSettings() {
+  const [settings, setSettings] = useState<FmpSettings | null>(null);
+  const [saving,   setSaving]   = useState(false);
+  const [saved,    setSaved]    = useState(false);
+  const [error,    setError]    = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const s = await fetchFmpSettings();
+        if (!cancelled) setSettings(s);
+      } catch { /* not authenticated */ }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  async function saveKey(apiKey: string) {
+    setSaving(true); setError(null);
+    try {
+      await saveFmpKey(apiKey);
+      setSettings((prev) => prev ? { ...prev, user_key_configured: true, effective_source: "user" } : null);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) { setError((e as Error).message); }
+    finally    { setSaving(false); }
+  }
+
+  async function removeKey() {
+    setSaving(true); setError(null);
+    try {
+      await deleteFmpKey();
+      setSettings((prev) => prev
+        ? { ...prev, user_key_configured: false, effective_source: prev.system_key_configured ? "system" : "none" }
+        : null
+      );
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) { setError((e as Error).message); }
+    finally    { setSaving(false); }
+  }
+
+  return { settings, saving, saved, error, saveKey, removeKey };
+}
+
+export type FmpDataType =
+  | "profile"
+  | "key-metrics"
+  | "income-statement"
+  | "balance-sheet-statement"
+  | "cash-flow-statement"
+  | "analyst-stock-recommendations"
+  | "price-target-consensus";
+
+export async function fetchFmpData(
+  dataType: FmpDataType,
+  symbol: string,
+  opts?: { period?: "annual" | "quarter"; limit?: number },
+): Promise<unknown[]> {
+  const params = new URLSearchParams({ symbol });
+  if (opts?.period) params.set("period", opts.period);
+  if (opts?.limit)  params.set("limit",  String(opts.limit));
+  const res = await fetch(`${BASE}/fmp/${dataType}?${params}`, {
+    signal:  AbortSignal.timeout(15000),
+    headers: apiHeaders(),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  return safeJson(res);
+}
+
+export function useFmpData<T = unknown>(
+  dataType: FmpDataType,
+  symbol: string,
+  opts?: { period?: "annual" | "quarter"; limit?: number },
+) {
+  const [data,    setData]    = useState<T[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!symbol) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    fetchFmpData(dataType, symbol, opts)
+      .then((d) => { if (!cancelled) { setData(d as T[]); setLoading(false); } })
+      .catch((e: Error) => { if (!cancelled) { setError(e.message); setLoading(false); } });
+    return () => { cancelled = true; };
+  // opts is passed inline — stringify to avoid reference instability
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataType, symbol, opts?.period, opts?.limit]);
+
+  return { data, loading, error };
+}
+
 // ── Demo account snapshot ──────────────────────────────────────────────────────
 
 export interface DemoSnapshotInfo {

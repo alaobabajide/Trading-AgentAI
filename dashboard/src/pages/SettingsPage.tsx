@@ -4,7 +4,7 @@ import {
   HITLMode, UserProfile, DEFAULT_PROFILE,
   MODE_CONFIG, loadProfile, saveProfile,
 } from "../lib/hitl";
-import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload, useWebhookSettings, useBrokerSettings, useTastytradeSettings, TastytradeSavePayload, usePolygonSettings, useNgxPulseSettings, useSchwabSettings, useIBKRSettings, useKrakenSettings, useCoinbaseSettings, useTradeStationSettings } from "../lib/api";
+import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload, useWebhookSettings, useBrokerSettings, useTastytradeSettings, TastytradeSavePayload, usePolygonSettings, useNgxPulseSettings, useSchwabSettings, useIBKRSettings, useKrakenSettings, useCoinbaseSettings, useTradeStationSettings, useFmpSettings } from "../lib/api";
 import { useEffect, useState } from "react";
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
@@ -1630,6 +1630,87 @@ function TradeStationPanel() {
   );
 }
 
+// ── FMP API key panel ─────────────────────────────────────────────────────────
+
+function FmpKeyPanel() {
+  const { settings, saving, saved, error: fmpError, saveKey, removeKey } = useFmpSettings();
+  const [input, setInput] = useState("");
+  const [showKey, setShowKey] = useState(false);
+
+  if (!settings) return <div className="text-xs text-slate-500 animate-pulse">Loading…</div>;
+
+  const src = settings.effective_source;
+
+  return (
+    <div className="space-y-3">
+      {/* Current state */}
+      {src === "user" && (
+        <div className="flex items-center justify-between text-xs bg-emerald-500/10 border border-emerald-500/25 rounded-xl px-4 py-2.5">
+          <span className="text-emerald-300">Your FMP API key is active</span>
+          <button
+            onClick={() => removeKey()}
+            disabled={saving}
+            className="text-slate-500 hover:text-red-400 transition-colors disabled:opacity-40"
+          >
+            Remove
+          </button>
+        </div>
+      )}
+      {src === "system" && (
+        <div className="text-[11px] text-slate-500 font-mono bg-surface-700 rounded-xl px-3 py-2">
+          Using system-wide FMP key (free tier). Add your own key below for higher limits.
+        </div>
+      )}
+      {src === "none" && (
+        <div className="text-[11px] text-amber-400/80 font-mono bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2">
+          No FMP key configured — Research page uses free tier (limited requests/min).
+        </div>
+      )}
+
+      {/* Key input */}
+      {src !== "user" && (
+        <div className="space-y-2">
+          <label className="text-[11px] text-slate-400 font-mono">Financial Modeling Prep API key</label>
+          <div className="flex gap-2">
+            <input
+              type={showKey ? "text" : "password"}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && input.trim()) saveKey(input.trim()).then(() => setInput("")); }}
+              placeholder="Enter your FMP API key…"
+              className="flex-1 bg-surface-700 border border-white/10 rounded-xl px-3 py-2 text-xs font-mono text-slate-200 placeholder-slate-600 focus:outline-none focus:border-brand-500/50"
+            />
+            <button
+              onClick={() => setShowKey((v) => !v)}
+              className="px-3 text-xs text-slate-500 hover:text-slate-300 transition-colors"
+            >
+              {showKey ? "Hide" : "Show"}
+            </button>
+            <button
+              onClick={() => saveKey(input.trim()).then(() => setInput(""))}
+              disabled={saving || !input.trim()}
+              className="px-4 py-2 rounded-xl bg-brand-500/20 text-brand-300 text-xs font-medium hover:bg-brand-500/30 transition-colors disabled:opacity-40"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {saved      && <p className="text-[11px] text-emerald-400 font-mono">Saved — key is isolated to your account only.</p>}
+      {fmpError   && <p className="text-[11px] text-red-400 font-mono">{fmpError}</p>}
+
+      <SectionNote>
+        Your key is encrypted at rest and tied strictly to your session — other users cannot access it.
+        Get a free key at{" "}
+        <a href="https://financialmodelingprep.com/developer/docs" target="_blank" rel="noreferrer" className="underline">
+          financialmodelingprep.com
+        </a>.
+      </SectionNote>
+    </div>
+  );
+}
+
 // ── Demo account snapshot panel ───────────────────────────────────────────────
 
 function DemoSnapshotPanel() {
@@ -1902,6 +1983,15 @@ export function SettingsPage() {
           <p className="text-xs font-semibold text-slate-300 mb-4">NGX Pulse — Nigerian Exchange Data</p>
           <NgxPulsePanel />
         </div>
+      </Section>
+
+      {/* ── Research Data ────────────────────────────────────────────────── */}
+      <Section
+        icon={<TrendingUp className="w-4 h-4" />}
+        title="Research Data"
+        subtitle="Financial Modeling Prep (FMP) API key — adds company profiles, key metrics, and analyst consensus to the Research page"
+      >
+        <FmpKeyPanel />
       </Section>
 
       {/* ── Demo Account ──────────────────────────────────────────────────── */}

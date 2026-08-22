@@ -11,6 +11,7 @@ import { FundamentalPage } from "./pages/FundamentalPage";
 import { ChartsPage } from "./pages/ChartsPage";
 import { IndicesPage } from "./pages/IndicesPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { ResearchPage } from "./pages/ResearchPage";
 import { HITLProvider, useHITLContext } from "./context/HITLContext";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { LoginPage } from "./pages/LoginPage";
@@ -20,7 +21,7 @@ import { useCreditStatus, getActiveUserId } from "./lib/api";
 import { DEMO_USER_ID } from "./lib/supabase";
 import { AlertTriangle, Loader2, X, Eye } from "lucide-react";
 
-type Page = "dashboard" | "signals" | "positions" | "technical" | "fundamental" | "charts" | "indices" | "brain" | "settings";
+type Page = "dashboard" | "signals" | "positions" | "technical" | "fundamental" | "charts" | "indices" | "research" | "brain" | "settings";
 type TradingEnv = "paper" | "live";
 
 function CreditWarningBanner() {
@@ -82,6 +83,7 @@ const PAGE_TITLE: Partial<Record<Page, string>> = {
   technical:   "Technical Analysis",
   charts:      "TradingView Charts",
   indices:     "Market Indices",
+  research:    "Research",
   settings:    "Settings",
 };
 
@@ -254,6 +256,7 @@ function AppInner() {
           {page === "fundamental" && <FundamentalPage />}
           {page === "charts"      && <ChartsPage />}
           {page === "indices"     && <IndicesPage paperMode={isPaper} />}
+          {page === "research"    && <ResearchPage />}
           {page === "brain"       && <BrainPage paperMode={isPaper} />}
           {page === "settings"    && <SettingsPage />}
         </div>
