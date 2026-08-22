@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
   Brain, Loader2, Send, CheckCircle2, XCircle, Clock,
-  Zap, DollarSign, BarChart2, AlertCircle, Trash2, Sparkles,
+  Zap, DollarSign, BarChart2, AlertCircle, Trash2, Sparkles, Bell, BellOff,
 } from "lucide-react";
 import clsx from "clsx";
 import { SignalCard } from "../components/SignalCard";
@@ -19,6 +19,7 @@ interface ConversationMessage {
   execStatus?: string;    // HITL disposition status
   loading?: boolean;      // pending placeholder
   error?: string;         // failed query error
+  watchRuleId?: string;   // Category C — registered rule ID
 }
 
 interface BrainQueryResponse {
@@ -27,6 +28,28 @@ interface BrainQueryResponse {
   asset_class?: string;
   text?: string;
   error?: string;
+  condition_type?: string;
+  threshold?: number;
+}
+
+interface WatchRule {
+  rule_id: string;
+  symbol: string;
+  condition_type: string;
+  threshold: number;
+  asset_class: string;
+  created_at: string;
+}
+
+interface WatchAlert {
+  alert_id: string;
+  rule_id: string;
+  symbol: string;
+  condition_type: string;
+  threshold: number;
+  trigger_price: number;
+  trigger_debate: boolean;
+  triggered_at: string;
 }
 
 // ── Suggestion chips ──────────────────────────────────────────────────────────
@@ -254,6 +277,23 @@ function AssistantBubble({ msg }: AssistantBubbleProps) {
     );
   }
 
+  // Category C confirmation — watch rule registered
+  if (msg.watchRuleId) {
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[90%] bg-amber-500/10 border border-amber-500/20 rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-amber-300 space-y-1">
+          <div className="flex items-center gap-2 font-semibold text-xs text-amber-400">
+            <Bell className="w-3.5 h-3.5" /> Watch rule active
+          </div>
+          <div>{msg.content}</div>
+          <div className="text-[10px] font-mono text-amber-500/70">
+            Rule ID: {msg.watchRuleId.slice(0, 8)}… · Evaluated every orchestrator cycle
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-3">
       {/* Text preamble or Category B text response */}
@@ -328,11 +368,18 @@ interface BrainPageProps {
   signalPaperMode?: boolean;
 }
 
+function _conditionLabel(ctype: string, threshold: number): string {
+  return ctype === "price_above"
+    ? `price rises above $${threshold.toLocaleString()}`
+    : `price drops below $${threshold.toLocaleString()}`;
+}
+
 export function BrainPage({ paperMode: _paperMode = true, signalPaperMode = false }: BrainPageProps) {
   const [messages, setMessages]     = useState<ConversationMessage[]>([]);
   const [input, setInput]           = useState("");
   const [assetClass, setAssetClass] = useState<"stock" | "crypto">("stock");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [activeRules, setActiveRules]   = useState<WatchRule[]>([]);
   const hitl     = useHITLContext();
   const inputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -345,6 +392,75 @@ export function BrainPage({ paperMode: _paperMode = true, signalPaperMode = fals
   function updateMessage(id: string, updates: Partial<ConversationMessage>) {
     setMessages(prev => prev.map(m => m.id === id ? { ...m, ...updates } : m));
   }
+
+  // Load active watch rules on mount
+  useEffect(() => {
+    fetch("/api/brain/rules", { headers: apiHeaders() })
+      .then(r => r.ok ? r.json() : { rules: [] })
+      .then(d => setActiveRules((d as { rules: WatchRule[] }).rules))
+      .catch(() => {});
+  }, []);
+
+  // ── SSE: receive fired watch alerts ──────────────────────────────────────
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function connectAlertStream() {
+      try {
+        const resp = await fetch("/api/brain/alerts/stream", {
+          headers: apiHeaders(),
+          signal: controller.signal,
+        });
+        if (!resp.ok || !resp.body) return;
+
+        const reader  = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer    = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const chunks = buffer.split("\n\n");
+          buffer = chunks.pop() ?? "";
+          for (const chunk of chunks) {
+            const line = chunk.trim();
+            if (!line || line.startsWith(":")) continue; // keep-alive comment
+            const dataLine = line.startsWith("data: ") ? line.slice(6) : line;
+            try {
+              const alert = JSON.parse(dataLine) as WatchAlert;
+              const alertMsgId = crypto.randomUUID();
+              const label = _conditionLabel(alert.condition_type, alert.threshold);
+              setMessages(prev => [
+                ...prev,
+                {
+                  id:      alertMsgId,
+                  role:    "assistant",
+                  content: `Alert fired: ${alert.symbol} ${label} — current price $${alert.trigger_price.toLocaleString()}.`,
+                },
+              ]);
+              // Remove triggered rule from active rules list
+              setActiveRules(prev => prev.filter(r => r.rule_id !== alert.rule_id));
+              // If trigger_debate: auto-submit a debate for this symbol
+              if (alert.trigger_debate) {
+                setTimeout(() => handleQuery(`Analyse ${alert.symbol}`), 300);
+              }
+            } catch {
+              // malformed SSE payload — ignore
+            }
+          }
+        }
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === "AbortError") return;
+        // Reconnect after 10 s on unexpected disconnect
+        setTimeout(connectAlertStream, 10_000);
+      }
+    }
+
+    connectAlertStream();
+    return () => controller.abort();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Build conversation history for LLM context (last 4 exchanges)
   const conversationHistory = messages
@@ -438,6 +554,45 @@ export function BrainPage({ paperMode: _paperMode = true, signalPaperMode = fals
           if (execStatus) updateMessage(assistantMsgId, { execStatus });
         }
 
+      } else if (classification.category === "C") {
+        // ── Category C: register a watch rule ────────────────────────────
+        const sym   = classification.symbol ?? "";
+        const ctype = classification.condition_type ?? "";
+        const thr   = classification.threshold ?? 0;
+        const cls   = classification.asset_class ?? assetClass;
+
+        updateMessage(assistantMsgId, { content: `Registering price alert for ${sym}…` });
+
+        const ruleResp = await fetch("/api/brain/rule", {
+          method:  "POST",
+          headers: apiHeaders({ "Content-Type": "application/json" }),
+          body:    JSON.stringify({
+            symbol:         sym,
+            asset_class:    cls,
+            condition_type: ctype,
+            threshold:      thr,
+            trigger_debate: true,
+          }),
+        });
+
+        if (!ruleResp.ok) {
+          const err = await ruleResp.json().catch(() => ({})) as { detail?: string };
+          updateMessage(assistantMsgId, {
+            loading: false, content: "",
+            error: err.detail ?? `Could not register rule: server error ${ruleResp.status}`,
+          });
+          return;
+        }
+
+        const rule = await ruleResp.json() as WatchRule;
+        const label = _conditionLabel(ctype, thr);
+        updateMessage(assistantMsgId, {
+          loading: false,
+          content: `Got it. I'll alert you when ${sym} ${label}. The debate will auto-run when it fires.`,
+          watchRuleId: rule.rule_id,
+        });
+        setActiveRules(prev => [rule, ...prev]);
+
       } else {
         // ── Category B: text synthesis answer ────────────────────────────
         const text = classification.text ?? "No answer generated.";
@@ -455,6 +610,14 @@ export function BrainPage({ paperMode: _paperMode = true, signalPaperMode = fals
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [assetClass, conversationHistory, hitl, isProcessing, signalPaperMode]);
+
+  async function deleteRule(ruleId: string) {
+    await fetch(`/api/brain/rule/${ruleId}`, {
+      method: "DELETE",
+      headers: apiHeaders(),
+    }).catch(() => {});
+    setActiveRules(prev => prev.filter(r => r.rule_id !== ruleId));
+  }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -582,6 +745,45 @@ export function BrainPage({ paperMode: _paperMode = true, signalPaperMode = fals
           </div>
         </div>
       </div>
+
+      {/* ── Active watch rules ──────────────────────────────────────────── */}
+      {activeRules.length > 0 && (
+        <div className="glass rounded-2xl p-5">
+          <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
+            <Bell className="w-3.5 h-3.5 text-amber-400" />
+            Active Watch Rules
+            <span className="ml-1 text-[10px] font-mono text-slate-600 normal-case tracking-normal">
+              evaluated every orchestrator cycle
+            </span>
+          </h2>
+          <div className="space-y-2">
+            {activeRules.map(rule => (
+              <div key={rule.rule_id}
+                className="flex items-center justify-between gap-3 bg-surface-700/50 rounded-xl px-3 py-2.5"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="text-sm font-mono font-semibold text-slate-200">{rule.symbol}</span>
+                  <span className={clsx(
+                    "text-xs font-mono px-2 py-0.5 rounded-md",
+                    rule.condition_type === "price_above"
+                      ? "bg-emerald-500/10 text-emerald-400"
+                      : "bg-red-500/10 text-red-400",
+                  )}>
+                    {rule.condition_type === "price_above" ? "↑ above" : "↓ below"} ${rule.threshold.toLocaleString()}
+                  </span>
+                </div>
+                <button
+                  onClick={() => deleteRule(rule.rule_id)}
+                  title="Delete rule"
+                  className="text-slate-600 hover:text-red-400 transition-colors shrink-0"
+                >
+                  <BellOff className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── API Usage & Credits ──────────────────────────────────────────── */}
       <div className="pt-2">

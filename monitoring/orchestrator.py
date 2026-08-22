@@ -23,7 +23,7 @@ import schedule
 
 from config import get_settings
 from data.portfolio import PortfolioFetcher, PortfolioState
-from watchlist import STOCK_WATCHLIST, ETF_WATCHLIST, CRYPTO_WATCHLIST, CYCLE_INTERVAL_MINUTES
+from watchlist import STOCK_WATCHLIST, ETF_WATCHLIST, CRYPTO_WATCHLIST, CYCLE_INTERVAL_MINUTES, MAX_WATCH_RULES_DEFAULT  # noqa: F401
 from monitoring.metrics import (
     brain_latency_histogram,
     cash_gauge,
@@ -388,6 +388,19 @@ class Orchestrator:
 
         signal_counter.labels(symbol=symbol, action=action, asset_class=asset_class).inc()
         signal_confidence_histogram.observe(confidence)
+
+        # Evaluate Category C watch rules for this symbol using the price from the signal.
+        price = sig.get("current_price") or 0.0
+        if price and price > 0:
+            try:
+                httpx.post(
+                    f"{self._brain_url}/brain/rules/evaluate",
+                    params={"symbol": symbol, "price": price},
+                    timeout=5,
+                    headers=self._brain_headers(),
+                )
+            except Exception as _wr_exc:
+                log.debug("Watch rule evaluation for %s skipped: %s", symbol, _wr_exc)
 
         log.info(
             "Signal %-6s  %-6s  conf=%.2f  tier=%-4s  votes=%.1f/27  conflict=%s",

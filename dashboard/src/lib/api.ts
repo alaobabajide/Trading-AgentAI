@@ -416,6 +416,8 @@ export interface RiskConfigFields {
   loss_cooldown_skip_cycles:      number;
   // Telegram
   max_telegram_order_usd:         number;
+  // Brain watch rules
+  max_watch_rules:                number;
 }
 
 export interface RiskConfig extends RiskConfigFields {
@@ -432,7 +434,7 @@ const _RISK_FIELD_KEYS = new Set([
   "correlation_halving_threshold","signal_confidence_threshold","lookback_days",
   "atr_multiplier","atr_stop_floor","atr_stop_cap",
   "loss_cooldown_hits","loss_cooldown_window_days","loss_cooldown_skip_cycles",
-  "max_telegram_order_usd",
+  "max_telegram_order_usd","max_watch_rules",
 ]);
 
 export async function fetchRiskConfig(): Promise<RiskConfig> {
@@ -549,6 +551,7 @@ const _FIELD_DEFAULTS: RiskConfigFields = {
   atr_multiplier: 1.5, atr_stop_floor: 0.005, atr_stop_cap: 0.04,
   loss_cooldown_hits: 2, loss_cooldown_window_days: 5, loss_cooldown_skip_cycles: 2,
   max_telegram_order_usd: 1000,
+  max_watch_rules: 10,
 };
 
 function _mergeWithSaved(base: RiskConfig): RiskConfig {

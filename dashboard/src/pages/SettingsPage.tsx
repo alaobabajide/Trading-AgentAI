@@ -1287,6 +1287,7 @@ const ENGINE_DEFAULTS: EngineLocal = {
   atr_multiplier: 1.5, atr_stop_floor: 0.005, atr_stop_cap: 0.04,
   loss_cooldown_hits: 2, loss_cooldown_window_days: 5, loss_cooldown_skip_cycles: 2,
   max_telegram_order_usd: 1000,
+  max_watch_rules: 10,
 };
 
 function EngineConfigPanel() {
@@ -1435,6 +1436,14 @@ function EngineConfigPanel() {
             value={vals.max_telegram_order_usd} options={[100,500,1000,5000,10000]}
             onChange={set("max_telegram_order_usd")} valueColor="text-slate-300"
             display={(v) => `$${v.toLocaleString()}`} optLabel={(o) => `$${(o >= 1000 ? `${o / 1000}k` : o)}`} />
+
+          {/* ── Brain watch rules ─────────────────────────────────────────── */}
+          <SubSection title="Brain Watch Rules" />
+
+          <RawRow label="Max Active Rules (per user)"
+            value={vals.max_watch_rules} options={[5,10,20,50]}
+            onChange={set("max_watch_rules")} valueColor="text-amber-400"
+            display={(v) => `${v} rules`} optLabel={(o) => `${o}`} />
 
           {/* ── Errors & actions ──────────────────────────────────────────── */}
           {riskCfg.error && <p className="text-xs text-red-400 font-mono">{riskCfg.error}</p>}

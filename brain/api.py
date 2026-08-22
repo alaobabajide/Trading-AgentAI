@@ -1116,6 +1116,8 @@ class RiskConfigUpdate(BaseModel):
     loss_cooldown_skip_cycles:      int   | None = Field(None, ge=1,     le=20)
     # Telegram
     max_telegram_order_usd:         float | None = Field(None, ge=10.0,  le=100_000.0)
+    # Brain watch rules
+    max_watch_rules:                int   | None = Field(None, ge=1,     le=50)
 
 
 @app.get("/config")
@@ -1158,6 +1160,7 @@ def get_risk_config(request: Request):
         "loss_cooldown_window_days":    cfg.loss_cooldown_window_days,
         "loss_cooldown_skip_cycles":    cfg.loss_cooldown_skip_cycles,
         "max_telegram_order_usd":       cfg.max_telegram_order_usd,
+        "max_watch_rules":              _dynamic_config.get("max_watch_rules", 10),
     }
 
     user_id: str | None = getattr(request.state, "user_id", None)
@@ -2520,15 +2523,23 @@ Category A — user wants to trigger a new multi-agent analysis for a specific t
 Category B — user wants to query existing signal data, compare signals, or asks a general question:
 {"category": "B"}
 
+Category C — user wants to set a price alert / watch condition on a specific ticker:
+{"category": "C", "symbol": "AAPL", "asset_class": "stock", "condition_type": "price_below", "threshold": 180.0}
+Supported condition_type values: "price_above", "price_below".
+
 Rules:
-- Category A: the query names a specific ticker (AAPL, NVDA, BTCUSD, ETHUSD, SPY, TSLA, etc.).
+- Category A: the query names a specific ticker to analyze NOW (AAPL, NVDA, BTCUSD, ETHUSD, SPY, TSLA, etc.).
   Extract the ticker in UPPERCASE letters/digits only.
   asset_class is "crypto" if the ticker ends in USD/USDT or is a known crypto name (BTC, ETH, SOL, DOGE, XRP, ADA, etc.).
   Otherwise asset_class is "stock".
   If the query is just a bare ticker symbol, treat as Category A.
 - Category B: comparative questions, leaderboard questions, questions about existing cached signals, or anything not naming one specific ticker to analyze.
   Examples: "which signal is strongest", "show HOT signals", "compare signals", "any sell signals?".
-- When ambiguous and a recognizable ticker is present, prefer Category A.
+- Category C: the query uses alert/watch/notify language with a price condition.
+  Examples: "alert me if AAPL drops below 180", "tell me when NVDA hits 200", "watch BTC above 100000".
+  Extract symbol, asset_class, condition_type (price_above or price_below), and threshold (numeric).
+  If no threshold can be determined, fall back to Category B.
+- When ambiguous between A and C: if the query mentions a future condition, prefer C; if it asks for an immediate analysis, prefer A.
 - Return ONLY the JSON object."""
 
 _SYNTHESIZE_SYSTEM = """You are an AI assistant for a trading platform. Answer the user's question using the provided recent signal data.
@@ -2545,10 +2556,13 @@ class BrainQueryRequest(BaseModel):
 
 
 class BrainQueryResponse(BaseModel):
-    category: str           # "A" or "B"
+    category: str                   # "A", "B", or "C"
     symbol: str | None = None
     asset_class: str | None = None
-    text: str | None = None  # Category B synthesized answer
+    text: str | None = None         # Category B synthesized answer
+    condition_type: str | None = None  # Category C
+    threshold: float | None = None     # Category C
+    rule_id: str | None = None         # Category C — set by frontend after POST /brain/rule
     error: str | None = None
 
 
@@ -2567,15 +2581,42 @@ def _or_client_for_query(cfg):
 
 
 def _fallback_classify(query: str, asset_class_hint: str) -> dict:
-    """Regex fallback when LLM classification fails — detects bare tickers."""
+    """Regex fallback when LLM classification fails — detects bare tickers and watch conditions."""
     import re as _re
     q = query.strip()
-    # Match a bare ticker: 1-8 uppercase alphanumeric characters
+
+    # ── Category C: price alert keywords + a number ───────────────────────────
+    _alert_kw = _re.compile(
+        r'\b(alert|watch|notify|tell me when|warn me|ping me|trigger)\b', _re.I
+    )
+    _price_pattern = _re.compile(r'\$?([\d,]+(?:\.\d+)?)')
+    _above_kw = _re.compile(r'\b(above|over|crosses above|breaks? (above|out|through)|hits?)\b', _re.I)
+    _below_kw = _re.compile(r'\b(below|under|drops? (below|to)|falls? (to|below))\b', _re.I)
+
+    if _alert_kw.search(q):
+        price_match = _price_pattern.search(q)
+        tickers_c = _re.findall(r'\b([A-Z]{2,6}(?:USD|USDT)?)\b', q.upper())
+        common_words = {"AND", "THE", "FOR", "BUY", "SELL", "HOLD", "HOT", "WARM", "COLD",
+                        "RUN", "ANY", "ME", "ALERT", "WHEN", "HITS", "ABOVE", "BELOW"}
+        tickers_c = [t for t in tickers_c if t not in common_words]
+        if tickers_c and price_match:
+            sym   = tickers_c[0]
+            price = float(price_match.group(1).replace(",", ""))
+            is_crypto = any(sym.endswith(sfx) for sfx in ("USD", "USDT")) or len(sym) >= 6
+            ctype = "price_above" if _above_kw.search(q) else "price_below"
+            return {
+                "category":       "C",
+                "symbol":         sym,
+                "asset_class":    "crypto" if is_crypto else asset_class_hint,
+                "condition_type": ctype,
+                "threshold":      price,
+            }
+
+    # ── Category A: bare ticker or ticker in sentence ─────────────────────────
     if _re.match(r'^[A-Z0-9]{1,8}$', q.upper()):
         sym = q.upper()
         is_crypto = any(sym.endswith(sfx) for sfx in ("USD", "USDT", "BTC", "ETH")) or len(sym) >= 6
         return {"category": "A", "symbol": sym, "asset_class": "crypto" if is_crypto else asset_class_hint}
-    # Check if any known ticker pattern is embedded in the query
     tickers = _re.findall(r'\b([A-Z]{2,6}(?:USD|USDT)?)\b', q.upper())
     common_words = {"AND", "THE", "FOR", "BUY", "SELL", "HOLD", "HOT", "WARM", "COLD", "RUN", "ANY"}
     tickers = [t for t in tickers if t not in common_words]
@@ -2601,6 +2642,14 @@ def brain_query(req: BrainQueryRequest, request: Request):
     if client is None:
         # No OpenRouter key — try regex classification only
         classification = _fallback_classify(req.query, req.asset_class_hint)
+        if classification["category"] == "C":
+            return BrainQueryResponse(
+                category="C",
+                symbol=classification.get("symbol"),
+                asset_class=classification.get("asset_class", req.asset_class_hint),
+                condition_type=classification.get("condition_type"),
+                threshold=classification.get("threshold"),
+            )
         if classification["category"] == "B":
             return BrainQueryResponse(
                 category="B",
@@ -2654,6 +2703,24 @@ def brain_query(req: BrainQueryRequest, request: Request):
             )
         return BrainQueryResponse(category="A", symbol=symbol, asset_class=asset_class)
 
+    if category == "C":
+        symbol     = str(classification.get("symbol", "")).upper().strip()
+        asset_class = str(classification.get("asset_class", req.asset_class_hint))
+        ctype      = classification.get("condition_type")
+        threshold  = classification.get("threshold")
+        if not symbol or ctype not in ("price_above", "price_below") or threshold is None:
+            return BrainQueryResponse(
+                category="B",
+                text="I understood you want a price alert, but couldn't extract the ticker, condition, and threshold. Try: \"Alert me when AAPL drops below 180\" or \"Notify me if NVDA goes above 200\".",
+            )
+        return BrainQueryResponse(
+            category="C",
+            symbol=symbol,
+            asset_class=asset_class,
+            condition_type=ctype,
+            threshold=float(threshold),
+        )
+
     # ── Step 2: Category B — synthesize answer from signal cache ──────────────
     uid = user_id or "system"
     _see_system = (
@@ -2705,6 +2772,142 @@ def brain_query(req: BrainQueryRequest, request: Request):
         text = f"Could not synthesize an answer: {exc}"
 
     return BrainQueryResponse(category="B", text=text)
+
+
+# ── Category C: watch rule management endpoints ────────────────────────────────
+
+class WatchRuleRequest(BaseModel):
+    symbol: str         = Field(..., min_length=1, max_length=20)
+    asset_class: str    = Field("stock")
+    condition_type: str = Field(...)
+    threshold: float    = Field(...)
+    trigger_debate: bool = Field(True)
+
+
+@app.post("/brain/rule")
+def create_watch_rule(body: WatchRuleRequest, request: Request):
+    """Register a price-watch rule for the authenticated user."""
+    from brain.watch_rules import add_rule as _add_rule, CONDITION_TYPES as _CT
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "Authentication required to create watch rules")
+    if body.condition_type not in _CT:
+        raise HTTPException(400, f"condition_type must be one of: {sorted(_CT)}")
+
+    max_rules = int(_dynamic_config.get("max_watch_rules", 10))
+    try:
+        rule = _add_rule(
+            uid=user_id,
+            symbol=body.symbol,
+            asset_class=body.asset_class,
+            condition_type=body.condition_type,
+            threshold=body.threshold,
+            trigger_debate=body.trigger_debate,
+            max_rules=max_rules,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return rule
+
+
+@app.get("/brain/rules")
+def list_watch_rules(request: Request):
+    """List active (non-triggered) watch rules for the authenticated user."""
+    from brain.watch_rules import list_rules as _list_rules
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "Authentication required")
+    return {"rules": _list_rules(user_id)}
+
+
+@app.delete("/brain/rule/{rule_id}")
+def delete_watch_rule(rule_id: str, request: Request):
+    """Delete a watch rule by ID."""
+    from brain.watch_rules import delete_rule as _delete_rule
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "Authentication required")
+    ok = _delete_rule(user_id, rule_id)
+    if not ok:
+        raise HTTPException(404, "Rule not found or does not belong to this user")
+    return {"deleted": True}
+
+
+@app.get("/brain/alerts")
+def list_watch_alerts(request: Request, include_delivered: bool = False):
+    """List pending (or all) alerts for the authenticated user."""
+    from brain.watch_rules import list_alerts as _list_alerts
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "Authentication required")
+    return {"alerts": _list_alerts(user_id, include_delivered=include_delivered)}
+
+
+@app.post("/brain/rules/evaluate")
+def evaluate_watch_rules_endpoint(request: Request, symbol: str, price: float):
+    """Orchestrator-facing endpoint: evaluate watch rules for symbol at price.
+
+    Called after each signal cycle with the symbol's current price.
+    Returns the list of newly triggered alert IDs.
+    Auth: X-Api-Key (machine-to-machine).
+    """
+    from brain.watch_rules import evaluate_rules as _evaluate
+    triggered = _evaluate(symbol=symbol, price=price)
+    return {"evaluated": symbol, "price": price, "triggered": len(triggered)}
+
+
+@app.get("/brain/alerts/stream")
+async def watch_alerts_stream(request: Request):
+    """SSE stream: pushes new watch alerts to the browser as they fire.
+
+    Uses fetch + ReadableStream on the client (not EventSource) to support
+    the X-Session-Id authentication header.
+
+    Each event is a JSON-encoded alert object.  Alerts are marked delivered
+    after transmission so they are not re-sent on reconnect.
+    The stream sends a keep-alive comment every 15 seconds.
+    """
+    import asyncio
+    from fastapi.responses import StreamingResponse
+    from brain.watch_rules import list_alerts as _list_alerts, mark_delivered as _mark_delivered
+
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(403, "Authentication required for alert stream")
+
+    async def _event_generator():
+        try:
+            heartbeat = 0
+            while True:
+                if await request.is_disconnected():
+                    break
+
+                pending = _list_alerts(user_id, include_delivered=False)
+                if pending:
+                    ids = []
+                    for alert in pending:
+                        payload = json.dumps(alert, default=str)
+                        yield f"data: {payload}\n\n"
+                        ids.append(alert["alert_id"])
+                    _mark_delivered(user_id, ids)
+
+                heartbeat += 5
+                if heartbeat >= 15:
+                    yield ": keep-alive\n\n"
+                    heartbeat = 0
+
+                await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            pass
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 class ExecuteRequest(BaseModel):

@@ -48,6 +48,10 @@ AGENT_COUNT    = 27   # total agents in the debate pool
 # Orchestrator cycle interval (minutes)
 CYCLE_INTERVAL_MINUTES = 30
 
+# Max active watch rules per user (Category C NLP alerts).
+# Overridable at runtime via Settings → Brain → Max watch rules.
+MAX_WATCH_RULES_DEFAULT = 10
+
 LLM_PROVIDER_NAME = "OpenRouter"
 LLM_PROVIDER_URL  = "openrouter.ai/settings/billing"
 
