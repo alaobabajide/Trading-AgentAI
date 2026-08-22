@@ -21,8 +21,24 @@ export function setActiveToken(token: string | null): void {
 export function setActiveUserId(userId: string | null): void {
   const prev = _activeUserId;
   _activeUserId = userId;
-  // Remove old non-namespaced keys once per session (one-time migration).
+  // One-time migration: copy old non-namespaced data into the user-scoped key
+  // BEFORE removing the old key, so existing signals/config are preserved.
   if (userId && prev !== userId) {
+    try {
+      const newSignalsKey = `ta_signals_cache_v3_${userId}`;
+      if (!localStorage.getItem(newSignalsKey)) {
+        const old = localStorage.getItem("ta_signals_cache_v3");
+        if (old) localStorage.setItem(newSignalsKey, old);
+      }
+    } catch { /* ignore */ }
+    try {
+      const newConfigKey = `ta_risk_config_v1_${userId}`;
+      if (!localStorage.getItem(newConfigKey)) {
+        const old = localStorage.getItem("ta_risk_config_v1");
+        if (old) localStorage.setItem(newConfigKey, old);
+      }
+    } catch { /* ignore */ }
+    // Now safe to remove the old flat keys
     try { localStorage.removeItem("ta_signals_cache_v3"); } catch { /* ignore */ }
     try { localStorage.removeItem("ta_signals_cache_v2"); } catch { /* ignore */ }
     try { localStorage.removeItem("ta_signals_cache_v1"); } catch { /* ignore */ }

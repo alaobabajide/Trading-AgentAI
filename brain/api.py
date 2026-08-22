@@ -2026,7 +2026,9 @@ def generate_signal(req: SignalRequest, request: Request):
 @app.get("/signal/{symbol}/latest", response_model=dict)
 def get_latest_signal(symbol: str, request: Request):
     uid = getattr(request.state, "user_id", None) or "system"
-    cached = _signal_cache.get(f"{uid}::{symbol.upper()}")
+    sym = symbol.upper()
+    # Try user-scoped key first; fall back to legacy plain-symbol key for backward compat.
+    cached = _signal_cache.get(f"{uid}::{sym}") or _signal_cache.get(sym)
     if not cached:
         raise HTTPException(status_code=404, detail=f"No cached signal for {symbol}")
     return cached
@@ -2044,7 +2046,13 @@ def get_all_cached_signals(request: Request):
             s = {**s, "rationale": _clean_rationale(rat)}
         return s
 
-    user_signals = [v for v in _signal_cache.values() if v.get("_uid", "system") == uid]
+    # Include entries that belong to this user OR legacy entries with no _uid tag
+    # (signals generated before per-user scoping was added — shown to all JWT users
+    # for backward compatibility; replaced by new user-scoped entries as they regenerate).
+    user_signals = [
+        v for v in _signal_cache.values()
+        if v.get("_uid", "legacy") in (uid, "legacy")
+    ]
     return sorted(
         (_clean(s) for s in user_signals),
         key=lambda s: s.get("generated_at", ""),
@@ -2054,9 +2062,12 @@ def get_all_cached_signals(request: Request):
 
 @app.delete("/signals/cached")
 def clear_all_cached_signals(request: Request):
-    """Wipe the current user's entries from the in-memory signal cache and on-disk JSON."""
+    """Wipe the current user's entries (and any legacy untagged entries) from the cache."""
     uid = getattr(request.state, "user_id", None) or "system"
-    keys_to_del = [k for k, v in _signal_cache.items() if v.get("_uid", "system") == uid]
+    keys_to_del = [
+        k for k, v in _signal_cache.items()
+        if v.get("_uid", "legacy") in (uid, "legacy")
+    ]
     for k in keys_to_del:
         del _signal_cache[k]
     _save_cache(_signal_cache)
