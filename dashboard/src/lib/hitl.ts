@@ -80,17 +80,21 @@ export const MODE_CONFIG: Record<HITLMode, { label: string; description: string;
 /** Fixed veto window for HOT signals (seconds). WARM window comes from UserProfile.warmVetoSeconds. */
 export const HOT_VETO_SECONDS = 5;
 
-/** Storage key for persisting profile to localStorage */
-export const PROFILE_STORAGE_KEY = "tradeagent:profile";
+/** Storage key for persisting profile to localStorage — namespaced by user ID. */
+function _profileKey(userId: string | null): string {
+  return userId ? `tradeagent:profile:${userId}` : "tradeagent:profile";
+}
 
-export function loadProfile(): UserProfile {
+export function loadProfile(userId?: string | null): UserProfile {
   try {
-    const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
+    const raw = localStorage.getItem(_profileKey(userId ?? null));
     if (raw) return { ...DEFAULT_PROFILE, ...JSON.parse(raw) };
   } catch {}
   return DEFAULT_PROFILE;
 }
 
-export function saveProfile(p: UserProfile): void {
-  localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(p));
+export function saveProfile(p: UserProfile, userId?: string | null): void {
+  try {
+    localStorage.setItem(_profileKey(userId ?? null), JSON.stringify(p));
+  } catch {}
 }

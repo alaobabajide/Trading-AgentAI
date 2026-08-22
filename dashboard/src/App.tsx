@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import clsx from "clsx";
 import { Sidebar } from "./components/Sidebar";
 import { WarmSignalBanner } from "./components/WarmSignalBanner";
@@ -16,7 +16,7 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import { LoginPage } from "./pages/LoginPage";
 import { SetupBanner } from "./components/SetupBanner";
 import { MODE_CONFIG, HOT_VETO_SECONDS } from "./lib/hitl";
-import { useCreditStatus } from "./lib/api";
+import { useCreditStatus, getActiveUserId } from "./lib/api";
 import { AlertTriangle, Loader2, X } from "lucide-react";
 
 type Page = "dashboard" | "signals" | "positions" | "technical" | "fundamental" | "charts" | "indices" | "brain" | "settings";
@@ -70,12 +70,35 @@ const PAGE_TITLE: Partial<Record<Page, string>> = {
   settings:    "Settings",
 };
 
+function _tradingEnvKey(): string {
+  const uid = getActiveUserId();
+  return uid ? `ta:tradingEnv:${uid}` : "ta:tradingEnv";
+}
+
 function AppInner() {
-  const [page, setPage]           = useState<Page>("dashboard");
-  const [tradingEnv, setTradingEnv] = useState<TradingEnv>("paper");
+  const [page, setPage] = useState<Page>("dashboard");
+  const [tradingEnv, setTradingEnvState] = useState<TradingEnv>(() => {
+    try { return (localStorage.getItem(_tradingEnvKey()) as TradingEnv) || "paper"; } catch { return "paper"; }
+  });
   const hitl    = useHITLContext();
   const modeCfg = MODE_CONFIG[hitl.profile.mode];
   const isPaper = tradingEnv === "paper";
+
+  const setTradingEnv = useCallback((env: TradingEnv) => {
+    setTradingEnvState(env);
+    try { localStorage.setItem(_tradingEnvKey(), env); } catch {}
+  }, []);
+
+  // Reload Paper/Live preference when the logged-in user changes.
+  useEffect(() => {
+    function onUserChanged() {
+      try {
+        setTradingEnvState((localStorage.getItem(_tradingEnvKey()) as TradingEnv) || "paper");
+      } catch {}
+    }
+    window.addEventListener("ta:userChanged", onUserChanged);
+    return () => window.removeEventListener("ta:userChanged", onUserChanged);
+  }, []);
 
   // Toast state for execute results
   const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null);

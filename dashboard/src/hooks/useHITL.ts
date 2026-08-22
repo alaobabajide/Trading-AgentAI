@@ -4,6 +4,7 @@ import {
   HOT_VETO_SECONDS,
   loadProfile, saveProfile,
 } from "../lib/hitl";
+import { getActiveUserId } from "../lib/api";
 import type { Signal } from "../lib/types";
 
 interface HITLState {
@@ -25,7 +26,7 @@ interface HITLActions {
 }
 
 export function useHITL(): HITLState & HITLActions {
-  const [profile, setProfile]           = useState<UserProfile>(loadProfile);
+  const [profile, setProfile] = useState<UserProfile>(() => loadProfile(getActiveUserId()));
   const [pendingSignal, setPending]     = useState<Signal | null>(null);
   const [vetoSecsLeft, setVetoSecs]     = useState(0);
   const [coolOffActive, setCoolOff]     = useState(false);
@@ -88,12 +89,24 @@ export function useHITL(): HITLState & HITLActions {
     if (coolTimer.current) clearInterval(coolTimer.current);
   }, []);
 
+  // Reload the profile from localStorage whenever the active user changes so
+  // each user's Auto/Assisted/Manual preference is isolated to their own account.
+  useEffect(() => {
+    function onUserChanged() {
+      setProfile(loadProfile(getActiveUserId()));
+    }
+    // The _userChangeBus is module-private in api.ts; we use the same DOM event
+    // that setActiveUserId dispatches on window for cross-module listening.
+    window.addEventListener("ta:userChanged", onUserChanged);
+    return () => window.removeEventListener("ta:userChanged", onUserChanged);
+  }, []);
+
   // ── Actions ─────────────────────────────────────────────────────────────────
 
   const setMode = useCallback((m: HITLMode) => {
     setProfile((p) => {
       const next = { ...p, mode: m };
-      saveProfile(next);
+      saveProfile(next, getActiveUserId());
       return next;
     });
   }, []);
@@ -101,7 +114,7 @@ export function useHITL(): HITLState & HITLActions {
   const updateProfile = useCallback((partial: Partial<UserProfile>) => {
     setProfile((p) => {
       const next = { ...p, ...partial };
-      saveProfile(next);
+      saveProfile(next, getActiveUserId());
       return next;
     });
   }, []);

@@ -18,6 +18,10 @@ export function setActiveToken(token: string | null): void {
   _activeToken = token;
 }
 
+export function getActiveUserId(): string | null {
+  return _activeUserId;
+}
+
 // Fires whenever the active user changes so hooks can re-seed from localStorage
 // and trigger a fresh server fetch — auth resolution is always async.
 const _userChangeBus = new EventTarget();
@@ -28,6 +32,9 @@ export function setActiveUserId(userId: string | null): void {
   // the user ID is known. Auth resolution is always async so the initial mount
   // renders with _activeUserId === null and empty local state.
   _userChangeBus.dispatchEvent(new Event("userChanged"));
+  // Also fire on window so modules outside api.ts (e.g. useHITL) can reload
+  // their own per-user localStorage state without importing _userChangeBus.
+  try { window.dispatchEvent(new Event("ta:userChanged")); } catch {}
 }
 
 function _apiKey(): string {
