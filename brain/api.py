@@ -306,6 +306,9 @@ _MAX_CACHE = 100   # keep the 100 most-recent unique symbols
 # and to X-Api-Key callers. Other JWT users see only their own generated signals.
 # When unset (default), all authenticated users see system signals (legacy behaviour).
 _OWNER_USER_ID: str = os.environ.get("OWNER_USER_ID", "")
+# Optional: set DEMO_USER_ID to a Supabase user whose session should serve
+# pre-recorded snapshot data rather than live broker data.
+_DEMO_USER_ID: str = os.environ.get("DEMO_USER_ID", "")
 
 
 def _signal_cache_file() -> str:
@@ -482,6 +485,8 @@ _RATE_LIMITS: dict[str, tuple[int, int]] = {
     "/tastytrade-settings":   (20, 60),
     "/polygon-settings":      (20, 60),
     "/ngx-settings":          (20, 60),
+    "/demo/snapshot":         (5,  60),
+    "/demo/snapshot-info":    (20, 60),
     "/schwab-settings":       (20, 60),
     "/schwab-auth/url":       (10, 60),
     "/ibkr-settings":         (20, 60),
@@ -1157,10 +1162,11 @@ def get_risk_config(request: Request):
         from brain.risk_config import get_effective_risk_for_user, load_user_risk_config
         eff = get_effective_risk_for_user(user_id, base_eff)
         user_overrides = load_user_risk_config(user_id)
+        _cfg_is_owner = (not _OWNER_USER_ID) or (_OWNER_USER_ID and user_id == _OWNER_USER_ID)
         return {
             **eff,
             "source": "user" if user_overrides else ("dynamic" if _dynamic_config else "env"),
-            "overrides": dict(_dynamic_config),
+            "overrides": dict(_dynamic_config) if _cfg_is_owner else {},
             "user_overrides": user_overrides,
             "defaults": defaults,
         }
@@ -1624,6 +1630,145 @@ def delete_ngx_settings(request: Request):
     from brain.ngx_creds import delete_ngx_pulse_key
     existed = delete_ngx_pulse_key()
     return {"deleted": existed}
+
+
+# ── Demo account snapshot ─────────────────────────────────────────────────────
+
+@app.get("/demo/snapshot-info")
+def demo_snapshot_info_endpoint(request: Request):
+    """Return metadata about the saved demo snapshot (owner-only)."""
+    uid = getattr(request.state, "user_id", None)
+    if _OWNER_USER_ID and uid != _OWNER_USER_ID:
+        raise HTTPException(403, "Owner access required")
+    from brain.demo_store import demo_snapshot_info
+    return demo_snapshot_info()
+
+
+@app.post("/demo/snapshot")
+def take_demo_snapshot(request: Request):
+    """Capture the owner's current live state as the demo account's snapshot.
+
+    Captures: portfolio state, equity curve (1D/1M/1Y), cached signals, and
+    the last 50 orders.  The demo user (DEMO_USER_ID) will see this data
+    instead of live broker data.  Owner-only.
+    """
+    uid = getattr(request.state, "user_id", None)
+    if not uid:
+        raise HTTPException(403, "JWT authentication required")
+    if _OWNER_USER_ID and uid != _OWNER_USER_ID:
+        raise HTTPException(403, "Only the account owner can update the demo snapshot")
+
+    from config import get_settings
+    from datetime import timezone
+    cfg = get_settings()
+
+    # ── Portfolio state ───────────────────────────────────────────────────────
+    portfolio_data: dict = {}
+    try:
+        from data.portfolio import PortfolioFetcher
+        from broker.adapters.alpaca import AlpacaBrokerAdapter
+        ak, sk, base_url, _ = _resolve_alpaca_creds(uid, cfg)
+        if ak:
+            fetcher = PortfolioFetcher(AlpacaBrokerAdapter(ak, sk, base_url))
+            state = fetcher.snapshot()
+            portfolio_data = {
+                "timestamp":             state.timestamp.isoformat(),
+                "equity":                state.equity,
+                "cash":                  state.cash,
+                "buying_power":          state.buying_power,
+                "daily_pnl":             state.daily_pnl,
+                "daily_pnl_pct":         state.daily_pnl_pct,
+                "crypto_allocation_pct": state.crypto_allocation_pct,
+                "positions": [
+                    {
+                        "symbol":       p.symbol,
+                        "qty":          p.qty,
+                        "avg_entry":    p.avg_entry,
+                        "market_value": p.market_value,
+                        "unrealized_pl":p.unrealized_pl,
+                        "unrealized_plpc": p.unrealized_plpc,
+                        "current_price":p.current_price,
+                        "asset_class":  p.asset_class,
+                    }
+                    for p in (state.positions or [])
+                ],
+                "fetch_error": None,
+            }
+    except Exception as exc:
+        log.warning("Demo snapshot: portfolio fetch failed: %s", exc)
+
+    # ── Equity history ────────────────────────────────────────────────────────
+    history_data: dict[str, list] = {}
+    try:
+        ak, sk, base_url, _ = _resolve_alpaca_creds(uid, cfg)
+        if ak:
+            from broker.adapters.alpaca import AlpacaBrokerAdapter
+            broker = AlpacaBrokerAdapter(ak, sk, base_url)
+            for period in ("1D", "1M", "1Y"):
+                try:
+                    tf = "5Min" if period == "1D" else "1D"
+                    history_data[period] = broker.get_portfolio_history(period, tf)
+                except Exception as exc:
+                    log.warning("Demo snapshot: history %s fetch failed: %s", period, exc)
+                    history_data[period] = []
+    except Exception as exc:
+        log.warning("Demo snapshot: history fetch failed: %s", exc)
+
+    # ── Cached signals ────────────────────────────────────────────────────────
+    signals_data = sorted(
+        list(_signal_cache.values()),
+        key=lambda s: s.get("generated_at", ""),
+        reverse=True,
+    )
+
+    # ── Recent orders ─────────────────────────────────────────────────────────
+    orders_data: dict = {"orders": []}
+    try:
+        ak, sk, base_url, _ = _resolve_alpaca_creds(uid, cfg)
+        if ak:
+            from broker.adapters.alpaca import AlpacaBrokerAdapter
+            broker = AlpacaBrokerAdapter(ak, sk, base_url)
+            raw_orders = broker.get_orders(status="all", limit=50)
+            orders_data = {
+                "orders": [
+                    {
+                        "order_id":         o.order_id,
+                        "client_order_id":  o.client_order_id,
+                        "symbol":           o.symbol,
+                        "side":             o.side,
+                        "order_type":       o.order_type,
+                        "qty":              o.qty,
+                        "filled_qty":       o.filled_qty,
+                        "status":           o.status,
+                        "submitted_at":     o.submitted_at.isoformat() if o.submitted_at else None,
+                        "filled_at":        o.filled_at.isoformat() if o.filled_at else None,
+                        "limit_price":      o.limit_price,
+                        "stop_price":       o.stop_price,
+                        "filled_avg_price": o.filled_avg_price,
+                    }
+                    for o in raw_orders
+                ]
+            }
+    except Exception as exc:
+        log.warning("Demo snapshot: orders fetch failed: %s", exc)
+
+    snapshot = {
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "portfolio":   portfolio_data,
+        "history":     history_data,
+        "signals":     signals_data,
+        "orders":      orders_data,
+    }
+
+    from brain.demo_store import save_demo_snapshot
+    path = save_demo_snapshot(snapshot)
+    return {
+        "status":       "ok",
+        "captured_at":  snapshot["captured_at"],
+        "path":         path,
+        "signal_count": len(signals_data),
+        "order_count":  len(orders_data["orders"]),
+    }
 
 
 # ── Charles Schwab OAuth 2.0 endpoints ────────────────────────────────────────
@@ -2158,6 +2303,14 @@ def get_all_cached_signals(request: Request):
     Rationale fields are sanitised on the way out."""
     uid = getattr(request.state, "user_id", None) or "system"
 
+    # ── Demo account intercept ────────────────────────────────────────────────
+    if _DEMO_USER_ID and uid == _DEMO_USER_ID:
+        from brain.demo_store import load_demo_snapshot
+        snap = load_demo_snapshot()
+        if snap:
+            return snap.get("signals", [])
+        return []
+
     def _clean(s: dict) -> dict:
         rat = s.get("rationale", "")
         if rat and any(c in rat for c in ("**", "##", "\n")):
@@ -2450,6 +2603,21 @@ def get_portfolio(request: Request):
     _pf_user_id = getattr(request.state, "user_id", None)
     fetch_error: str | None = None
 
+    # ── Demo account intercept ────────────────────────────────────────────────
+    if _DEMO_USER_ID and _pf_user_id == _DEMO_USER_ID:
+        from brain.demo_store import load_demo_snapshot
+        snap = load_demo_snapshot()
+        if snap and snap.get("portfolio"):
+            return snap["portfolio"]
+        from datetime import timezone
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "equity": 0.0, "cash": 0.0, "buying_power": 0.0,
+            "daily_pnl": 0.0, "daily_pnl_pct": 0.0,
+            "crypto_allocation_pct": 0.0, "positions": [],
+            "fetch_error": "Demo snapshot not yet taken — ask the owner to generate one.",
+        }
+
     # Non-owner JWT users who have not configured their own Alpaca credentials must
     # not fall through to the system account (the owner's live trading account).
     # The owner is identified by OWNER_USER_ID. When unset, legacy behaviour applies
@@ -2524,6 +2692,14 @@ def get_orders(request: Request, status: str = "open"):
     from config import get_settings
     cfg = get_settings()
     _ord_user_id = getattr(request.state, "user_id", None)
+
+    # ── Demo account intercept ────────────────────────────────────────────────
+    if _DEMO_USER_ID and _ord_user_id == _DEMO_USER_ID:
+        from brain.demo_store import load_demo_snapshot
+        snap = load_demo_snapshot()
+        if snap:
+            return snap.get("orders", {"orders": []})
+        return {"orders": []}
 
     # Non-owner JWT users with no personal broker credentials must not see system account orders.
     _ord_is_owner = (not _OWNER_USER_ID) or (_OWNER_USER_ID and _ord_user_id == _OWNER_USER_ID)
@@ -3179,8 +3355,21 @@ def get_portfolio_history(period: str = "1D", request: Request = None):
     from config import get_settings
     cfg = get_settings()
 
-    # Resolve creds: per-user if JWT, system if X-Api-Key or no request
     _hist_user_id = getattr(request.state, "user_id", None) if request else None
+
+    # ── Demo account intercept ────────────────────────────────────────────────
+    if _DEMO_USER_ID and _hist_user_id == _DEMO_USER_ID:
+        from brain.demo_store import load_demo_snapshot
+        snap = load_demo_snapshot()
+        if snap:
+            return snap.get("history", {}).get(period, [])
+        return []
+
+    # ── Ownership guard (mirrors /portfolio) ──────────────────────────────────
+    _hist_is_owner = (not _OWNER_USER_ID) or (_OWNER_USER_ID and _hist_user_id == _OWNER_USER_ID)
+    if _hist_user_id and not _hist_is_owner and not _jwt_user_has_own_alpaca(_hist_user_id, cfg):
+        return []  # non-owner without personal broker → empty curve
+
     _hist_ak, _hist_sk, _hist_base_url, _hist_is_paper = _resolve_alpaca_creds(_hist_user_id, cfg)
 
     if not _hist_ak:

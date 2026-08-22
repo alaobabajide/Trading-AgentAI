@@ -1630,6 +1630,86 @@ function TradeStationPanel() {
   );
 }
 
+// ── Demo account snapshot panel ───────────────────────────────────────────────
+
+function DemoSnapshotPanel() {
+  const [info, setInfo]       = useState<{ available: boolean; captured_at: string | null; signal_count?: number; order_count?: number } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState<string | null>(null);
+  const [done, setDone]       = useState(false);
+  const [hidden, setHidden]   = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const { fetchDemoSnapshotInfo } = await import("../lib/api");
+        const d = await fetchDemoSnapshotInfo();
+        if (!cancelled) setInfo(d);
+      } catch (e: unknown) {
+        // 403 means not owner — hide the panel
+        const msg = (e as Error).message ?? "";
+        if (msg.includes("403")) setHidden(true);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  async function handleSnapshot() {
+    setLoading(true); setError(null); setDone(false);
+    try {
+      const { takeDemoSnapshot } = await import("../lib/api");
+      const result = await takeDemoSnapshot();
+      setInfo({ available: true, captured_at: result.captured_at, signal_count: result.signal_count, order_count: result.order_count });
+      setDone(true);
+      setTimeout(() => setDone(false), 4000);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (hidden) return null;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-slate-400 leading-relaxed">
+        Capture a snapshot of your current portfolio, equity curve, signals, and orders.
+        Demo users will see this data instead of any live broker connection — no real trades are ever placed from a demo session.
+      </p>
+
+      {info && (
+        <div className={clsx(
+          "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border",
+          info.available
+            ? "border-green-400/30 bg-green-500/10 text-green-400"
+            : "border-white/10 bg-white/5 text-slate-400",
+        )}>
+          <span className={clsx("w-1.5 h-1.5 rounded-full", info.available ? "bg-green-400" : "bg-slate-500")} />
+          {info.available
+            ? `Snapshot available — taken ${info.captured_at ? new Date(info.captured_at).toLocaleString() : "—"} · ${info.signal_count ?? 0} signals · ${info.order_count ?? 0} orders`
+            : "No snapshot yet"}
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={handleSnapshot}
+        disabled={loading}
+        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-500/20 border border-brand-400/30 text-sm text-brand-300 hover:bg-brand-500/30 transition-colors disabled:opacity-40"
+      >
+        {loading && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+        {loading ? "Capturing snapshot…" : "Take Demo Snapshot Now"}
+      </button>
+
+      {done  && <p className="text-xs text-green-400">Snapshot saved — demo users will now see your current data.</p>}
+      {error && <p className="text-xs text-red-400">{error}</p>}
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export function SettingsPage() {
@@ -1822,6 +1902,15 @@ export function SettingsPage() {
           <p className="text-xs font-semibold text-slate-300 mb-4">NGX Pulse — Nigerian Exchange Data</p>
           <NgxPulsePanel />
         </div>
+      </Section>
+
+      {/* ── Demo Account ──────────────────────────────────────────────────── */}
+      <Section
+        icon={<Package className="w-4 h-4" />}
+        title="Demo Account"
+        subtitle="Let prospective users explore the app with a snapshot of your real data — no live broker connection"
+      >
+        <DemoSnapshotPanel />
       </Section>
 
       {/* ── Brain / LLM ───────────────────────────────────────────────────── */}

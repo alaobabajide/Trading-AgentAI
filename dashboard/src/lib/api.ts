@@ -1382,6 +1382,37 @@ export function useNgxPulseSettings() {
   return { settings, saving, saved, error, saveKey, removeKey };
 }
 
+// ── Demo account snapshot ──────────────────────────────────────────────────────
+
+export interface DemoSnapshotInfo {
+  available:     boolean;
+  captured_at:   string | null;
+  signal_count?: number;
+  order_count?:  number;
+}
+
+export async function fetchDemoSnapshotInfo(): Promise<DemoSnapshotInfo> {
+  const res = await fetch(`${BASE}/demo/snapshot-info`, {
+    signal:  AbortSignal.timeout(8000),
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export async function takeDemoSnapshot(): Promise<{ captured_at: string; signal_count: number; order_count: number }> {
+  const res = await fetch(`${BASE}/demo/snapshot`, {
+    method:  "POST",
+    headers: apiHeaders(),
+    signal:  AbortSignal.timeout(30000),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  return safeJson(res);
+}
+
 // ── tastytrade settings ────────────────────────────────────────────────────────
 
 export interface TastytradeSettings {

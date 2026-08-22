@@ -17,7 +17,8 @@ import { LoginPage } from "./pages/LoginPage";
 import { SetupBanner } from "./components/SetupBanner";
 import { MODE_CONFIG, HOT_VETO_SECONDS } from "./lib/hitl";
 import { useCreditStatus, getActiveUserId } from "./lib/api";
-import { AlertTriangle, Loader2, X } from "lucide-react";
+import { DEMO_USER_ID } from "./lib/supabase";
+import { AlertTriangle, Loader2, X, Eye } from "lucide-react";
 
 type Page = "dashboard" | "signals" | "positions" | "technical" | "fundamental" | "charts" | "indices" | "brain" | "settings";
 type TradingEnv = "paper" | "live";
@@ -58,6 +59,20 @@ function CreditWarningBanner() {
       >
         <X className="w-4 h-4" />
       </button>
+    </div>
+  );
+}
+
+function DemoAccountBanner() {
+  const { user } = useAuth();
+  if (!DEMO_USER_ID || !user || user.id !== DEMO_USER_ID) return null;
+  return (
+    <div className="shrink-0 flex items-center gap-3 px-8 py-2.5 border-b border-violet-500/30 bg-violet-500/10 text-sm font-medium text-violet-300">
+      <Eye className="w-4 h-4 shrink-0" />
+      <span className="flex-1">
+        <strong>Demo Account</strong> — You&apos;re viewing a snapshot of live data.
+        No real trades are placed and no broker is connected.
+      </span>
     </div>
   );
 }
@@ -221,6 +236,9 @@ function AppInner() {
             </div>
           </div>
         </div>
+
+        {/* Demo account banner — visible only when logged in as the demo user */}
+        <DemoAccountBanner />
 
         {/* Setup banner — only visible when Brain API is online but keys are missing */}
         <SetupBanner />

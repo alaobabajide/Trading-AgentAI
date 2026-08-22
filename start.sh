@@ -11,8 +11,8 @@ if [ -z "$BRAIN_API_KEY" ]; then
 fi
 
 # ── 0b. Inject runtime config for the dashboard ──────────────────────────────
-printf 'window.__TA_CONFIG__ = { apiKey: "%s", supabaseUrl: "%s", supabaseAnonKey: "%s" };\n' \
-    "$BRAIN_API_KEY" "$SUPABASE_URL" "$SUPABASE_ANON_KEY" \
+printf 'window.__TA_CONFIG__ = { apiKey: "%s", supabaseUrl: "%s", supabaseAnonKey: "%s", ownerUserId: "%s", demoUserId: "%s" };\n' \
+    "$BRAIN_API_KEY" "$SUPABASE_URL" "$SUPABASE_ANON_KEY" "$OWNER_USER_ID" "$DEMO_USER_ID" \
     > /usr/share/nginx/html/runtime-config.js
 
 # ── 1. Start brain API (uvicorn) on 127.0.0.1:8000 in the background ─────────
