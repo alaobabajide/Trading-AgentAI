@@ -1681,14 +1681,14 @@ def take_demo_snapshot(request: Request):
                 "crypto_allocation_pct": state.crypto_allocation_pct,
                 "positions": [
                     {
-                        "symbol":       p.symbol,
-                        "qty":          p.qty,
-                        "avg_entry":    p.avg_entry,
-                        "market_value": p.market_value,
-                        "unrealized_pl":p.unrealized_pl,
-                        "unrealized_plpc": p.unrealized_plpc,
-                        "current_price":p.current_price,
-                        "asset_class":  p.asset_class,
+                        "symbol":             p.symbol,
+                        "asset_class":        p.asset_class,
+                        "qty":                p.qty,
+                        "avg_entry_price":    p.avg_entry_price,
+                        "current_price":      p.current_price,
+                        "market_value":       p.market_value,
+                        "unrealized_pnl":     p.unrealized_pnl,
+                        "unrealized_pnl_pct": p.unrealized_pnl_pct,
                     }
                     for p in (state.positions or [])
                 ],
@@ -2562,6 +2562,16 @@ def execute_trade(req: ExecuteRequest, request: Request):
 
     cfg = get_settings()
     _exec_user_id = getattr(request.state, "user_id", None)
+
+    # ── Demo account block ────────────────────────────────────────────────────
+    if _DEMO_USER_ID and _exec_user_id == _DEMO_USER_ID:
+        raise HTTPException(403, "Trade execution is disabled for the demo account")
+
+    # ── Ownership guard ───────────────────────────────────────────────────────
+    _exec_is_owner = (not _OWNER_USER_ID) or (_OWNER_USER_ID and _exec_user_id == _OWNER_USER_ID)
+    if _exec_user_id and not _exec_is_owner and not _jwt_user_has_own_alpaca(_exec_user_id, cfg):
+        raise HTTPException(403, "No broker configured — add your API key in Settings → Broker")
+
     from brain.risk_config import get_effective_risk_for_user as _exec_risk_fn
     _exec_eff = _exec_risk_fn(_exec_user_id, _effective_config(cfg))
 
@@ -4170,11 +4180,23 @@ async def tradingview_webhook(user_id: str, secret: str, request: Request):
     if _TRADING_PAUSED:
         raise HTTPException(status_code=503, detail="Trading paused — POST /resume to restart")
 
+    # ── Demo account block ────────────────────────────────────────────────────
+    if _DEMO_USER_ID and user_id == _DEMO_USER_ID:
+        log.info("TradingView webhook: demo account %s — skipping execution", user_id[:8])
+        return {"status": "ok", "detail": "Demo account — no trade executed"}
+
     from config import get_settings
     from brain.signal import TradingSignal
     from brain.risk_config import get_effective_risk_for_user as _wh_risk_fn
 
     cfg = get_settings()
+
+    # ── Ownership guard: non-owner users must have personal broker credentials ─
+    _wh_is_owner = (not _OWNER_USER_ID) or (_OWNER_USER_ID and user_id == _OWNER_USER_ID)
+    if not _wh_is_owner and not _jwt_user_has_own_alpaca(user_id, cfg):
+        log.warning("Webhook: non-owner %s has no personal broker creds — rejecting", user_id[:8])
+        raise HTTPException(403, "No broker configured — add your API key in Settings → Broker")
+
     _wh_eff = _wh_risk_fn(user_id, _effective_config(cfg))
 
     sl_pct  = _wh_eff.get("stop_loss_pct",  cfg.stop_loss_pct)

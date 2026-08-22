@@ -167,7 +167,7 @@ export function TechnicalPage() {
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
               </span>
-              Live data · Alpaca
+              Live data · {assetClass === "ngx" ? "NGX Pulse" : "Alpaca"}
             </span>
           )}
         </div>
@@ -208,7 +208,7 @@ export function TechnicalPage() {
       {loading && bars.length === 0 && (
         <div className="glass rounded-2xl p-8 text-center text-slate-500 text-sm">
           <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2" />
-          Fetching real market data from Alpaca…
+          Fetching market data…
         </div>
       )}
 

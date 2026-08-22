@@ -73,7 +73,7 @@ function OrdersTable({ orders }: { orders: AlpacaOrder[] }) {
   if (orders.length === 0) {
     return (
       <p className="text-sm text-slate-500 text-center py-4">
-        No orders found on this Alpaca account yet.
+        No orders found on this account yet.
       </p>
     );
   }
@@ -267,7 +267,7 @@ export function PositionsPage() {
               ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
               : "bg-red-500/10 text-red-400 border-red-500/20"
         }`}>
-          {apiState === "live" ? "Live — Alpaca" : apiState === "loading" ? "Connecting…" : "Connection error"}
+          {apiState === "live" ? "Live" : apiState === "loading" ? "Connecting…" : "Connection error"}
         </span>
       </div>
 
@@ -279,7 +279,7 @@ export function PositionsPage() {
             <div className="text-sm font-semibold text-red-400">Portfolio fetch error</div>
             <div className="text-xs text-slate-400 mt-0.5">{portfolioError}</div>
             <div className="text-xs text-slate-500 mt-1">
-              Check that ALPACA_API_KEY and ALPACA_SECRET_KEY are set correctly in Railway environment variables.
+              Add your broker API key in Settings → Broker to connect your account.
             </div>
           </div>
         </div>
@@ -291,7 +291,7 @@ export function PositionsPage() {
           <Clock className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
           <div className="space-y-1 text-xs">
             <div className="text-sm font-semibold text-amber-400">
-              {pendingOrders.length} order{pendingOrders.length > 1 ? "s" : ""} pending — queued at Alpaca
+              {pendingOrders.length} order{pendingOrders.length > 1 ? "s" : ""} pending — queued with broker
             </div>
             {market.open ? (
               <p className="text-slate-300">

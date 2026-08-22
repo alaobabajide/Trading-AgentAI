@@ -5,7 +5,8 @@ import { EquityChart } from "../components/EquityChart";
 import { PositionsTable } from "../components/PositionsTable";
 import { SignalCard } from "../components/SignalCard";
 import { StatCard } from "../components/StatCard";
-import { usePortfolio, useSignals, useEquitySeries, useRiskConfig } from "../lib/api";
+import { usePortfolio, useSignals, useEquitySeries, useRiskConfig, getActiveUserId } from "../lib/api";
+import { DEMO_USER_ID } from "../lib/supabase";
 import type { EquityPoint } from "../lib/types";
 
 function LiveBadge({ live }: { live: boolean }) {
@@ -29,6 +30,7 @@ export function Dashboard() {
   const [equityPeriod, setEquityPeriod] = useState<EquityPeriod>("1D");
   const { series: liveSeries, isLive: equityLive } = useEquitySeries(equityPeriod);
   const isLive = apiState === "live";
+  const isDemo = DEMO_USER_ID ? getActiveUserId() === DEMO_USER_ID : false;
 
   // Build the equity series — never use random mock data.
   // Priority:
@@ -116,7 +118,7 @@ export function Dashboard() {
                 ))}
               </div>
               <span className="text-xs text-slate-500">
-                {equityLive ? "Alpaca" : isLive ? "Connecting…" : "Waiting for data"}
+                {isDemo ? "Demo snapshot" : equityLive ? "Live data" : isLive ? "Connecting…" : "Waiting for data"}
               </span>
             </div>
           </div>
