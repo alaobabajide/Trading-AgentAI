@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
   Brain, Loader2, Send, CheckCircle2, XCircle, Clock,
-  Zap, DollarSign, BarChart2, AlertCircle, Trash2, Sparkles, Bell, BellOff,
+  Zap, DollarSign, BarChart2, AlertCircle, Trash2, Sparkles, Bell, BellOff, Mic, MicOff,
 } from "lucide-react";
 import clsx from "clsx";
 import { SignalCard } from "../components/SignalCard";
@@ -50,6 +50,63 @@ interface WatchAlert {
   trigger_price: number;
   trigger_debate: boolean;
   triggered_at: string;
+}
+
+// ── Speech recognition hook ───────────────────────────────────────────────────
+
+type SpeechState = "idle" | "listening" | "unsupported";
+
+function useSpeechInput(onInterim: (t: string) => void, onFinal: (t: string) => void) {
+  const [state, setState] = useState<SpeechState>("idle");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recRef = useRef<any>(null);
+
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const SR = w.SpeechRecognition ?? w.webkitSpeechRecognition;
+    if (!SR) { setState("unsupported"); return; }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rec: any = new SR();
+    rec.continuous      = false;
+    rec.interimResults  = true;
+    rec.lang            = "en-US";
+    rec.maxAlternatives = 1;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    rec.onresult = (e: any) => {
+      let interim = "";
+      let finalText = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += t;
+        else interim += t;
+      }
+      if (interim)   onInterim(interim);
+      if (finalText) onFinal(finalText);
+    };
+
+    rec.onerror = () => setState("idle");
+    rec.onend   = () => setState("idle");
+
+    recRef.current = rec;
+    setState("idle");
+  // onInterim / onFinal are stable callbacks — intentionally omitted from deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function toggle() {
+    if (!recRef.current || state === "unsupported") return;
+    if (state === "listening") {
+      recRef.current.stop();
+    } else {
+      recRef.current.start();
+      setState("listening");
+    }
+  }
+
+  return { state, toggle };
 }
 
 // ── Suggestion chips ──────────────────────────────────────────────────────────
@@ -383,6 +440,15 @@ export function BrainPage({ paperMode: _paperMode = true, signalPaperMode = fals
   const hitl     = useHITLContext();
   const inputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Speech input: interim results populate the field live; final result replaces it cleanly
+  const speech = useSpeechInput(
+    (interim) => setInput(interim),
+    (final)   => {
+      setInput(final);
+      setTimeout(() => inputRef.current?.focus(), 50);
+    },
+  );
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -718,21 +784,55 @@ export function BrainPage({ paperMode: _paperMode = true, signalPaperMode = fals
               ))}
             </div>
             <span className="text-[10px] text-slate-700 font-mono ml-auto">
-              Enter to send
+              {speech.state === "unsupported" ? "Enter to send" : "Enter to send · mic to speak"}
             </span>
           </div>
 
-          {/* Query input + send button */}
+          {/* Query input + mic + send */}
           <div className="flex gap-2">
-            <input
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              disabled={isProcessing}
-              placeholder="Ask the agents anything… or type a ticker to run a debate"
-              className="flex-1 bg-surface-700 rounded-xl px-4 py-2.5 text-sm font-mono outline-none focus:ring-1 focus:ring-brand-500 placeholder:text-slate-600 disabled:opacity-50"
-            />
+            <div className="relative flex-1">
+              <input
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                disabled={isProcessing}
+                placeholder={
+                  speech.state === "listening"
+                    ? "Listening… speak your query"
+                    : "Ask the agents anything… or type a ticker to run a debate"
+                }
+                className={clsx(
+                  "w-full bg-surface-700 rounded-xl px-4 py-2.5 pr-10 text-sm font-mono outline-none focus:ring-1 focus:ring-brand-500 placeholder:text-slate-600 disabled:opacity-50 transition-all",
+                  speech.state === "listening" && "ring-1 ring-red-500/60 placeholder:text-red-400/60",
+                )}
+              />
+              {/* Live recording pulse dot inside the field */}
+              {speech.state === "listening" && (
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+              )}
+            </div>
+
+            {/* Mic button — hidden when unsupported */}
+            {speech.state !== "unsupported" && (
+              <button
+                onClick={speech.toggle}
+                disabled={isProcessing}
+                aria-label={speech.state === "listening" ? "Stop recording" : "Start voice input"}
+                title={speech.state === "listening" ? "Stop recording" : "Speak your query"}
+                className={clsx(
+                  "flex items-center justify-center w-10 py-2.5 rounded-xl border transition-all shrink-0 disabled:opacity-40",
+                  speech.state === "listening"
+                    ? "bg-red-500/20 border-red-500/40 text-red-400 hover:bg-red-500/30"
+                    : "border-white/5 bg-surface-700 text-slate-500 hover:text-slate-300 hover:border-white/10",
+                )}
+              >
+                {speech.state === "listening"
+                  ? <MicOff className="w-4 h-4" />
+                  : <Mic className="w-4 h-4" />}
+              </button>
+            )}
+
             <button
               onClick={() => handleQuery(input)}
               disabled={!input.trim() || isProcessing}
