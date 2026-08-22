@@ -23,31 +23,7 @@ export function setActiveToken(token: string | null): void {
 const _userChangeBus = new EventTarget();
 
 export function setActiveUserId(userId: string | null): void {
-  const prev = _activeUserId;
   _activeUserId = userId;
-  // One-time migration: copy old non-namespaced data into the user-scoped key
-  // BEFORE removing the old key, so existing signals/config are preserved.
-  if (userId && prev !== userId) {
-    try {
-      const newSignalsKey = `ta_signals_cache_v3_${userId}`;
-      if (!localStorage.getItem(newSignalsKey)) {
-        const old = localStorage.getItem("ta_signals_cache_v3");
-        if (old) localStorage.setItem(newSignalsKey, old);
-      }
-    } catch { /* ignore */ }
-    try {
-      const newConfigKey = `ta_risk_config_v1_${userId}`;
-      if (!localStorage.getItem(newConfigKey)) {
-        const old = localStorage.getItem("ta_risk_config_v1");
-        if (old) localStorage.setItem(newConfigKey, old);
-      }
-    } catch { /* ignore */ }
-    // Now safe to remove the old flat keys
-    try { localStorage.removeItem("ta_signals_cache_v3"); } catch { /* ignore */ }
-    try { localStorage.removeItem("ta_signals_cache_v2"); } catch { /* ignore */ }
-    try { localStorage.removeItem("ta_signals_cache_v1"); } catch { /* ignore */ }
-    try { localStorage.removeItem("ta_risk_config_v1"); } catch { /* ignore */ }
-  }
   // Notify hooks to re-seed from localStorage and re-poll the server now that
   // the user ID is known. Auth resolution is always async so the initial mount
   // renders with _activeUserId === null and empty local state.

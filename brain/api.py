@@ -301,6 +301,12 @@ def _clean_rationale(text: str) -> str:
 # volume is mounted at /data or DATA_DIR.  Falls back silently to /tmp.
 _MAX_CACHE = 100   # keep the 100 most-recent unique symbols
 
+# Optional: set OWNER_USER_ID in Railway env vars to the owner's Supabase user ID.
+# When set, orchestrator signals (tagged _uid="system") are visible ONLY to the owner
+# and to X-Api-Key callers. Other JWT users see only their own generated signals.
+# When unset (default), all authenticated users see system signals (legacy behaviour).
+_OWNER_USER_ID: str = os.environ.get("OWNER_USER_ID", "")
+
 
 def _signal_cache_file() -> str:
     """Return the best writable path for the signal cache JSON file.
@@ -723,6 +729,20 @@ def _resolve_alpaca_creds(user_id: str | None, cfg) -> tuple[str, str, str, bool
         cfg.alpaca_base_url or "https://paper-api.alpaca.markets",
         "paper" in (cfg.alpaca_base_url or "").lower(),
     )
+
+
+def _jwt_user_has_own_alpaca(user_id: str, cfg) -> bool:
+    """Return True only if this JWT user has their own Alpaca API key stored.
+
+    Used to prevent JWT users from silently falling through to the system
+    account (the owner's Alpaca) when they have no personal credentials.
+    """
+    try:
+        enc_key = _get_enc_key()
+        from brain.alpaca_creds import get_effective_alpaca_creds
+        return not get_effective_alpaca_creds(user_id, enc_key, cfg).using_system_keys
+    except Exception:
+        return False
 
 
 def _resolve_broker(user_id: str | None, cfg):
@@ -2082,15 +2102,26 @@ def get_all_cached_signals(request: Request):
             s = {**s, "rationale": _clean_rationale(rat)}
         return s
 
+    # Determine whether this user can see orchestrator ("system") signals.
+    # X-Api-Key callers (uid="system") always see them.
+    # If OWNER_USER_ID is configured, only the designated owner sees system signals;
+    # all other JWT users see only their own signals.
+    # If OWNER_USER_ID is not configured (legacy / single-user mode), all authenticated
+    # users see system signals — preserves original behaviour for existing deployments.
+    _see_system = (
+        uid == "system"
+        or (not _OWNER_USER_ID)
+        or (_OWNER_USER_ID and uid == _OWNER_USER_ID)
+    )
+
     # Show:
     #  • Entries tagged with this user's own id (signals they generated manually)
-    #  • Entries tagged "system" (orchestrator's automated trading-engine cycles)
-    #  • Entries with no _uid tag (signals generated before per-user scoping)
-    # "system" signals are the auto-trading engine's output and are shared read-only
-    # across all authenticated users — each user sees the engine's analysis.
+    #  • Entries tagged "system" (orchestrator) when _see_system is True
+    #  • Entries with no _uid tag (generated before per-user scoping) — treated as system
     user_signals = [
         v for v in _signal_cache.values()
-        if v.get("_uid", "system") in (uid, "system")
+        if v.get("_uid", "system") == uid
+        or (_see_system and v.get("_uid", "system") == "system")
     ]
     return sorted(
         (_clean(s) for s in user_signals),
@@ -2355,8 +2386,21 @@ def get_portfolio(request: Request):
 
     cfg = get_settings()
     _pf_user_id = getattr(request.state, "user_id", None)
-    _pf_ak, _pf_sk, _pf_base_url, _ = _resolve_alpaca_creds(_pf_user_id, cfg)
     fetch_error: str | None = None
+
+    # JWT users who have not configured their own Alpaca credentials must not
+    # fall through to the system account (the owner's live trading account).
+    if _pf_user_id and not _jwt_user_has_own_alpaca(_pf_user_id, cfg):
+        state = PortfolioState(timestamp=datetime.now(timezone.utc), equity=0.0, cash=0.0)
+        return {
+            "timestamp":             state.timestamp.isoformat(),
+            "equity":                0.0, "cash": 0.0, "buying_power": 0.0,
+            "daily_pnl":             0.0, "daily_pnl_pct": 0.0,
+            "crypto_allocation_pct": 0.0, "positions": [],
+            "fetch_error": "No broker configured — add your Alpaca API key in Settings → Broker",
+        }
+
+    _pf_ak, _pf_sk, _pf_base_url, _ = _resolve_alpaca_creds(_pf_user_id, cfg)
 
     if not _pf_ak:
         fetch_error = "ALPACA_API_KEY is not configured — check Settings"
@@ -2415,6 +2459,11 @@ def get_orders(request: Request, status: str = "open"):
     from config import get_settings
     cfg = get_settings()
     _ord_user_id = getattr(request.state, "user_id", None)
+
+    # JWT users with no personal broker credentials must not see the system account orders.
+    if _ord_user_id and not _jwt_user_has_own_alpaca(_ord_user_id, cfg):
+        return {"orders": [], "fetch_error": "No broker configured — add your Alpaca API key in Settings → Broker"}
+
     _ord_ak, _ord_sk, _ord_base_url, _ = _resolve_alpaca_creds(_ord_user_id, cfg)
 
     if not _ord_ak:
