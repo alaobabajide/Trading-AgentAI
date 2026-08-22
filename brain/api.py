@@ -297,10 +297,39 @@ def _clean_rationale(text: str) -> str:
 
 
 # ── Persistent signal cache ────────────────────────────────────────────────────
-# Survives uvicorn/process restarts within the same container.
-# Falls back silently if the filesystem is read-only.
-_CACHE_FILE = os.environ.get("SIGNAL_CACHE_FILE", "/tmp/ta_signal_cache.json")
-_MAX_CACHE  = 100   # keep the 100 most-recent unique symbols
+# Survives uvicorn/process restarts AND Railway redeploys when a persistent
+# volume is mounted at /data or DATA_DIR.  Falls back silently to /tmp.
+_MAX_CACHE = 100   # keep the 100 most-recent unique symbols
+
+
+def _signal_cache_file() -> str:
+    """Return the best writable path for the signal cache JSON file.
+
+    Priority: SIGNAL_CACHE_FILE env var → DATA_DIR env var → /data → /tmp.
+    Matching order_history._store_path() so both files land in the same volume.
+    """
+    explicit = os.environ.get("SIGNAL_CACHE_FILE", "")
+    if explicit:
+        return explicit
+    candidates = [
+        os.environ.get("DATA_DIR", ""),
+        "/data",
+        os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")),
+    ]
+    for d in (c for c in candidates if c):
+        try:
+            os.makedirs(d, exist_ok=True)
+            probe = os.path.join(d, ".write_probe")
+            with open(probe, "w") as f:
+                f.write("ok")
+            os.remove(probe)
+            return os.path.join(d, "ta_signal_cache.json")
+        except Exception:
+            continue
+    return "/tmp/ta_signal_cache.json"
+
+
+_CACHE_FILE = _signal_cache_file()
 
 
 def _load_cache() -> dict[str, dict]:
@@ -318,9 +347,16 @@ def _load_cache() -> dict[str, dict]:
 
 
 def _save_cache(cache: dict[str, dict]) -> None:
+    tmp = _CACHE_FILE + ".tmp"
     try:
-        with open(_CACHE_FILE, "w") as f:
+        os.makedirs(os.path.dirname(_CACHE_FILE) or ".", exist_ok=True)
+        with open(tmp, "w") as f:
             json.dump(cache, f)
+        os.replace(tmp, _CACHE_FILE)
+        try:
+            os.chmod(_CACHE_FILE, 0o600)
+        except Exception:
+            pass
     except Exception as exc:
         log.warning("Could not persist signal cache: %s", exc)
 

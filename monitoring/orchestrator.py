@@ -331,11 +331,6 @@ class Orchestrator:
             log.info("SKIP %s — kill switch active (trading paused)", symbol)
             return
 
-        # ── Gate 3: market hours (stocks only — crypto trades 24/7) ──────────
-        if asset_class == "stock" and not self._is_market_open():
-            log.debug("SKIP %s — market closed (signal cached, will execute at open)", symbol)
-            return
-
         # ── Gate 3.5: COLD cooldown — skip symbols quiet in recent cycles ──────
         with self._cold_lock:
             if any(symbol in past for past in self._cold_history):
@@ -393,6 +388,12 @@ class Orchestrator:
             log.info("  → %s for %s (tier=%s) — no order submitted", action, symbol, tier)
             with self._cold_lock:
                 self._curr_cold_symbols.add(symbol)
+            return
+
+        # ── Gate 3 (order execution guard): market hours for stocks ──────────
+        # Signal was already generated and cached above — only block order placement.
+        if asset_class == "stock" and not self._is_market_open():
+            log.info("  → %s signal for %s cached; order deferred — market closed", action, symbol)
             return
 
         # ── Gate 5: don't add to a position that already exists; enforce max concurrent + exposure ──
