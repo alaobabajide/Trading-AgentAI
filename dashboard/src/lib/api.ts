@@ -18,6 +18,10 @@ export function setActiveToken(token: string | null): void {
   _activeToken = token;
 }
 
+// Fires whenever the active user changes so hooks can re-seed from localStorage
+// and trigger a fresh server fetch — auth resolution is always async.
+const _userChangeBus = new EventTarget();
+
 export function setActiveUserId(userId: string | null): void {
   const prev = _activeUserId;
   _activeUserId = userId;
@@ -44,6 +48,10 @@ export function setActiveUserId(userId: string | null): void {
     try { localStorage.removeItem("ta_signals_cache_v1"); } catch { /* ignore */ }
     try { localStorage.removeItem("ta_risk_config_v1"); } catch { /* ignore */ }
   }
+  // Notify hooks to re-seed from localStorage and re-poll the server now that
+  // the user ID is known. Auth resolution is always async so the initial mount
+  // renders with _activeUserId === null and empty local state.
+  _userChangeBus.dispatchEvent(new Event("userChanged"));
 }
 
 function _apiKey(): string {
@@ -301,6 +309,25 @@ export function useSignals(pollIntervalMs = 30_000) {
     const id = setInterval(poll, pollIntervalMs);
     return () => { cancelled = true; clearInterval(id); };
   }, [pollIntervalMs]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-seed from localStorage and immediately re-poll the server whenever the
+  // user ID becomes available. The initial mount always runs with _activeUserId
+  // null (Supabase auth is async), so loadStoredSignals() returns [] on first
+  // render. This effect catches the moment auth resolves and fills the gap.
+  useEffect(() => {
+    let cancelled = false;
+    function onUserChanged() {
+      const stored = loadStoredSignals();
+      if (stored.length > 0) {
+        setLiveSignals((prev) => mergeSignals(prev, stored));
+      }
+      fetchCachedSignals()
+        .then((data) => { if (!cancelled) applyIncoming(data as Signal[]); })
+        .catch(() => { /* regular poll will retry */ });
+    }
+    _userChangeBus.addEventListener("userChanged", onUserChanged);
+    return () => { cancelled = true; _userChangeBus.removeEventListener("userChanged", onUserChanged); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function load(manual = false) {
     if (manual) setRefreshing(true);

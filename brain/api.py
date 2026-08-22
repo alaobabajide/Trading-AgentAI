@@ -2046,12 +2046,15 @@ def get_all_cached_signals(request: Request):
             s = {**s, "rationale": _clean_rationale(rat)}
         return s
 
-    # Include entries that belong to this user OR legacy entries with no _uid tag
-    # (signals generated before per-user scoping was added — shown to all JWT users
-    # for backward compatibility; replaced by new user-scoped entries as they regenerate).
+    # Show:
+    #  • Entries tagged with this user's own id (signals they generated manually)
+    #  • Entries tagged "system" (orchestrator's automated trading-engine cycles)
+    #  • Entries with no _uid tag (signals generated before per-user scoping)
+    # "system" signals are the auto-trading engine's output and are shared read-only
+    # across all authenticated users — each user sees the engine's analysis.
     user_signals = [
         v for v in _signal_cache.values()
-        if v.get("_uid", "legacy") in (uid, "legacy")
+        if v.get("_uid", "system") in (uid, "system")
     ]
     return sorted(
         (_clean(s) for s in user_signals),
@@ -2062,11 +2065,12 @@ def get_all_cached_signals(request: Request):
 
 @app.delete("/signals/cached")
 def clear_all_cached_signals(request: Request):
-    """Wipe the current user's entries (and any legacy untagged entries) from the cache."""
+    """Wipe the current user's own signals from the cache.
+    System/orchestrator signals are shared and are not cleared by individual users."""
     uid = getattr(request.state, "user_id", None) or "system"
     keys_to_del = [
         k for k, v in _signal_cache.items()
-        if v.get("_uid", "legacy") in (uid, "legacy")
+        if v.get("_uid") == uid  # exact match only — never wipe system signals
     ]
     for k in keys_to_del:
         del _signal_cache[k]
