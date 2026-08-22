@@ -4,7 +4,7 @@ import {
   HITLMode, UserProfile, DEFAULT_PROFILE,
   MODE_CONFIG, loadProfile, saveProfile,
 } from "../lib/hitl";
-import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload, useWebhookSettings, useBrokerSettings, useTastytradeSettings, TastytradeSavePayload, usePolygonSettings, useSchwabSettings, useIBKRSettings, useKrakenSettings, useCoinbaseSettings, useTradeStationSettings } from "../lib/api";
+import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload, useWebhookSettings, useBrokerSettings, useTastytradeSettings, TastytradeSavePayload, usePolygonSettings, useNgxPulseSettings, useSchwabSettings, useIBKRSettings, useKrakenSettings, useCoinbaseSettings, useTradeStationSettings } from "../lib/api";
 import { useEffect, useState } from "react";
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
@@ -459,6 +459,76 @@ function PolygonPanel() {
         Free tier: 15-min delayed.
         Starter plan: real-time. Without a key, the system falls back to Alpaca market data.
         Get a free key at <span className="text-brand-400/70">polygon.io</span>.
+      </p>
+    </div>
+  );
+}
+
+function NgxPulsePanel() {
+  const ngx = useNgxPulseSettings();
+  const [apiKeyVal, setApiKeyVal] = useState("");
+
+  const sourceLabel: Record<string, string> = {
+    stored: "Your key — NGX market data active",
+    env:    "System key — NGX market data active",
+    none:   "Not configured — NGX charts unavailable",
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Status badge */}
+      <div className={clsx(
+        "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border",
+        ngx.settings?.source === "none"
+          ? "border-white/10 bg-white/5 text-slate-400"
+          : "border-green-400/30 bg-green-500/10 text-green-400",
+      )}>
+        <span className={clsx("w-1.5 h-1.5 rounded-full", ngx.settings?.source === "none" ? "bg-slate-500" : "bg-green-400")} />
+        {ngx.settings ? sourceLabel[ngx.settings.source] : "Loading…"}
+      </div>
+
+      {/* API key input */}
+      <div className="space-y-1">
+        <label className="text-[11px] text-slate-400 uppercase tracking-wide">
+          NGX Pulse API Key {ngx.settings?.stored_key && <span className="text-green-400/80 ml-1 normal-case">(saved)</span>}
+        </label>
+        <div className="flex gap-2">
+          <input
+            type="password"
+            autoComplete="off"
+            placeholder={ngx.settings?.stored_key ? "leave blank to keep saved key" : "ngx_xxxxxxxxxxxxxxxx"}
+            value={apiKeyVal}
+            onChange={(e) => setApiKeyVal(e.target.value)}
+            className="flex-1 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-brand-100 placeholder-slate-500 focus:outline-none focus:border-brand-400/50"
+          />
+          <button
+            type="button"
+            onClick={() => { ngx.saveKey(apiKeyVal); setApiKeyVal(""); }}
+            disabled={ngx.saving || !apiKeyVal.trim()}
+            className="px-4 py-2 rounded-lg bg-brand-500/20 border border-brand-400/30 text-sm text-brand-300 hover:bg-brand-500/30 transition-colors disabled:opacity-40 shrink-0"
+          >
+            {ngx.saving ? "Saving…" : "Save"}
+          </button>
+          {ngx.settings?.stored_key && (
+            <button
+              type="button"
+              onClick={ngx.removeKey}
+              disabled={ngx.saving}
+              className="px-3 py-2 rounded-lg border border-white/10 text-xs text-slate-400 hover:text-red-400 hover:border-red-400/30 transition-colors disabled:opacity-40 shrink-0"
+            >
+              Remove
+            </button>
+          )}
+        </div>
+      </div>
+
+      {ngx.saved  && <p className="text-xs text-green-400">Saved — NGX charts will now use live market data.</p>}
+      {ngx.error  && <p className="text-xs text-red-400">{ngx.error}</p>}
+
+      <p className="text-[11px] text-slate-500 leading-relaxed">
+        NGX Pulse provides Nigerian Exchange (NGX) stock prices updated every 30 seconds during market hours (9 AM–4 PM WAT).
+        Required for Technical Analysis charts on NGX symbols.
+        Get a key at <span className="text-brand-400/70">ngxpulse.ng</span>.
       </p>
     </div>
   );
@@ -1745,9 +1815,13 @@ export function SettingsPage() {
       <Section
         icon={<Database className="w-4 h-4" />}
         title="Market Data"
-        subtitle="Polygon.io provides higher-quality adjusted bars for signal generation — falls back to Alpaca if not configured"
+        subtitle="Polygon.io for US equity signals; NGX Pulse for Nigerian Exchange (NGX) charts — both optional, each falls back gracefully"
       >
         <PolygonPanel />
+        <div className="mt-6 pt-6 border-t border-white/5">
+          <p className="text-xs font-semibold text-slate-300 mb-4">NGX Pulse — Nigerian Exchange Data</p>
+          <NgxPulsePanel />
+        </div>
       </Section>
 
       {/* ── Brain / LLM ───────────────────────────────────────────────────── */}

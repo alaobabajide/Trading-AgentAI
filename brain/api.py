@@ -478,8 +478,10 @@ _RATE_LIMITS: dict[str, tuple[int, int]] = {
     "/risk-settings":    (20, 60),
     "/webhook-settings": (10, 60),
     "/broker-settings":       (20, 60),
+    "/broker-assets":         (30, 60),
     "/tastytrade-settings":   (20, 60),
     "/polygon-settings":      (20, 60),
+    "/ngx-settings":          (20, 60),
     "/schwab-settings":       (20, 60),
     "/schwab-auth/url":       (10, 60),
     "/ibkr-settings":         (20, 60),
@@ -965,6 +967,11 @@ class TastytradeSettingsPayload(BaseModel):
 class PolygonSettingsPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     api_key: str = ""   # plaintext; empty = "don't change stored key"
+
+
+class NgxSettingsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    api_key: str   # plaintext NGX Pulse API key
 
 
 class IBKRSettingsPayload(BaseModel):
@@ -1477,6 +1484,18 @@ def reset_broker_settings(request: Request):
     return {"reset": True, "broker_type": DEFAULT_BROKER, "had_preference": existed}
 
 
+@app.get("/broker-assets")
+def get_broker_assets(request: Request):
+    """Return which asset-class tabs are available for the authenticated user's broker.
+
+    Unauthenticated callers receive the default (Alpaca) tab set.
+    """
+    uid: str | None = getattr(request.state, "user_id", None)
+    from brain.broker_creds import DEFAULT_BROKER, load_user_broker_type, get_broker_asset_tabs
+    broker = (load_user_broker_type(uid) or DEFAULT_BROKER) if uid else DEFAULT_BROKER
+    return {"broker": broker, "tabs": get_broker_asset_tabs(broker)}
+
+
 @app.get("/tastytrade-settings")
 def get_tastytrade_settings(request: Request):
     """Return the current user's tastytrade configuration (password never returned)."""
@@ -1562,6 +1581,49 @@ def delete_polygon_settings(request: Request):
     from brain.polygon_creds import delete_user_polygon_key
     existed = delete_user_polygon_key(user_id)
     return {"deleted": True, "had_key": existed}
+
+
+# ── NGX Pulse market data endpoints ───────────────────────────────────────────
+
+@app.get("/ngx-settings")
+def get_ngx_settings(request: Request):
+    """Return NGX Pulse API key configuration (no key values)."""
+    enc_key = None
+    try:
+        enc_key = _get_enc_key()
+    except Exception:
+        pass
+    from brain.ngx_creds import get_ngx_pulse_settings_info
+    return get_ngx_pulse_settings_info(enc_key)
+
+
+@app.post("/ngx-settings")
+def save_ngx_settings(req: NgxSettingsPayload, request: Request):
+    """Store the NGX Pulse API key (encrypted). Owner-only."""
+    uid: str | None = getattr(request.state, "user_id", None)
+    if not uid:
+        raise HTTPException(403, "Authentication required")
+    if _OWNER_USER_ID and uid != _OWNER_USER_ID:
+        raise HTTPException(403, "Only the account owner can configure market data keys")
+    if not req.api_key.strip():
+        raise HTTPException(400, "api_key must not be blank")
+    enc_key = _get_enc_key()
+    from brain.ngx_creds import save_ngx_pulse_key
+    save_ngx_pulse_key(req.api_key.strip(), enc_key)
+    return {"saved": True}
+
+
+@app.delete("/ngx-settings")
+def delete_ngx_settings(request: Request):
+    """Remove the stored NGX Pulse API key (falls back to env var or unconfigured)."""
+    uid: str | None = getattr(request.state, "user_id", None)
+    if not uid:
+        raise HTTPException(403, "Authentication required")
+    if _OWNER_USER_ID and uid != _OWNER_USER_ID:
+        raise HTTPException(403, "Only the account owner can remove market data keys")
+    from brain.ngx_creds import delete_ngx_pulse_key
+    existed = delete_ngx_pulse_key()
+    return {"deleted": existed}
 
 
 # ── Charles Schwab OAuth 2.0 endpoints ────────────────────────────────────────
@@ -3398,29 +3460,92 @@ def get_bars(symbol: str, days: int = 60, asset_class: str = "stock"):
         import pandas as pd
         import ta as _ta
 
-        if asset_class == "crypto":
+        if asset_class == "ngx":
+            # ── NGX Pulse market data ──────────────────────────────────────────
+            enc_key = None
+            try:
+                enc_key = _get_enc_key()
+            except Exception:
+                pass
+            from brain.ngx_creds import get_ngx_pulse_key
+            api_key = get_ngx_pulse_key(enc_key)
+            if not api_key:
+                raise HTTPException(503, "NGX Pulse API key not configured — add it in Settings → Market Data")
+
+            import httpx
+            ngx_resp = httpx.get(
+                f"https://www.ngxpulse.ng/api/ngxdata/prices/{sym}",
+                params={"days": max(days, 14)},
+                headers={"X-API-Key": api_key},
+                timeout=15.0,
+                follow_redirects=True,
+            )
+            if ngx_resp.status_code == 401:
+                raise HTTPException(503, "Invalid NGX Pulse API key — update it in Settings → Market Data")
+            if ngx_resp.status_code == 404:
+                raise HTTPException(503, f"Symbol {sym} not found on NGX Pulse")
+            if ngx_resp.status_code == 429:
+                raise HTTPException(503, "NGX Pulse rate limit reached — upgrade your plan or wait a minute")
+            ngx_resp.raise_for_status()
+            data = ngx_resp.json()
+
+            # Parse multiple possible response shapes defensively
+            raw_bars: list[dict] = []
+            if isinstance(data, list):
+                raw_bars = data
+            elif isinstance(data, dict):
+                for _k in ("history", "data", "bars", "prices", "ohlcv"):
+                    if _k in data and isinstance(data[_k], list):
+                        raw_bars = data[_k]
+                        break
+                if not raw_bars:
+                    # Single-price snapshot — synthesise a placeholder bar
+                    from datetime import date
+                    cp = float(data.get("current_price") or data.get("close") or 0)
+                    raw_bars = [{"time": date.today().isoformat(), "open": cp, "high": cp, "low": cp, "close": cp, "volume": data.get("volume", 0)}]
+
+            def _ngx_bar(b: dict) -> dict | None:
+                dt    = b.get("date") or b.get("time") or b.get("timestamp") or b.get("trading_date") or ""
+                close = float(b.get("close") or b.get("current_price") or b.get("price") or 0)
+                if not close:
+                    return None
+                return {
+                    "time":   str(dt)[:10],
+                    "open":   float(b.get("open") or close),
+                    "high":   float(b.get("high") or close),
+                    "low":    float(b.get("low") or close),
+                    "close":  close,
+                    "volume": int(b.get("volume") or 0),
+                }
+
+            bars_clean = [r for b in raw_bars if (r := _ngx_bar(b))]
+            if not bars_clean:
+                raise HTTPException(503, f"No usable bar data returned for {sym} from NGX Pulse")
+
+            df = pd.DataFrame(bars_clean)
+
+        elif asset_class == "crypto":
             from data.market_data import AlpacaCryptoMarketData
             md = AlpacaCryptoMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)
             snap = _get_market_snapshot(md, sym, max(days, 210))
+            if not snap.bars:
+                raise HTTPException(503, f"No bar data available for {sym}")
+            df = pd.DataFrame([
+                {"time": b.timestamp.strftime("%Y-%m-%d"), "open": b.open, "high": b.high,
+                 "low": b.low, "close": b.close, "volume": b.volume}
+                for b in snap.bars
+            ])
         else:
             from data.market_data import AlpacaMarketData
             md = AlpacaMarketData(cfg.alpaca_api_key, cfg.alpaca_secret_key)
             snap = _get_market_snapshot(md, sym, max(days, 210))
-
-        if not snap.bars:
-            raise HTTPException(503, f"No bar data available for {sym}")
-
-        df = pd.DataFrame([
-            {
-                "time":   b.timestamp.strftime("%Y-%m-%d"),
-                "open":   b.open,
-                "high":   b.high,
-                "low":    b.low,
-                "close":  b.close,
-                "volume": b.volume,
-            }
-            for b in snap.bars
-        ])
+            if not snap.bars:
+                raise HTTPException(503, f"No bar data available for {sym}")
+            df = pd.DataFrame([
+                {"time": b.timestamp.strftime("%Y-%m-%d"), "open": b.open, "high": b.high,
+                 "low": b.low, "close": b.close, "volume": b.volume}
+                for b in snap.bars
+            ])
 
         if len(df) >= 14:
             df["rsi"]         = _ta.momentum.RSIIndicator(df["close"], window=14).rsi()
@@ -3440,11 +3565,14 @@ def get_bars(symbol: str, days: int = 60, asset_class: str = "stock"):
         df = df.where(pd.notna(df), other=None)
         bars_out = df.tail(days).to_dict(orient="records")
 
-        current_price = (
-            snap.latest_quote.mid
-            if snap.latest_quote and snap.latest_quote.mid
-            else (snap.bars[-1].close if snap.bars else None)
-        )
+        if asset_class == "ngx":
+            current_price = bars_clean[-1]["close"] if bars_clean else None
+        else:
+            current_price = (
+                snap.latest_quote.mid
+                if snap.latest_quote and snap.latest_quote.mid
+                else (snap.bars[-1].close if snap.bars else None)
+            )
 
         return {"symbol": sym, "asset_class": asset_class, "bars": bars_out, "current_price": current_price}
 

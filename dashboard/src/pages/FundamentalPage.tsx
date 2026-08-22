@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useBrokerAssets } from "../hooks/useBrokerAssets";
 
 const EXPENSE_RATIO_LOW    = 0.2;
 const EXPENSE_RATIO_HIGH   = 0.5;
@@ -424,6 +425,7 @@ function StockPanel({ isCrypto, fundamentals: f, earnings, loading, error }: Sto
 
 export function FundamentalPage() {
   const [symbol, setSymbol] = useState("AAPL");
+  const { tabs: brokerTabs } = useBrokerAssets();
 
   const isEtf      = ETF_LIST.includes(symbol);
   const isCrypto   = symbol.endsWith("USDT");
@@ -481,7 +483,7 @@ export function FundamentalPage() {
         </h1>
       </div>
 
-      <SymbolSelector value={symbol} onChange={setSymbol} />
+      <SymbolSelector value={symbol} onChange={setSymbol} enabledTabs={brokerTabs} />
 
       {/* Price hero */}
       <div className="glass rounded-2xl p-5 grid grid-cols-1 md:grid-cols-2 gap-6">

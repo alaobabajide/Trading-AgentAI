@@ -1288,6 +1288,100 @@ export function usePolygonSettings() {
   return { settings, saving, saved, error, saveKey, removeKey };
 }
 
+// ── NGX Pulse market data settings ────────────────────────────────────────────
+
+export interface NgxPulseSettings {
+  key_configured: boolean;
+  stored_key:     boolean;
+  env_key:        boolean;
+  source:         "stored" | "env" | "none";
+}
+
+export async function fetchNgxPulseSettings(): Promise<NgxPulseSettings> {
+  const res = await fetch(`${BASE}/ngx-settings`, {
+    signal:  AbortSignal.timeout(8000),
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export async function saveNgxPulseKey(apiKey: string): Promise<{ saved: boolean }> {
+  const res = await fetch(`${BASE}/ngx-settings`, {
+    method:  "POST",
+    headers: apiHeaders({ "Content-Type": "application/json" }),
+    body:    JSON.stringify({ api_key: apiKey }),
+    signal:  AbortSignal.timeout(10000),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  return safeJson(res);
+}
+
+export async function deleteNgxPulseKey(): Promise<{ deleted: boolean }> {
+  const res = await fetch(`${BASE}/ngx-settings`, {
+    method:  "DELETE",
+    headers: apiHeaders(),
+    signal:  AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export function useNgxPulseSettings() {
+  const [settings, setSettings] = useState<NgxPulseSettings | null>(null);
+  const [saving,   setSaving]   = useState(false);
+  const [saved,    setSaved]    = useState(false);
+  const [error,    setError]    = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const s = await fetchNgxPulseSettings();
+        if (!cancelled) setSettings(s);
+      } catch { /* not authenticated or backend not up */ }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  async function saveKey(apiKey: string) {
+    setSaving(true); setError(null);
+    try {
+      await saveNgxPulseKey(apiKey);
+      setSettings((prev) => prev ? { ...prev, key_configured: true, stored_key: true, source: "stored" } : null);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeKey() {
+    setSaving(true); setError(null);
+    try {
+      await deleteNgxPulseKey();
+      setSettings((prev) => prev
+        ? { ...prev, stored_key: false, key_configured: prev.env_key, source: prev.env_key ? "env" : "none" }
+        : null
+      );
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return { settings, saving, saved, error, saveKey, removeKey };
+}
+
 // ── tastytrade settings ────────────────────────────────────────────────────────
 
 export interface TastytradeSettings {

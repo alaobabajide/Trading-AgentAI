@@ -2,28 +2,30 @@ import { useMemo, useState } from "react";
 import { Search, X } from "lucide-react";
 import clsx from "clsx";
 import { STOCK_LIST, ETF_LIST, CRYPTO_LIST, FOREX_LIST, NGX_LIST } from "../lib/marketMock";
+import type { BrokerTabs } from "../hooks/useBrokerAssets";
 
 type Tab = "Stocks" | "ETFs" | "Crypto" | "Forex" | "NGX";
 
-const GROUPS: { label: Tab; symbols: string[]; color: string; badge?: string }[] = [
-  { label: "Stocks", symbols: STOCK_LIST,  color: "text-blue-400 bg-blue-500/15 border-blue-500/30"    },
-  { label: "ETFs",   symbols: ETF_LIST,    color: "text-violet-400 bg-violet-500/15 border-violet-500/30" },
-  { label: "Crypto", symbols: CRYPTO_LIST, color: "text-orange-400 bg-orange-500/15 border-orange-500/30" },
-  { label: "Forex",  symbols: FOREX_LIST,  color: "text-sky-400 bg-sky-500/15 border-sky-500/30",  badge: "FX"  },
-  { label: "NGX",    symbols: NGX_LIST,    color: "text-green-400 bg-green-500/15 border-green-500/30", badge: "NGX" },
+const GROUPS: { label: Tab; symbols: string[]; color: string; badge?: string; tabKey: keyof BrokerTabs }[] = [
+  { label: "Stocks", symbols: STOCK_LIST,  color: "text-blue-400 bg-blue-500/15 border-blue-500/30",        tabKey: "stocks" },
+  { label: "ETFs",   symbols: ETF_LIST,    color: "text-violet-400 bg-violet-500/15 border-violet-500/30",  tabKey: "etfs"   },
+  { label: "Crypto", symbols: CRYPTO_LIST, color: "text-orange-400 bg-orange-500/15 border-orange-500/30",  tabKey: "crypto" },
+  { label: "Forex",  symbols: FOREX_LIST,  color: "text-sky-400 bg-sky-500/15 border-sky-500/30",  badge: "FX",  tabKey: "forex"  },
+  { label: "NGX",    symbols: NGX_LIST,    color: "text-green-400 bg-green-500/15 border-green-500/30", badge: "NGX", tabKey: "ngx"    },
 ];
 
 interface Props {
   value:    string;
   onChange: (s: string) => void;
+  enabledTabs?: Partial<BrokerTabs>;
 }
 
-function getDefaultTab(value: string): Tab {
-  if (ETF_LIST.includes(value))    return "ETFs";
-  if (CRYPTO_LIST.includes(value)) return "Crypto";
-  if (FOREX_LIST.includes(value))  return "Forex";
-  if (NGX_LIST.includes(value))    return "NGX";
-  return "Stocks";
+function getDefaultTab(value: string, available: typeof GROUPS): Tab {
+  if (ETF_LIST.includes(value)    && available.some(g => g.label === "ETFs"))   return "ETFs";
+  if (CRYPTO_LIST.includes(value) && available.some(g => g.label === "Crypto")) return "Crypto";
+  if (FOREX_LIST.includes(value)  && available.some(g => g.label === "Forex"))  return "Forex";
+  if (NGX_LIST.includes(value)    && available.some(g => g.label === "NGX"))    return "NGX";
+  return available[0]?.label ?? "Stocks";
 }
 
 /** All unique leading letters present in a symbol list */
@@ -31,18 +33,24 @@ function letters(symbols: string[]): string[] {
   return [...new Set(symbols.map((s) => s[0].toUpperCase()))].sort();
 }
 
-export function SymbolSelector({ value, onChange }: Props) {
-  const [tab, setTab]       = useState<Tab>(() => getDefaultTab(value));
+export function SymbolSelector({ value, onChange, enabledTabs }: Props) {
+  const visibleGroups = useMemo(
+    () => enabledTabs ? GROUPS.filter(g => enabledTabs[g.tabKey] !== false) : GROUPS,
+    [enabledTabs],
+  );
+
+  const [tab, setTab]       = useState<Tab>(() => getDefaultTab(value, visibleGroups));
   const [search, setSearch] = useState("");
   const [letter, setLetter] = useState<string | null>(null);
 
-  const group = GROUPS.find((g) => g.label === tab)!;
+  // If the active tab was hidden by a broker change, fall back to first visible group.
+  const group = visibleGroups.find((g) => g.label === tab) ?? visibleGroups[0];
 
   const handleTab = (t: Tab) => {
     setTab(t);
     setSearch("");
     setLetter(null);
-    const g = GROUPS.find((g) => g.label === t)!;
+    const g = visibleGroups.find((g) => g.label === t)!;
     if (!g.symbols.includes(value)) onChange(g.symbols[0]);
   };
 
@@ -56,18 +64,20 @@ export function SymbolSelector({ value, onChange }: Props) {
     return list;
   }, [group, search, letter]);
 
+  if (!group) return null;
+
   return (
     <div className="space-y-2">
       {/* ── Tab row ──────────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-1">
-        {GROUPS.map(({ label, symbols, badge }) => (
+        {visibleGroups.map(({ label, symbols, badge }) => (
           <button
             key={label}
             onClick={() => handleTab(label)}
             className={clsx(
               "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all",
               tab === label
-                ? GROUPS.find((g) => g.label === label)!.color
+                ? visibleGroups.find((g) => g.label === label)!.color
                 : "border-white/5 text-slate-500 hover:text-slate-300 hover:border-white/10",
             )}
           >
@@ -93,7 +103,7 @@ export function SymbolSelector({ value, onChange }: Props) {
           <input
             value={search}
             onChange={(e) => { setSearch(e.target.value.toUpperCase()); setLetter(null); }}
-            placeholder={`Search ${tab}…`}
+            placeholder={`Search ${group.label}…`}
             className="w-full bg-surface-700 border border-white/5 rounded-lg pl-7 pr-8 py-1.5 text-xs font-mono outline-none focus:ring-1 focus:ring-brand-500 placeholder:text-slate-600"
           />
           {search && (
@@ -157,7 +167,7 @@ export function SymbolSelector({ value, onChange }: Props) {
 
       {/* Count */}
       <div className="text-[10px] text-slate-600 font-mono">
-        {visible.length} of {group.symbols.length} {tab} symbols
+        {visible.length} of {group.symbols.length} {group.label} symbols
         {letter && !search ? ` starting with ${letter}` : search ? ` matching "${search}"` : ""}
       </div>
     </div>

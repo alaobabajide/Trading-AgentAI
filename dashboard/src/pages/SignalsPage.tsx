@@ -7,6 +7,8 @@ import {
   STOCK_LIST, ETF_LIST, INDEX_LIST, CRYPTO_LIST, FOREX_LIST, NGX_LIST,
 } from "../lib/marketMock";
 import type { Signal, SignalAction, SignalTier } from "../lib/types";
+import { useBrokerAssets } from "../hooks/useBrokerAssets";
+import type { BrokerTabs } from "../hooks/useBrokerAssets";
 
 // ── Quick Generate data ───────────────────────────────────────────────────────
 
@@ -39,7 +41,15 @@ const Q_TABS: QTab[] = [
   { id: "ngx",    label: "NGX",       symbols: SORTED_NGX,     badge: "NGX", color: "text-green-400 border-green-500/30 bg-green-500/10", pending: true, note: "Requires NGX data provider" },
 ];
 
-const TOTAL_SYMBOLS = [...STOCK_LIST, ...ETF_LIST, ...INDEX_LIST, ...CRYPTO_LIST, ...FOREX_LIST, ...NGX_LIST].length;
+function _qtabBrokerKey(label: string): keyof BrokerTabs {
+  if (label === "US Stocks") return "stocks";
+  if (label === "ETFs")      return "etfs";
+  if (label === "Indices")   return "etfs";
+  if (label === "Crypto")    return "crypto";
+  if (label === "Forex")     return "forex";
+  if (label === "NGX")       return "ngx";
+  return "stocks";
+}
 
 /** All unique leading letters present in a sorted symbol list */
 function uniqueLetters(symbols: string[]): string[] {
@@ -59,7 +69,14 @@ function QuickRunPanel({ onGenerated }: QuickRunProps) {
   const [done, setDone]         = useState<string[]>([]);
   const [errors, setErrors]     = useState<Record<string, string>>({});
 
-  const tab = Q_TABS[activeTab];
+  const { tabs: brokerTabs } = useBrokerAssets();
+  const visibleQTabs = useMemo(
+    () => Q_TABS.filter(t => brokerTabs[_qtabBrokerKey(t.label)] !== false),
+    [brokerTabs],
+  );
+
+  const safeIndex = Math.min(activeTab, visibleQTabs.length - 1);
+  const tab = visibleQTabs[safeIndex] ?? visibleQTabs[0];
 
   const availLetters = useMemo(() => uniqueLetters(tab.symbols), [tab]);
 
@@ -138,7 +155,7 @@ function QuickRunPanel({ onGenerated }: QuickRunProps) {
           <Send className="w-4 h-4 text-brand-400" />
           <span className="text-sm font-semibold">Quick Generate</span>
           <span className="text-[11px] text-slate-500 font-mono">
-            {TOTAL_SYMBOLS} symbols — US Stocks, ETFs, Indices, Crypto, Forex, NGX
+            {visibleQTabs.reduce((n, t) => n + t.symbols.length, 0)} symbols — {visibleQTabs.map(t => t.label).join(", ")}
           </span>
         </div>
         <span className="text-xs text-slate-500">{open ? "▲" : "▼"}</span>
@@ -148,13 +165,13 @@ function QuickRunPanel({ onGenerated }: QuickRunProps) {
         <div className="border-t border-white/5 space-y-3">
           {/* ── Category tabs ─────────────────────────────────────────────── */}
           <div className="flex gap-1 px-5 pt-4 flex-wrap">
-            {Q_TABS.map((t, i) => (
+            {visibleQTabs.map((t, i) => (
               <button
                 key={`${t.label}-${i}`}
                 onClick={() => switchTab(i)}
                 className={clsx(
                   "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all",
-                  activeTab === i ? t.color : "border-white/5 text-slate-500 hover:text-slate-300 hover:border-white/10",
+                  safeIndex === i ? t.color : "border-white/5 text-slate-500 hover:text-slate-300 hover:border-white/10",
                 )}
               >
                 {t.label}
@@ -163,7 +180,7 @@ function QuickRunPanel({ onGenerated }: QuickRunProps) {
                 )}
                 <span className={clsx(
                   "text-[10px] px-1.5 py-0.5 rounded-full font-mono",
-                  activeTab === i ? "bg-white/10" : "bg-surface-700 text-slate-600",
+                  safeIndex === i ? "bg-white/10" : "bg-surface-700 text-slate-600",
                 )}>
                   {t.symbols.length}
                 </span>

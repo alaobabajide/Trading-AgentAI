@@ -65,10 +65,57 @@ BROKER_CATALOG: list[dict] = [
         "supports_paper": True,
         "status":        "live",
     },
+    {
+        "id":            "meritrade",
+        "name":          "Meritrade",
+        "tagline":       "Nigerian Exchange (NGX) stocks & equities via Meristem Stockbrokers",
+        "supports_paper": False,
+        "status":        "coming_soon",
+    },
+    {
+        "id":            "cowrywise",
+        "name":          "Cowrywise",
+        "tagline":       "NGX stocks, mutual funds & fixed income — digital investment platform",
+        "supports_paper": False,
+        "status":        "coming_soon",
+    },
+    {
+        "id":            "stanbic",
+        "name":          "Stanbic IBTC Stockbrokers",
+        "tagline":       "NGX stocks, bonds & ETFs — institutional-grade stockbroking",
+        "supports_paper": False,
+        "status":        "coming_soon",
+    },
 ]
 
 LIVE_BROKERS: set[str] = {"alpaca", "tastytrade", "schwab", "ibkr", "kraken", "coinbase", "tradestation"}
 DEFAULT_BROKER = "alpaca"
+
+# ── Asset-class tab availability per broker ───────────────────────────────────
+# Keys mirror the frontend BrokerTabs interface in useBrokerAssets.ts.
+
+BROKER_ASSET_TABS: dict[str, dict[str, bool]] = {
+    "alpaca":       {"stocks": True,  "etfs": True,  "crypto": True,  "forex": False, "ngx": False, "options": False, "futures": False, "bonds": False},
+    "tastytrade":   {"stocks": True,  "etfs": True,  "crypto": True,  "forex": False, "ngx": False, "options": True,  "futures": True,  "bonds": False},
+    "ibkr":         {"stocks": True,  "etfs": True,  "crypto": True,  "forex": True,  "ngx": False, "options": True,  "futures": True,  "bonds": True},
+    "schwab":       {"stocks": True,  "etfs": True,  "crypto": False, "forex": False, "ngx": False, "options": True,  "futures": False, "bonds": False},
+    "kraken":       {"stocks": False, "etfs": False, "crypto": True,  "forex": False, "ngx": False, "options": False, "futures": False, "bonds": False},
+    "coinbase":     {"stocks": False, "etfs": False, "crypto": True,  "forex": False, "ngx": False, "options": False, "futures": False, "bonds": False},
+    "tradestation": {"stocks": True,  "etfs": True,  "crypto": True,  "forex": True,  "ngx": False, "options": True,  "futures": True,  "bonds": False},
+    "meritrade":    {"stocks": True,  "etfs": True,  "crypto": False, "forex": False, "ngx": True,  "options": False, "futures": False, "bonds": False},
+    "cowrywise":    {"stocks": True,  "etfs": True,  "crypto": False, "forex": False, "ngx": True,  "options": False, "futures": False, "bonds": True},
+    "stanbic":      {"stocks": True,  "etfs": True,  "crypto": False, "forex": False, "ngx": True,  "options": False, "futures": False, "bonds": True},
+}
+
+_DEFAULT_ASSET_TABS: dict[str, bool] = {
+    "stocks": True, "etfs": True, "crypto": True,
+    "forex": False, "ngx": False, "options": False, "futures": False, "bonds": False,
+}
+
+
+def get_broker_asset_tabs(broker_type: str | None) -> dict[str, bool]:
+    """Return the asset-class tab visibility map for a given broker type."""
+    return BROKER_ASSET_TABS.get(broker_type or DEFAULT_BROKER, _DEFAULT_ASSET_TABS)
 
 # ── File path ────────────────────────────────────────────────────────────────
 

@@ -8,6 +8,8 @@ import { RsiChart } from "../components/RsiChart";
 import { MacdChart } from "../components/MacdChart";
 import { VolumeChart } from "../components/VolumeChart";
 import { apiHeaders } from "../lib/api";
+import { useBrokerAssets } from "../hooks/useBrokerAssets";
+import { NGX_LIST } from "../lib/marketMock";
 import type { Candle } from "../components/CandlestickChart";
 import type { IndicatorPoint } from "../components/PriceChart";
 
@@ -111,7 +113,12 @@ function toIndicators(bars: BarData[]): IndicatorPoint[] {
 export function TechnicalPage() {
   const [symbol, setSymbol] = useState("AAPL");
   const [tf, setTf]         = useState<Timeframe>("1M");
-  const assetClass = /USDT$|USD$|BTC$|ETH$/i.test(symbol) || symbol.includes("/") ? "crypto" : "stock";
+  const { tabs: brokerTabs } = useBrokerAssets();
+  const assetClass = NGX_LIST.includes(symbol)
+    ? "ngx"
+    : /USDT$|USD$|BTC$|ETH$/i.test(symbol) || symbol.includes("/")
+      ? "crypto"
+      : "stock";
 
   const { bars, loading, error, updatedAt } = useBars(symbol, TF_DAYS[tf], assetClass);
 
@@ -166,7 +173,7 @@ export function TechnicalPage() {
         </div>
       </div>
 
-      <SymbolSelector value={symbol} onChange={setSymbol} />
+      <SymbolSelector value={symbol} onChange={setSymbol} enabledTabs={brokerTabs} />
 
       {/* Timeframe tabs — removed 1D since intraday requires separate handling */}
       <div className="flex gap-1">
