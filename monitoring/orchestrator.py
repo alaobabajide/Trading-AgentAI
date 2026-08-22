@@ -16,6 +16,7 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import httpx
 import schedule
@@ -294,6 +295,22 @@ class Orchestrator:
         except Exception as exc:
             log.warning("Could not check market clock: %s — assuming open", exc)
             return True  # fail-open: don't suppress orders if clock check fails
+
+    @staticmethod
+    def _is_stock_analysis_window() -> bool:
+        """Return True only during the US equity analysis window: 5am–7pm ET, Mon–Fri.
+
+        Covers pre-market (5am), regular session (9:30am–4pm), and post-market (to 7pm).
+        Outside this window stock/ETF signals are meaningless — the LLM debate is skipped
+        entirely so no OpenRouter credits are consumed on weekends or overnight.
+        Crypto is always allowed through (separate check in _run_cycle).
+        """
+        _ET = ZoneInfo("America/New_York")
+        now = datetime.now(_ET)
+        if now.weekday() >= 5:          # Saturday=5, Sunday=6
+            return False
+        hour_min = now.hour * 60 + now.minute
+        return 5 * 60 <= hour_min < 19 * 60   # 05:00–19:00 ET
 
     def _brain_headers(self) -> dict:
         key = self._cfg.brain_api_key
@@ -864,11 +881,26 @@ class Orchestrator:
 
         self._check_retrain(portfolio)
 
+        # Stock/ETF analysis only runs 5am–7pm ET Mon–Fri.
+        # Crypto runs 24/7 — those markets never close.
+        stock_window_open = self._is_stock_analysis_window()
+        if not stock_window_open:
+            log.info(
+                "Outside US equity analysis window (5am–7pm ET Mon–Fri) — "
+                "skipping %d stock/ETF symbols; crypto-only cycle",
+                len(STOCK_WATCHLIST) + len(ETF_WATCHLIST),
+            )
+
         all_symbols = (
-            [(s, "stock")  for s in STOCK_WATCHLIST] +
-            [(s, "stock")  for s in ETF_WATCHLIST] +
+            ([(s, "stock") for s in STOCK_WATCHLIST] +
+             [(s, "stock") for s in ETF_WATCHLIST]
+             if stock_window_open else []) +
             [(s, "crypto") for s in CRYPTO_WATCHLIST]
         )
+
+        if not all_symbols:
+            log.info("No symbols to process this cycle — skipping.")
+            return
 
         # Parallel symbol processing:
         # Paper mode (rule-based, no LLM): 16 workers — zero API calls, pure computation.
