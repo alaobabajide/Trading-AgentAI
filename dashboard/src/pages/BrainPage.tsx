@@ -1,12 +1,44 @@
-import { useState } from "react";
-import { Brain, Loader2, Send, CheckCircle2, XCircle, Clock, Zap, DollarSign, BarChart2, AlertCircle } from "lucide-react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import {
+  Brain, Loader2, Send, CheckCircle2, XCircle, Clock,
+  Zap, DollarSign, BarChart2, AlertCircle, Trash2, Sparkles,
+} from "lucide-react";
 import clsx from "clsx";
 import { SignalCard } from "../components/SignalCard";
 import type { Signal } from "../lib/types";
 import { useHITLContext } from "../context/HITLContext";
 import { apiHeaders, useCreditStatus, useApiUsage } from "../lib/api";
 
-// ── Usage & Credits panel ─────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface ConversationMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;        // user: raw query; assistant: preamble or text response
+  signal?: Signal;        // assistant Category A result
+  execStatus?: string;    // HITL disposition status
+  loading?: boolean;      // pending placeholder
+  error?: string;         // failed query error
+}
+
+interface BrainQueryResponse {
+  category: string;
+  symbol?: string;
+  asset_class?: string;
+  text?: string;
+  error?: string;
+}
+
+// ── Suggestion chips ──────────────────────────────────────────────────────────
+
+const SUGGESTIONS = [
+  "What do the agents think about AAPL right now?",
+  "Which is the strongest HOT signal today?",
+  "Analyse BTCUSDT",
+  "Show me any SELL signals",
+];
+
+// ── UsagePanel (unchanged from original) ─────────────────────────────────────
 
 function UsagePanel() {
   const credits = useCreditStatus();
@@ -32,13 +64,11 @@ function UsagePanel() {
 
   return (
     <div className="space-y-4">
-      {/* Credits card */}
       <div className="glass rounded-2xl p-5">
         <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-4 flex items-center gap-2">
           <DollarSign className="w-3.5 h-3.5" />
           OpenRouter Credit Balance
         </h2>
-
         {!credits ? (
           <div className="text-xs text-slate-500 font-mono animate-pulse">Fetching balance…</div>
         ) : !credits.configured ? (
@@ -60,8 +90,6 @@ function UsagePanel() {
                   : `$${(credits.used_usd ?? 0).toFixed(4)} used this billing period`}
               </span>
             </div>
-
-            {/* Progress bar */}
             {credits.limit_usd && credits.balance_usd !== null && (
               <div className="space-y-1">
                 <div className="h-2 bg-surface-700 rounded-full overflow-hidden">
@@ -83,10 +111,9 @@ function UsagePanel() {
                 </div>
               </div>
             )}
-
             {credits.warning && (
               <div className="text-[11px] font-mono text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2">
-                Balance below ${credits.warning_threshold} threshold. A Telegram alert has been (or will be) sent.
+                Balance below ${credits.warning_threshold} threshold.
                 <a href="https://openrouter.ai/settings/billing" target="_blank" rel="noreferrer"
                   className="ml-1 underline underline-offset-2">
                   Add credits →
@@ -97,7 +124,6 @@ function UsagePanel() {
         )}
       </div>
 
-      {/* Today's usage */}
       <div className="glass rounded-2xl p-5">
         <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-4 flex items-center gap-2">
           <Zap className="w-3.5 h-3.5" />
@@ -106,7 +132,6 @@ function UsagePanel() {
             {today?.date ?? new Date().toISOString().slice(0, 10)} · resets at midnight UTC
           </span>
         </h2>
-
         {!today || today.calls === 0 ? (
           <div className="text-xs text-slate-500 font-mono">
             No LLM calls recorded today yet — usage appears here after the first live signal runs.
@@ -115,10 +140,10 @@ function UsagePanel() {
           <div className="space-y-3">
             <div className="grid grid-cols-4 gap-2">
               {[
-                { label: "API Calls", value: today.calls.toLocaleString(), color: "text-brand-400" },
-                { label: "Input Tokens", value: fmtTokens(today.input_tokens), color: "text-sky-400" },
-                { label: "Output Tokens", value: fmtTokens(today.output_tokens), color: "text-violet-400" },
-                { label: "Est. Cost", value: `$${today.cost_usd.toFixed(4)}`, color: "text-emerald-400" },
+                { label: "API Calls",     value: today.calls.toLocaleString(),       color: "text-brand-400" },
+                { label: "Input Tokens",  value: fmtTokens(today.input_tokens),      color: "text-sky-400" },
+                { label: "Output Tokens", value: fmtTokens(today.output_tokens),     color: "text-violet-400" },
+                { label: "Est. Cost",     value: `$${today.cost_usd.toFixed(4)}`,    color: "text-emerald-400" },
               ].map((m) => (
                 <div key={m.label} className="bg-surface-700 rounded-xl p-3 text-center">
                   <div className="text-[9px] text-slate-500 uppercase tracking-wider mb-1">{m.label}</div>
@@ -126,8 +151,6 @@ function UsagePanel() {
                 </div>
               ))}
             </div>
-
-            {/* Per-model breakdown */}
             {Object.keys(today.by_model).length > 0 && (
               <div className="space-y-1.5">
                 <div className="text-[10px] text-slate-600 uppercase tracking-widest">Per model</div>
@@ -148,7 +171,6 @@ function UsagePanel() {
         )}
       </div>
 
-      {/* Daily history table */}
       {history.filter(d => d.calls > 0).length > 1 && (
         <div className="glass rounded-2xl p-5">
           <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-4 flex items-center gap-2">
@@ -191,191 +213,377 @@ function UsagePanel() {
   );
 }
 
-async function safeJson(resp: Response): Promise<unknown> {
-  const text = await resp.text();
-  if (!text) throw new Error(resp.statusText || `HTTP ${resp.status}`);
-  try { return JSON.parse(text); } catch { throw new Error(text.slice(0, 200)); }
+// ── Message bubbles ───────────────────────────────────────────────────────────
+
+function UserBubble({ content }: { content: string }) {
+  return (
+    <div className="flex justify-end">
+      <div className="max-w-[85%] bg-brand-600/20 border border-brand-500/20 rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm text-slate-200">
+        {content}
+      </div>
+    </div>
+  );
 }
+
+interface AssistantBubbleProps {
+  msg: ConversationMessage;
+}
+
+function AssistantBubble({ msg }: AssistantBubbleProps) {
+  if (msg.loading) {
+    return (
+      <div className="flex justify-start">
+        <div className="flex items-center gap-2.5 px-4 py-3 text-slate-500 text-xs font-mono">
+          <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-400 shrink-0" />
+          <span className="animate-pulse">{msg.content || "Agents working…"}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (msg.error) {
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[90%] bg-red-500/10 border border-red-500/20 rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-red-400 font-mono">
+          <div className="flex items-center gap-2 mb-1 font-semibold text-xs">
+            <XCircle className="w-3.5 h-3.5" /> Error
+          </div>
+          {msg.error}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Text preamble or Category B text response */}
+      {msg.content && (
+        <div className="flex justify-start">
+          <div className="max-w-[90%] bg-surface-700/60 border border-white/5 rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-slate-300 leading-relaxed">
+            {msg.content}
+          </div>
+        </div>
+      )}
+
+      {/* Signal card for Category A */}
+      {msg.signal && <SignalCard signal={msg.signal} />}
+
+      {/* HITL execution status */}
+      {msg.execStatus && msg.execStatus !== "auto_executing" && (
+        <div className={clsx(
+          "rounded-xl px-4 py-3 text-sm font-mono flex items-center gap-2",
+          msg.execStatus.startsWith("Auto-executed")
+            ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400"
+            : msg.execStatus.startsWith("Queued")
+            ? "bg-amber-500/10 border border-amber-500/20 text-amber-400"
+            : "bg-red-500/10 border border-red-500/20 text-red-400",
+        )}>
+          {msg.execStatus.startsWith("Auto-executed") ? <CheckCircle2 className="w-4 h-4 shrink-0" />
+          : msg.execStatus.startsWith("Queued")       ? <Clock className="w-4 h-4 shrink-0" />
+          :                                             <XCircle className="w-4 h-4 shrink-0" />}
+          {msg.execStatus}
+        </div>
+      )}
+      {msg.execStatus === "auto_executing" && (
+        <div className="rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-400 text-sm px-4 py-3 font-mono flex items-center gap-2">
+          <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+          Sending order to broker…
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Empty state with suggestion chips ─────────────────────────────────────────
+
+function EmptyState({ onSuggestion }: { onSuggestion: (s: string) => void }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-8 gap-5">
+      <div className="flex flex-col items-center gap-2 text-center">
+        <Sparkles className="w-8 h-8 text-brand-400/60" />
+        <p className="text-sm text-slate-400">Ask the agents anything, or type a ticker to start a debate.</p>
+        <p className="text-[11px] text-slate-600 font-mono">
+          Analyses trigger the full 27-agent panel · Category B queries answer from cached signals
+        </p>
+      </div>
+      <div className="grid grid-cols-2 gap-2 w-full max-w-sm">
+        {SUGGESTIONS.map((s) => (
+          <button
+            key={s}
+            onClick={() => onSuggestion(s)}
+            className="text-left px-3 py-2.5 rounded-xl border border-white/5 bg-surface-700/50 hover:border-brand-500/30 hover:bg-brand-500/5 text-xs text-slate-400 hover:text-slate-200 transition-all leading-snug"
+          >
+            {s}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
 
 interface BrainPageProps {
   paperMode?: boolean;
   signalPaperMode?: boolean;
 }
 
-export function BrainPage({ paperMode = true, signalPaperMode = false }: BrainPageProps) {
-  const [symbol, setSymbol] = useState("AAPL");
+export function BrainPage({ paperMode: _paperMode = true, signalPaperMode = false }: BrainPageProps) {
+  const [messages, setMessages]     = useState<ConversationMessage[]>([]);
+  const [input, setInput]           = useState("");
   const [assetClass, setAssetClass] = useState<"stock" | "crypto">("stock");
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<Signal | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [execStatus, setExecStatus] = useState<string | null>(null);
-  const hitl = useHITLContext();
+  const [isProcessing, setIsProcessing] = useState(false);
+  const hitl     = useHITLContext();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
 
-  async function handleRun() {
-    const sym = symbol.trim().toUpperCase();
-    if (!sym || !/^[A-Z0-9]{1,20}$/.test(sym)) {
-      setError("Invalid symbol — use 1–20 uppercase letters/digits (e.g. AAPL, BTCUSDT)");
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    setResult(null);
-    setExecStatus(null);
+  // Auto-scroll to bottom on new messages
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  function updateMessage(id: string, updates: Partial<ConversationMessage>) {
+    setMessages(prev => prev.map(m => m.id === id ? { ...m, ...updates } : m));
+  }
+
+  // Build conversation history for LLM context (last 4 exchanges)
+  const conversationHistory = messages
+    .filter(m => !m.loading && !m.error)
+    .slice(-8)
+    .map(m => ({
+      role: m.role as "user" | "assistant",
+      content: m.signal
+        ? `Analyzed ${m.signal.symbol}: ${m.signal.action} signal (${m.signal.tier} tier, confidence ${m.signal.confidence?.toFixed(2) ?? "?"}) — ${m.signal.rationale}`
+        : m.content,
+    }));
+
+  const handleQuery = useCallback(async (query: string) => {
+    const q = query.trim();
+    if (!q || isProcessing) return;
+
+    const userMsgId      = crypto.randomUUID();
+    const assistantMsgId = crypto.randomUUID();
+
+    setMessages(prev => [
+      ...prev,
+      { id: userMsgId,      role: "user",      content: q },
+      { id: assistantMsgId, role: "assistant",  content: "Classifying…", loading: true },
+    ]);
+    setInput("");
+    setIsProcessing(true);
+
     try {
-      const resp = await fetch("/api/signal", {
-        method: "POST",
+      // ── Step 1: Classify intent ───────────────────────────────────────────
+      const classifyResp = await fetch("/api/brain/query", {
+        method:  "POST",
         headers: apiHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ symbol: sym, asset_class: assetClass, paper_mode: signalPaperMode }),
+        body:    JSON.stringify({
+          query:                q,
+          conversation_history: conversationHistory,
+          asset_class_hint:     assetClass,
+        }),
       });
-      if (!resp.ok) {
-        const data = await safeJson(resp) as { detail?: string };
-        setError(data?.detail ?? `HTTP ${resp.status}`);
+
+      if (!classifyResp.ok) {
+        const err = await classifyResp.json().catch(() => ({})) as { detail?: string };
+        updateMessage(assistantMsgId, { loading: false, content: "", error: err.detail ?? `Server error ${classifyResp.status}` });
         return;
       }
-      const data = await safeJson(resp) as Signal;
-      setResult(data);
 
-      // ── Wire into HITL: act on the signal based on current mode ──────────
-      if (data.action !== "HOLD") {
-        const disposition = hitl.receiveSignal(data);
-        if (disposition === "auto_execute") {
-          setExecStatus("auto_executing");
-          const execResult = await hitl.executeSignal(data);
-          if (execResult) {
-            setExecStatus(
-              `Auto-executed: Order ${execResult.order_id} · ${execResult.status} on ${execResult.exchange}`
-            );
-          } else {
-            setExecStatus(`Auto-execute failed: ${hitl.executeError ?? "unknown error"}`);
-          }
-        } else if (disposition === "veto_window") {
-          setExecStatus("Queued for approval — review the confirmation banner.");
-        } else if (disposition === "queue_manual") {
-          setExecStatus("Queued for manual execution — click Execute on the signal card below.");
+      const classification = await classifyResp.json() as BrainQueryResponse;
+
+      if (classification.category === "A") {
+        // ── Category A: trigger the 27-agent debate ───────────────────────
+        const sym = classification.symbol ?? "";
+        const cls = classification.asset_class ?? assetClass;
+
+        updateMessage(assistantMsgId, {
+          content: `Running ${signalPaperMode ? "rule-based analysis" : "27-agent LLM debate"} for ${sym}…`,
+        });
+
+        const signalResp = await fetch("/api/signal", {
+          method:  "POST",
+          headers: apiHeaders({ "Content-Type": "application/json" }),
+          body:    JSON.stringify({ symbol: sym, asset_class: cls, paper_mode: signalPaperMode }),
+        });
+
+        if (!signalResp.ok) {
+          const err = await signalResp.json().catch(() => ({})) as { detail?: string };
+          updateMessage(assistantMsgId, {
+            loading: false,
+            content: "",
+            error: err.detail ?? `Signal error ${signalResp.status}`,
+          });
+          return;
         }
+
+        const signal: Signal = await signalResp.json();
+        updateMessage(assistantMsgId, { loading: false, content: `Debate complete for ${sym}:`, signal });
+
+        // ── HITL integration ──────────────────────────────────────────────
+        if (signal.action !== "HOLD") {
+          const disposition = hitl.receiveSignal(signal);
+          let execStatus = "";
+          if (disposition === "auto_execute") {
+            updateMessage(assistantMsgId, { execStatus: "auto_executing" });
+            const execResult = await hitl.executeSignal(signal);
+            execStatus = execResult
+              ? `Auto-executed: Order ${execResult.order_id} · ${execResult.status} on ${execResult.exchange}`
+              : `Auto-execute failed: ${hitl.executeError ?? "unknown error"}`;
+          } else if (disposition === "veto_window") {
+            execStatus = "Queued for approval — review the confirmation banner.";
+          } else if (disposition === "queue_manual") {
+            execStatus = "Queued for manual execution — click Execute on the signal card below.";
+          }
+          if (execStatus) updateMessage(assistantMsgId, { execStatus });
+        }
+
+      } else {
+        // ── Category B: text synthesis answer ────────────────────────────
+        const text = classification.text ?? "No answer generated.";
+        updateMessage(assistantMsgId, { loading: false, content: text });
       }
+
     } catch (err) {
-      setError((err as Error).message ?? "Network error — backend not reachable");
+      updateMessage(assistantMsgId, {
+        loading: false,
+        content: "",
+        error: (err as Error).message ?? "Network error — backend not reachable",
+      });
     } finally {
-      setLoading(false);
+      setIsProcessing(false);
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }, [assetClass, conversationHistory, hitl, isProcessing, signalPaperMode]);
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleQuery(input);
     }
   }
 
+  const isEmpty = messages.length === 0;
+
   return (
     <div className="space-y-6 max-w-2xl">
-      <div>
-        <h1 className="text-lg font-semibold flex items-center gap-2">
-          <Brain className="w-5 h-5 text-brand-400" />
-          Brain Console
-        </h1>
-        <p className="text-sm text-slate-400 mt-1">
-          Trigger the multi-agent debate for any symbol and inspect agent views live.
-        </p>
-        <div className={clsx(
-          "inline-flex items-center gap-1.5 mt-2 px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold border",
-          paperMode
-            ? "bg-sky-500/10 border-sky-500/20 text-sky-400"
-            : "bg-red-500/10 border-red-500/20 text-red-400",
-        )}>
-          <span className={clsx("w-1.5 h-1.5 rounded-full", paperMode ? "bg-sky-400" : "bg-red-400 animate-pulse")} />
-          {paperMode
-            ? "Paper mode — rule-based analysis, no API credits needed"
-            : "Live mode — full 27-agent LLM debate (requires OpenRouter credits)"}
-        </div>
-      </div>
-
-      <div className="glass rounded-2xl p-5 space-y-4">
-        <div className="flex gap-3">
-          <input
-            value={symbol}
-            onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-            placeholder="Symbol (e.g. AAPL)"
-            className="flex-1 bg-surface-700 rounded-xl px-4 py-2.5 text-sm font-mono outline-none focus:ring-1 focus:ring-brand-500 placeholder:text-slate-600"
-          />
-          <div className="flex rounded-xl overflow-hidden border border-white/5">
-            {(["stock", "crypto"] as const).map((cls) => (
-              <button
-                key={cls}
-                onClick={() => setAssetClass(cls)}
-                className={clsx(
-                  "px-4 py-2.5 text-sm transition-colors",
-                  assetClass === cls
-                    ? "bg-brand-500 text-white"
-                    : "bg-surface-700 text-slate-400 hover:text-slate-200",
-                )}
-              >
-                {cls}
-              </button>
-            ))}
-          </div>
-          <button
-            onClick={handleRun}
-            disabled={loading}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-sm font-medium transition-colors disabled:opacity-50"
-          >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-            {loading ? "Debating…" : "Run"}
-          </button>
-        </div>
-
-        {loading && (
-          <div className="text-xs text-slate-400 font-mono space-y-1 animate-pulse">
-            <div>→ Fetching market data…</div>
-            {paperMode ? (
-              <>
-                <div>→ Running rule-based technical analysis…</div>
-                <div>→ Running rule-based quant (Bollinger Bands)…</div>
-                <div>→ Running rule-based fundamental (momentum)…</div>
-                <div>→ Computing regime + risk assessment…</div>
-              </>
-            ) : (
-              <>
-                <div>→ Running fundamental analyst…</div>
-                <div>→ Running technical analyst…</div>
-                <div>→ Running sentiment analyst…</div>
-                <div>→ Risk manager synthesising…</div>
-              </>
-            )}
-          </div>
-        )}
-
-        {error && (
-          <div className="rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm px-4 py-3 font-mono space-y-1">
-            <div className="font-semibold">Backend error</div>
-            <div>{error}</div>
-          </div>
-        )}
-
-        {execStatus && execStatus !== "auto_executing" && (
+      {/* ── Header ──────────────────────────────────────────────────────── */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-lg font-semibold flex items-center gap-2">
+            <Brain className="w-5 h-5 text-brand-400" />
+            Brain Console
+          </h1>
+          <p className="text-sm text-slate-400 mt-1">
+            Ask the agents anything, or type a ticker to trigger a full debate.
+          </p>
           <div className={clsx(
-            "rounded-xl px-4 py-3 text-sm font-mono flex items-center gap-2",
-            execStatus.startsWith("Auto-executed")
-              ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400"
-              : execStatus.startsWith("Queued")
-              ? "bg-amber-500/10 border border-amber-500/20 text-amber-400"
-              : "bg-red-500/10 border border-red-500/20 text-red-400",
+            "inline-flex items-center gap-1.5 mt-2 px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold border",
+            signalPaperMode
+              ? "bg-sky-500/10 border-sky-500/20 text-sky-400"
+              : "bg-brand-500/10 border-brand-500/20 text-brand-400",
           )}>
-            {execStatus.startsWith("Auto-executed") ? (
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
-            ) : execStatus.startsWith("Queued") ? (
-              <Clock className="w-4 h-4 shrink-0" />
-            ) : (
-              <XCircle className="w-4 h-4 shrink-0" />
-            )}
-            {execStatus}
+            <span className={clsx(
+              "w-1.5 h-1.5 rounded-full",
+              signalPaperMode ? "bg-sky-400" : "bg-brand-400 animate-pulse",
+            )} />
+            {signalPaperMode
+              ? "Rule-based signals — no LLM credits used"
+              : "LLM agent debate — uses OpenRouter credits"}
           </div>
-        )}
-        {execStatus === "auto_executing" && (
-          <div className="rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-400 text-sm px-4 py-3 font-mono flex items-center gap-2">
-            <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-            Sending order to Alpaca…
-          </div>
+        </div>
+
+        {!isEmpty && (
+          <button
+            onClick={() => setMessages([])}
+            title="Clear conversation"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-white/5 bg-surface-700/50 text-xs text-slate-500 hover:text-slate-300 hover:border-white/10 transition-all shrink-0"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Clear
+          </button>
         )}
       </div>
 
-      {result && <SignalCard signal={result} />}
+      {/* ── Conversation card ────────────────────────────────────────────── */}
+      <div className="glass rounded-2xl overflow-hidden">
+        {/* Message thread */}
+        <div
+          className={clsx(
+            "p-4 space-y-4 overflow-y-auto transition-all",
+            isEmpty ? "min-h-[220px]" : "max-h-[56vh] min-h-[220px]",
+          )}
+        >
+          {isEmpty ? (
+            <EmptyState onSuggestion={handleQuery} />
+          ) : (
+            <>
+              {messages.map(msg =>
+                msg.role === "user"
+                  ? <UserBubble key={msg.id} content={msg.content} />
+                  : <AssistantBubble key={msg.id} msg={msg} />
+              )}
+              <div ref={bottomRef} />
+            </>
+          )}
+        </div>
 
-      {/* API usage & credit transparency */}
+        {/* Divider */}
+        <div className="border-t border-white/5" />
+
+        {/* Input area */}
+        <div className="p-4 space-y-3">
+          {/* Asset class context selector */}
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-slate-600 font-mono uppercase tracking-wider">
+              Default context
+            </span>
+            <div className="flex rounded-lg overflow-hidden border border-white/5 ml-1">
+              {(["stock", "crypto"] as const).map((cls) => (
+                <button
+                  key={cls}
+                  onClick={() => setAssetClass(cls)}
+                  className={clsx(
+                    "px-3 py-1 text-xs font-mono transition-colors",
+                    assetClass === cls
+                      ? "bg-brand-500 text-white"
+                      : "bg-surface-700 text-slate-500 hover:text-slate-300",
+                  )}
+                >
+                  {cls}
+                </button>
+              ))}
+            </div>
+            <span className="text-[10px] text-slate-700 font-mono ml-auto">
+              Enter to send
+            </span>
+          </div>
+
+          {/* Query input + send button */}
+          <div className="flex gap-2">
+            <input
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              disabled={isProcessing}
+              placeholder="Ask the agents anything… or type a ticker to run a debate"
+              className="flex-1 bg-surface-700 rounded-xl px-4 py-2.5 text-sm font-mono outline-none focus:ring-1 focus:ring-brand-500 placeholder:text-slate-600 disabled:opacity-50"
+            />
+            <button
+              onClick={() => handleQuery(input)}
+              disabled={!input.trim() || isProcessing}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-sm font-medium transition-colors disabled:opacity-40 shrink-0"
+            >
+              {isProcessing
+                ? <Loader2 className="w-4 h-4 animate-spin" />
+                : <Send className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* ── API Usage & Credits ──────────────────────────────────────────── */}
       <div className="pt-2">
         <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
           <DollarSign className="w-3.5 h-3.5" />

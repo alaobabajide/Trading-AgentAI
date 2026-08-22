@@ -2364,6 +2364,13 @@ class DebateOrchestrator:
                 "position sizing. Trade aligns with technical indicators."
             )
         else:
+            # Key indicators passed to synthesis agents for richer, specific rationales
+            _key_ind = {k: indicators.get(k) for k in (
+                "price", "rsi_14", "macd", "macd_signal", "atr_14",
+                "sma_20", "sma_50", "sma_200", "volume_ratio",
+                "high_proximity", "roc_20",
+            )}
+
             risk_ctx = {
                 "symbol": symbol, "asset_class": asset_class,
                 "action_from_votes": action,
@@ -2372,6 +2379,7 @@ class DebateOrchestrator:
                 "panel_b_votes":     panel_b_tally,
                 "panels_conflict":   panels_conflict,
                 "analyst_opinions":  {**analyst_views, **investor_views},
+                "key_indicators":    _key_ind,
                 "portfolio": {
                     "equity":                portfolio.equity,
                     "daily_pnl_pct":         portfolio.daily_pnl_pct,
@@ -2393,6 +2401,7 @@ class DebateOrchestrator:
                     "panels_conflict": panels_conflict,
                     "analyst_opinions": {**analyst_views, **investor_views},
                 },
+                "key_indicators": _key_ind,
                 "trader_profile": profile,
                 "portfolio": {
                     "equity": portfolio.equity, "daily_pnl_pct": portfolio.daily_pnl_pct,

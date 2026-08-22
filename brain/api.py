@@ -2510,6 +2510,203 @@ def clear_all_cached_signals(request: Request):
     return {"cleared": True}
 
 
+# ── Brain NLP query endpoint ───────────────────────────────────────────────────
+
+_CLASSIFY_SYSTEM = """You are an intent classifier for a trading AI assistant. Analyze the user's query and return ONLY valid JSON — no markdown, no explanation.
+
+Category A — user wants to trigger a new multi-agent analysis for a specific ticker symbol:
+{"category": "A", "symbol": "AAPL", "asset_class": "stock"}
+
+Category B — user wants to query existing signal data, compare signals, or asks a general question:
+{"category": "B"}
+
+Rules:
+- Category A: the query names a specific ticker (AAPL, NVDA, BTCUSD, ETHUSD, SPY, TSLA, etc.).
+  Extract the ticker in UPPERCASE letters/digits only.
+  asset_class is "crypto" if the ticker ends in USD/USDT or is a known crypto name (BTC, ETH, SOL, DOGE, XRP, ADA, etc.).
+  Otherwise asset_class is "stock".
+  If the query is just a bare ticker symbol, treat as Category A.
+- Category B: comparative questions, leaderboard questions, questions about existing cached signals, or anything not naming one specific ticker to analyze.
+  Examples: "which signal is strongest", "show HOT signals", "compare signals", "any sell signals?".
+- When ambiguous and a recognizable ticker is present, prefer Category A.
+- Return ONLY the JSON object."""
+
+_SYNTHESIZE_SYSTEM = """You are an AI assistant for a trading platform. Answer the user's question using the provided recent signal data.
+Be concise (under 120 words). Reference specific symbols, tiers (HOT/WARM/COLD), and actions (BUY/SELL/HOLD) from the data.
+If the data does not contain enough information to answer, say so clearly.
+Do not fabricate signals or make trading recommendations beyond what the data shows.
+Plain text only — no markdown."""
+
+
+class BrainQueryRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=500)
+    conversation_history: list[dict] = Field(default_factory=list)
+    asset_class_hint: str = Field("stock", description="User's current default asset class context")
+
+
+class BrainQueryResponse(BaseModel):
+    category: str           # "A" or "B"
+    symbol: str | None = None
+    asset_class: str | None = None
+    text: str | None = None  # Category B synthesized answer
+    error: str | None = None
+
+
+def _or_client_for_query(cfg):
+    """Build a minimal OpenAI client pointed at OpenRouter, using system key."""
+    from openai import OpenAI
+    from config import get_settings
+    settings = get_settings()
+    api_key = settings.openrouter_api_key or cfg.get("openrouter_api_key", "")
+    if not api_key:
+        return None
+    return OpenAI(
+        api_key=api_key,
+        base_url="https://openrouter.ai/api/v1",
+    )
+
+
+def _fallback_classify(query: str, asset_class_hint: str) -> dict:
+    """Regex fallback when LLM classification fails — detects bare tickers."""
+    import re as _re
+    q = query.strip()
+    # Match a bare ticker: 1-8 uppercase alphanumeric characters
+    if _re.match(r'^[A-Z0-9]{1,8}$', q.upper()):
+        sym = q.upper()
+        is_crypto = any(sym.endswith(sfx) for sfx in ("USD", "USDT", "BTC", "ETH")) or len(sym) >= 6
+        return {"category": "A", "symbol": sym, "asset_class": "crypto" if is_crypto else asset_class_hint}
+    # Check if any known ticker pattern is embedded in the query
+    tickers = _re.findall(r'\b([A-Z]{2,6}(?:USD|USDT)?)\b', q.upper())
+    common_words = {"AND", "THE", "FOR", "BUY", "SELL", "HOLD", "HOT", "WARM", "COLD", "RUN", "ANY"}
+    tickers = [t for t in tickers if t not in common_words]
+    if tickers:
+        sym = tickers[0]
+        is_crypto = any(sym.endswith(sfx) for sfx in ("USD", "USDT")) or len(sym) >= 6
+        return {"category": "A", "symbol": sym, "asset_class": "crypto" if is_crypto else asset_class_hint}
+    return {"category": "B"}
+
+
+@app.post("/brain/query", response_model=BrainQueryResponse)
+def brain_query(req: BrainQueryRequest, request: Request):
+    """Classify a natural language trading query and return intent metadata or a synthesized answer.
+
+    Category A: returns symbol + asset_class so the frontend can call /signal.
+    Category B: synthesizes an answer from the user's cached signal feed.
+    """
+    user_id: str | None = getattr(request.state, "user_id", None)
+
+    cfg = _effective_config(_dynamic_config)
+    client = _or_client_for_query(cfg)
+
+    if client is None:
+        # No OpenRouter key — try regex classification only
+        classification = _fallback_classify(req.query, req.asset_class_hint)
+        if classification["category"] == "B":
+            return BrainQueryResponse(
+                category="B",
+                text="OpenRouter API key is not configured. Cannot answer data queries without it.",
+            )
+        return BrainQueryResponse(
+            category="A",
+            symbol=classification.get("symbol"),
+            asset_class=classification.get("asset_class", req.asset_class_hint),
+        )
+
+    # ── Step 1: Intent classification ─────────────────────────────────────────
+    classify_messages = [
+        {"role": "system", "content": _CLASSIFY_SYSTEM},
+    ]
+    # Include last 2 user/assistant turns for context-aware disambiguation
+    for h in req.conversation_history[-4:]:
+        if isinstance(h, dict) and h.get("role") in ("user", "assistant"):
+            classify_messages.append({"role": h["role"], "content": str(h.get("content", ""))[:400]})
+
+    classify_messages.append({
+        "role": "user",
+        "content": f'Query: "{req.query}"\nDefault asset class context: {req.asset_class_hint}',
+    })
+
+    classification: dict = {}
+    try:
+        resp = client.chat.completions.create(
+            model="google/gemini-2.5-flash-lite",
+            max_tokens=80,
+            temperature=0.0,
+            messages=classify_messages,
+        )
+        raw = resp.choices[0].message.content.strip()
+        # Strip markdown fences if the model adds them despite instructions
+        raw = raw.strip("`").lstrip("json").strip()
+        classification = json.loads(raw)
+    except Exception as exc:
+        log.warning("brain/query classification failed (%s) — using regex fallback", exc)
+        classification = _fallback_classify(req.query, req.asset_class_hint)
+
+    category = classification.get("category", "B")
+
+    if category == "A":
+        symbol = str(classification.get("symbol", "")).upper().strip()
+        asset_class = str(classification.get("asset_class", req.asset_class_hint))
+        if not symbol or not any(c.isalpha() for c in symbol):
+            return BrainQueryResponse(
+                category="B",
+                text="I couldn't identify a specific ticker symbol in your query. Try typing the symbol directly, e.g. \"Analyse AAPL\" or \"BTCUSD\".",
+            )
+        return BrainQueryResponse(category="A", symbol=symbol, asset_class=asset_class)
+
+    # ── Step 2: Category B — synthesize answer from signal cache ──────────────
+    uid = user_id or "system"
+    _see_system = (
+        uid == "system"
+        or (not _OWNER_USER_ID)
+        or (_OWNER_USER_ID and uid == _OWNER_USER_ID)
+    )
+    cached = [
+        v for v in _signal_cache.values()
+        if v.get("_uid", "system") == uid
+        or (_see_system and v.get("_uid", "system") == "system")
+    ]
+    # Sort newest first, cap at 20 signals to control token cost
+    cached_sorted = sorted(cached, key=lambda s: s.get("generated_at", ""), reverse=True)[:20]
+
+    if not cached_sorted:
+        return BrainQueryResponse(
+            category="B",
+            text="No signals in the cache yet. Generate some signals from the Signals page or Brain Console first, then ask again.",
+        )
+
+    # Slim down each signal record for the LLM context (keep only key fields)
+    def _slim(s: dict) -> dict:
+        return {k: s[k] for k in ("symbol", "asset_class", "action", "tier", "confidence",
+                                   "rationale", "generated_at", "regime_label")
+                if k in s}
+
+    signals_json = json.dumps([_slim(s) for s in cached_sorted], indent=None)
+
+    synth_messages = [{"role": "system", "content": _SYNTHESIZE_SYSTEM}]
+    for h in req.conversation_history[-6:]:
+        if isinstance(h, dict) and h.get("role") in ("user", "assistant"):
+            synth_messages.append({"role": h["role"], "content": str(h.get("content", ""))[:600]})
+    synth_messages.append({
+        "role": "user",
+        "content": f"Recent signals:\n{signals_json}\n\nQuestion: {req.query}",
+    })
+
+    try:
+        synth_resp = client.chat.completions.create(
+            model="deepseek/deepseek-chat-v3-0324",
+            max_tokens=200,
+            temperature=0.3,
+            messages=synth_messages,
+        )
+        text = synth_resp.choices[0].message.content.strip()
+    except Exception as exc:
+        log.error("brain/query synthesis failed: %s", exc)
+        text = f"Could not synthesize an answer: {exc}"
+
+    return BrainQueryResponse(category="B", text=text)
+
+
 class ExecuteRequest(BaseModel):
     symbol: str
     asset_class: str = Field(..., description="'stock' or 'crypto'")
