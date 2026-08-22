@@ -125,12 +125,14 @@ def record_order(record: dict[str, Any]) -> None:
     _save(records)
 
 
-def get_all_orders(days: int | None = None) -> list[dict]:
-    """Return all stored orders, optionally filtered to the last N days.
+def get_all_orders(days: int | None = None, user_id: str | None = None) -> list[dict]:
+    """Return stored orders, optionally filtered to the last N days and/or a specific user.
 
     Results are sorted newest-first for display.
     """
     records = _load()
+    if user_id is not None:
+        records = [r for r in records if r.get("user_id") == user_id]
     if days is not None:
         cutoff = time.time() - days * 86400
         filtered = []
@@ -147,9 +149,11 @@ def get_all_orders(days: int | None = None) -> list[dict]:
     return list(reversed(records))
 
 
-def get_available_years() -> list[int]:
+def get_available_years(user_id: str | None = None) -> list[int]:
     """Return sorted (newest-first) list of past complete calendar years that have orders."""
     records = _load()
+    if user_id is not None:
+        records = [r for r in records if r.get("user_id") == user_id]
     current_year = datetime.now(timezone.utc).year
     years: set[int] = set()
     for r in records:
@@ -165,9 +169,11 @@ def get_available_years() -> list[int]:
     return sorted(years, reverse=True)
 
 
-def get_orders_for_year(year: int) -> list[dict]:
+def get_orders_for_year(year: int, user_id: str | None = None) -> list[dict]:
     """Return all stored orders whose submitted_at falls in the given calendar year, newest-first."""
     records = _load()
+    if user_id is not None:
+        records = [r for r in records if r.get("user_id") == user_id]
     result = []
     for r in records:
         ts = r.get("submitted_at")

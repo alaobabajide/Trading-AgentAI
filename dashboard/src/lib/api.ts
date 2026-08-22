@@ -9,12 +9,25 @@ import { EquityPoint, PortfolioSnapshot, Signal } from "./types";
 const BASE = "/api";
 
 // ── Auth token management ─────────────────────────────────────────────────────
-// AuthContext calls setActiveToken() whenever the Supabase session changes.
-// Browser requests use Bearer <jwt>; machine-to-machine falls back to X-Api-Key.
+// AuthContext calls setActiveToken() + setActiveUserId() whenever the Supabase
+// session changes. Browser requests use Bearer <jwt>; M2M falls back to X-Api-Key.
 let _activeToken: string | null = null;
+let _activeUserId: string | null = null;
 
 export function setActiveToken(token: string | null): void {
   _activeToken = token;
+}
+
+export function setActiveUserId(userId: string | null): void {
+  const prev = _activeUserId;
+  _activeUserId = userId;
+  // Remove old non-namespaced keys once per session (one-time migration).
+  if (userId && prev !== userId) {
+    try { localStorage.removeItem("ta_signals_cache_v3"); } catch { /* ignore */ }
+    try { localStorage.removeItem("ta_signals_cache_v2"); } catch { /* ignore */ }
+    try { localStorage.removeItem("ta_signals_cache_v1"); } catch { /* ignore */ }
+    try { localStorage.removeItem("ta_risk_config_v1"); } catch { /* ignore */ }
+  }
 }
 
 function _apiKey(): string {
@@ -132,13 +145,13 @@ export async function clearCachedSignals(): Promise<void> {
 
 // ── Signal persistence helpers ────────────────────────────────────────────────
 
-const SIGNALS_STORAGE_KEY = "ta_signals_cache_v3";
+const _SIGNALS_BASE_KEY = "ta_signals_cache_v3";
 
-// On startup, evict any signals left in the old key (e.g. error-contaminated batches)
-try {
-  localStorage.removeItem("ta_signals_cache_v2");
-  localStorage.removeItem("ta_signals_cache_v1");
-} catch { /* ignore */ }
+// Returns the user-namespaced localStorage key, or null when no user is logged in.
+// Without a user_id we refuse to read/write so User B never sees User A's signals.
+function _signalsKey(): string | null {
+  return _activeUserId ? `${_SIGNALS_BASE_KEY}_${_activeUserId}` : null;
+}
 
 /**
  * Returns true if a majority of the agent_views in this signal contain error text.
@@ -155,14 +168,15 @@ function hasAgentErrors(signal: Signal): boolean {
 }
 
 function loadStoredSignals(): Signal[] {
+  const key = _signalsKey();
+  if (!key) return [];  // no user logged in — return empty, never read another user's data
   try {
-    const raw = localStorage.getItem(SIGNALS_STORAGE_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) return [];
     const all    = JSON.parse(raw) as Signal[];
     const clean  = all.filter((s) => !hasAgentErrors(s));
-    // Self-heal: if any bad signals were removed, persist the cleaned list immediately
     if (clean.length !== all.length) {
-      try { localStorage.setItem(SIGNALS_STORAGE_KEY, JSON.stringify(clean)); } catch { /* quota */ }
+      try { localStorage.setItem(key, JSON.stringify(clean)); } catch { /* quota */ }
     }
     return clean;
   } catch {
@@ -171,7 +185,9 @@ function loadStoredSignals(): Signal[] {
 }
 
 function persistSignals(signals: Signal[]) {
-  try { localStorage.setItem(SIGNALS_STORAGE_KEY, JSON.stringify(signals)); } catch { /* quota */ }
+  const key = _signalsKey();
+  if (!key) return;
+  try { localStorage.setItem(key, JSON.stringify(signals)); } catch { /* quota */ }
 }
 
 /**
@@ -288,7 +304,8 @@ export function useSignals(pollIntervalMs = 30_000) {
     try {
       await clearCachedSignals();
     } catch { /* backend clear failed — still wipe local */ }
-    localStorage.removeItem(SIGNALS_STORAGE_KEY);
+    const key = _signalsKey();
+    if (key) localStorage.removeItem(key);
     setLiveSignals([]);
     setApiState("live");
     setClearing(false);
@@ -439,36 +456,49 @@ export async function resetRiskConfig(): Promise<{ reset: boolean; current: obje
 // The backend is re-synced in the background every 5 minutes so the trading
 // engine picks up the user's values even after a Railway container restart.
 
-const _CONFIG_STORAGE_KEY = "ta_risk_config_v1";
-const _CONFIG_COOKIE_KEY  = "ta_rc_v1";
+const _CONFIG_BASE_KEY   = "ta_risk_config_v1";
+const _CONFIG_COOKIE_BASE = "ta_rc_v1";
 let _lastRestoreAttempt = 0; // epoch ms; 0 = never
 
+// Per-user namespaced keys — returns null when no user is logged in so we
+// never read one user's saved config into another user's session.
+function _configStorageKey(): string | null {
+  return _activeUserId ? `${_CONFIG_BASE_KEY}_${_activeUserId}` : null;
+}
+function _configCookieKey(): string | null {
+  // Cookie names must be short — use first 12 chars of user ID (UUID, alphanumeric + hyphen)
+  return _activeUserId ? `${_CONFIG_COOKIE_BASE}_${_activeUserId.slice(0, 12).replace(/-/g, "")}` : null;
+}
+
 function _saveConfigLocally(fields: Record<string, unknown>): void {
+  const storageKey = _configStorageKey();
+  const cookieKey  = _configCookieKey();
+  if (!storageKey || !cookieKey) return; // no user — never persist to shared storage
   const clean: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(fields)) {
     if (_RISK_FIELD_KEYS.has(k) && v !== null && v !== undefined) clean[k] = v;
   }
   const json = Object.keys(clean).length > 0 ? JSON.stringify(clean) : "";
-  // localStorage
   try {
     json
-      ? localStorage.setItem(_CONFIG_STORAGE_KEY, json)
-      : localStorage.removeItem(_CONFIG_STORAGE_KEY);
+      ? localStorage.setItem(storageKey, json)
+      : localStorage.removeItem(storageKey);
   } catch { /* quota / blocked */ }
-  // Cookie backup — survives localStorage being cleared by browser / ITP
   try {
     const val = json ? encodeURIComponent(json) : "";
-    document.cookie = `${_CONFIG_COOKIE_KEY}=${val};max-age=${60 * 60 * 24 * 365};path=/;SameSite=Strict`;
+    document.cookie = `${cookieKey}=${val};max-age=${60 * 60 * 24 * 365};path=/;SameSite=Strict`;
   } catch { /* ignore */ }
 }
 
 function _loadConfigLocally(): Partial<RiskConfigFields> | null {
-  // Try localStorage first, then cookie
+  const storageKey = _configStorageKey();
+  const cookieKey  = _configCookieKey();
+  if (!storageKey || !cookieKey) return null; // no user — never read stale data
   let raw: string | null = null;
-  try { raw = localStorage.getItem(_CONFIG_STORAGE_KEY); } catch { /* ignore */ }
+  try { raw = localStorage.getItem(storageKey); } catch { /* ignore */ }
   if (!raw) {
     try {
-      const m = document.cookie.match(new RegExp("(?:^|; )" + _CONFIG_COOKIE_KEY + "=([^;]*)"));
+      const m = document.cookie.match(new RegExp("(?:^|; )" + cookieKey + "=([^;]*)"));
       const v = m ? decodeURIComponent(m[1]) : "";
       raw = v || null;
     } catch { /* ignore */ }

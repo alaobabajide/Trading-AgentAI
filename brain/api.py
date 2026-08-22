@@ -1994,7 +1994,8 @@ def generate_signal(req: SignalRequest, request: Request):
             req.symbol, len(error_views), len(all_views),
         )
     else:
-        _signal_cache[req.symbol] = d
+        _cache_key = f"{user_id or 'system'}::{req.symbol}"
+        _signal_cache[_cache_key] = {**d, "_uid": user_id or "system"}
         _save_cache(_signal_cache)
     return SignalResponse(
         symbol=d["symbol"],
@@ -2023,35 +2024,41 @@ def generate_signal(req: SignalRequest, request: Request):
 
 
 @app.get("/signal/{symbol}/latest", response_model=dict)
-def get_latest_signal(symbol: str):
-    cached = _signal_cache.get(symbol.upper())
+def get_latest_signal(symbol: str, request: Request):
+    uid = getattr(request.state, "user_id", None) or "system"
+    cached = _signal_cache.get(f"{uid}::{symbol.upper()}")
     if not cached:
         raise HTTPException(status_code=404, detail=f"No cached signal for {symbol}")
     return cached
 
 
 @app.get("/signals/cached", response_model=list)
-def get_all_cached_signals():
-    """Return all signals currently in the in-memory cache, newest first.
-    Rationale fields are sanitised on the way out so old cached entries with
-    markdown formatting are cleaned without waiting for a full re-analysis cycle."""
+def get_all_cached_signals(request: Request):
+    """Return all signals in the in-memory cache for the current user, newest first.
+    Rationale fields are sanitised on the way out."""
+    uid = getattr(request.state, "user_id", None) or "system"
+
     def _clean(s: dict) -> dict:
         rat = s.get("rationale", "")
         if rat and any(c in rat for c in ("**", "##", "\n")):
             s = {**s, "rationale": _clean_rationale(rat)}
         return s
 
+    user_signals = [v for v in _signal_cache.values() if v.get("_uid", "system") == uid]
     return sorted(
-        (_clean(s) for s in _signal_cache.values()),
+        (_clean(s) for s in user_signals),
         key=lambda s: s.get("generated_at", ""),
         reverse=True,
     )
 
 
 @app.delete("/signals/cached")
-def clear_all_cached_signals():
-    """Wipe every entry from the in-memory signal cache and the on-disk JSON."""
-    _signal_cache.clear()
+def clear_all_cached_signals(request: Request):
+    """Wipe the current user's entries from the in-memory signal cache and on-disk JSON."""
+    uid = getattr(request.state, "user_id", None) or "system"
+    keys_to_del = [k for k, v in _signal_cache.items() if v.get("_uid", "system") == uid]
+    for k in keys_to_del:
+        del _signal_cache[k]
     _save_cache(_signal_cache)
     return {"cleared": True}
 
@@ -2263,7 +2270,8 @@ def execute_trade(req: ExecuteRequest, request: Request):
 
     # The orchestrator already applies all risk adjustments before sending this request.
     # Always use request values; fall back to cache only for the rationale (informational).
-    cached  = _signal_cache.get(req.symbol.upper(), {})
+    _exec_uid = _exec_user_id or "system"
+    cached  = _signal_cache.get(f"{_exec_uid}::{req.symbol.upper()}", {})
     sl_pct  = req.stop_loss_pct
     tp_pct  = req.take_profit_pct
 
@@ -2646,7 +2654,7 @@ def get_order_history(request: Request, days: int = 365):
     if not (1 <= days <= 365):
         raise HTTPException(400, "days must be between 1 and 365")
     from brain.order_history import get_all_orders
-    orders = get_all_orders(days=days)
+    orders = get_all_orders(days=days, user_id=user_id)
     return {"orders": orders, "total": len(orders), "days": days}
 
 
@@ -2671,7 +2679,7 @@ def export_order_history(request: Request, format: str = "csv", days: int = 365)
         raise HTTPException(400, "days must be between 1 and 365")
 
     from brain.order_history import get_all_orders
-    orders = get_all_orders(days=days)
+    orders = get_all_orders(days=days, user_id=user_id)
 
     if format == "csv":
         import csv
@@ -2818,7 +2826,7 @@ def get_order_history_years(request: Request):
     if not user_id:
         raise HTTPException(403, "JWT authentication required")
     from brain.order_history import get_available_years
-    years = get_available_years()
+    years = get_available_years(user_id=user_id)
     return {"years": years}
 
 
@@ -2848,7 +2856,7 @@ def download_archive_zip(request: Request, year: int):
         raise HTTPException(400, "Year out of supported range")
 
     from brain.order_history import get_orders_for_year
-    orders = get_orders_for_year(year)
+    orders = get_orders_for_year(year, user_id=user_id)
 
     # ── CSV ───────────────────────────────────────────────────────────────────
     csv_buf = io.StringIO()
