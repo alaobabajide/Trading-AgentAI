@@ -1490,7 +1490,6 @@ export async function fetchFmpData(
     signal:  AbortSignal.timeout(15000),
     headers: apiHeaders(),
   });
-  if (res.status === 402) throw new Error("NO_FMP_KEY");
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error((data as { detail?: string }).detail ?? `HTTP ${res.status}`);

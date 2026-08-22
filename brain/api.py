@@ -1744,8 +1744,15 @@ def fmp_proxy(data_type: str, symbol: str, request: Request,
         return []
 
     api_key = _resolve_fmp_key(user_id)
+
+    # No FMP key — fall back to Yahoo Finance (same response schema, no key required)
     if not api_key:
-        raise HTTPException(402, "no_fmp_key")
+        from brain.yf_research import yf_fetch
+        result = yf_fetch(data_type, sym, limit)
+        if result is not None:
+            return result
+        # Financial statements not in yfinance fallback — return empty list gracefully
+        return []
 
     url = f"https://financialmodelingprep.com/api/v3/{data_type}/{sym}"
     params: dict = {"apikey": api_key}
