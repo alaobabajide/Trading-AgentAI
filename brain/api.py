@@ -2388,9 +2388,12 @@ def get_portfolio(request: Request):
     _pf_user_id = getattr(request.state, "user_id", None)
     fetch_error: str | None = None
 
-    # JWT users who have not configured their own Alpaca credentials must not
-    # fall through to the system account (the owner's live trading account).
-    if _pf_user_id and not _jwt_user_has_own_alpaca(_pf_user_id, cfg):
+    # Non-owner JWT users who have not configured their own Alpaca credentials must
+    # not fall through to the system account (the owner's live trading account).
+    # The owner is identified by OWNER_USER_ID. When unset, legacy behaviour applies
+    # (all JWT users can use system creds — single-user deployment mode).
+    _pf_is_owner = (not _OWNER_USER_ID) or (_OWNER_USER_ID and _pf_user_id == _OWNER_USER_ID)
+    if _pf_user_id and not _pf_is_owner and not _jwt_user_has_own_alpaca(_pf_user_id, cfg):
         state = PortfolioState(timestamp=datetime.now(timezone.utc), equity=0.0, cash=0.0)
         return {
             "timestamp":             state.timestamp.isoformat(),
@@ -2460,8 +2463,9 @@ def get_orders(request: Request, status: str = "open"):
     cfg = get_settings()
     _ord_user_id = getattr(request.state, "user_id", None)
 
-    # JWT users with no personal broker credentials must not see the system account orders.
-    if _ord_user_id and not _jwt_user_has_own_alpaca(_ord_user_id, cfg):
+    # Non-owner JWT users with no personal broker credentials must not see system account orders.
+    _ord_is_owner = (not _OWNER_USER_ID) or (_OWNER_USER_ID and _ord_user_id == _OWNER_USER_ID)
+    if _ord_user_id and not _ord_is_owner and not _jwt_user_has_own_alpaca(_ord_user_id, cfg):
         return {"orders": [], "fetch_error": "No broker configured — add your Alpaca API key in Settings → Broker"}
 
     _ord_ak, _ord_sk, _ord_base_url, _ = _resolve_alpaca_creds(_ord_user_id, cfg)
