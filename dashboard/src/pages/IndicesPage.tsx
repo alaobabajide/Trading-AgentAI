@@ -440,9 +440,10 @@ function IndexCard({
 
 interface IndicesPageProps {
   paperMode?: boolean;
+  signalPaperMode?: boolean;
 }
 
-export function IndicesPage({ paperMode = true }: IndicesPageProps) {
+export function IndicesPage({ paperMode: _paperMode = true, signalPaperMode = false }: IndicesPageProps) {
   const [activeGroup, setActiveGroup] = useState<string>("us_broad");
   const [signalStates, setSignalStates] = useState<Record<string, SignalState>>({});
   const [latestResult, setLatestResult] = useState<Signal | null>(null);
@@ -458,7 +459,7 @@ export function IndicesPage({ paperMode = true }: IndicesPageProps) {
     setLatestResult(null);
 
     try {
-      const signal = await runSignal(sym, paperMode);
+      const signal = await runSignal(sym, signalPaperMode);
       setSignalStates((prev) => ({
         ...prev,
         [sym]: { symbol: sym, loading: false, signal, error: null },
@@ -489,16 +490,16 @@ export function IndicesPage({ paperMode = true }: IndicesPageProps) {
         <p className="text-sm text-slate-400 mt-1">
           Live index charts via TradingView. Click <strong className="text-slate-300">Analyse</strong> to run the Brain
           on the ETF proxy — all{" "}
-          {paperMode ? "rule-based (paper mode)" : "full LLM (live mode)"}.
+          {signalPaperMode ? "rule-based signals" : "full LLM agent debate"}.
         </p>
         <div className={clsx(
           "inline-flex items-center gap-1.5 mt-2 px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold border",
-          paperMode
+          signalPaperMode
             ? "bg-sky-500/10 border-sky-500/20 text-sky-400"
-            : "bg-red-500/10 border-red-500/20 text-red-400",
+            : "bg-brand-500/10 border-brand-500/20 text-brand-400",
         )}>
-          <span className={clsx("w-1.5 h-1.5 rounded-full", paperMode ? "bg-sky-400" : "bg-red-400 animate-pulse")} />
-          {paperMode ? "Paper mode — rule-based analysis" : "Live mode — full LLM debate"}
+          <span className={clsx("w-1.5 h-1.5 rounded-full", signalPaperMode ? "bg-sky-400" : "bg-brand-400 animate-pulse")} />
+          {signalPaperMode ? "Rule-based signals" : "LLM agent debate"}
         </div>
       </div>
 

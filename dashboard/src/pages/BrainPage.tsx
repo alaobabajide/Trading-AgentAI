@@ -199,9 +199,10 @@ async function safeJson(resp: Response): Promise<unknown> {
 
 interface BrainPageProps {
   paperMode?: boolean;
+  signalPaperMode?: boolean;
 }
 
-export function BrainPage({ paperMode = true }: BrainPageProps) {
+export function BrainPage({ paperMode = true, signalPaperMode = false }: BrainPageProps) {
   const [symbol, setSymbol] = useState("AAPL");
   const [assetClass, setAssetClass] = useState<"stock" | "crypto">("stock");
   const [loading, setLoading] = useState(false);
@@ -224,7 +225,7 @@ export function BrainPage({ paperMode = true }: BrainPageProps) {
       const resp = await fetch("/api/signal", {
         method: "POST",
         headers: apiHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ symbol: sym, asset_class: assetClass, paper_mode: paperMode }),
+        body: JSON.stringify({ symbol: sym, asset_class: assetClass, paper_mode: signalPaperMode }),
       });
       if (!resp.ok) {
         const data = await safeJson(resp) as { detail?: string };

@@ -92,18 +92,37 @@ function _tradingEnvKey(): string {
   return uid ? `ta:tradingEnv:${uid}` : "ta:tradingEnv";
 }
 
+type PaperSignalMode = "llm" | "rule-based";
+
+function _paperSignalModeKey(): string {
+  const uid = getActiveUserId();
+  return uid ? `ta:paperSignalMode:${uid}` : "ta:paperSignalMode";
+}
+
 function AppInner() {
   const [page, setPage] = useState<Page>("dashboard");
   const [tradingEnv, setTradingEnvState] = useState<TradingEnv>(() => {
     try { return (localStorage.getItem(_tradingEnvKey()) as TradingEnv) || "paper"; } catch { return "paper"; }
   });
+  const [paperSignalMode, setPaperSignalModeState] = useState<PaperSignalMode>(() => {
+    try { return (localStorage.getItem(_paperSignalModeKey()) as PaperSignalMode) || "llm"; } catch { return "llm"; }
+  });
   const hitl    = useHITLContext();
   const modeCfg = MODE_CONFIG[hitl.profile.mode];
   const isPaper = tradingEnv === "paper";
 
+  // paper_mode flag sent to /api/signal: true = rule-based, false = LLM
+  // Live mode always uses LLM; paper mode respects the user's signal engine preference.
+  const signalPaperMode = isPaper && paperSignalMode === "rule-based";
+
   const setTradingEnv = useCallback((env: TradingEnv) => {
     setTradingEnvState(env);
     try { localStorage.setItem(_tradingEnvKey(), env); } catch {}
+  }, []);
+
+  const setPaperSignalMode = useCallback((mode: PaperSignalMode) => {
+    setPaperSignalModeState(mode);
+    try { localStorage.setItem(_paperSignalModeKey(), mode); } catch {}
   }, []);
 
   // Reload Paper/Live preference when the logged-in user changes.
@@ -111,6 +130,7 @@ function AppInner() {
     function onUserChanged() {
       try {
         setTradingEnvState((localStorage.getItem(_tradingEnvKey()) as TradingEnv) || "paper");
+        setPaperSignalModeState((localStorage.getItem(_paperSignalModeKey()) as PaperSignalMode) || "llm");
       } catch {}
     }
     window.addEventListener("ta:userChanged", onUserChanged);
@@ -250,15 +270,15 @@ function AppInner() {
 
         <div className={page === "charts" ? "flex-1 min-h-0 flex flex-col" : "p-8"}>
           {page === "dashboard"   && <Dashboard />}
-          {page === "signals"     && <SignalsPage />}
+          {page === "signals"     && <SignalsPage signalPaperMode={signalPaperMode} />}
           {page === "positions"   && <PositionsPage />}
           {page === "technical"   && <TechnicalPage />}
           {page === "fundamental" && <FundamentalPage />}
           {page === "charts"      && <ChartsPage />}
-          {page === "indices"     && <IndicesPage paperMode={isPaper} />}
+          {page === "indices"     && <IndicesPage paperMode={isPaper} signalPaperMode={signalPaperMode} />}
           {page === "research"    && <ResearchPage />}
-          {page === "brain"       && <BrainPage paperMode={isPaper} />}
-          {page === "settings"    && <SettingsPage />}
+          {page === "brain"       && <BrainPage paperMode={isPaper} signalPaperMode={signalPaperMode} />}
+          {page === "settings"    && <SettingsPage paperSignalMode={paperSignalMode} onPaperSignalModeChange={setPaperSignalMode} />}
         </div>
       </main>
 

@@ -58,9 +58,9 @@ function uniqueLetters(symbols: string[]): string[] {
 
 // ── Quick Generate Panel ──────────────────────────────────────────────────────
 
-interface QuickRunProps { onGenerated: () => void }
+interface QuickRunProps { onGenerated: () => void; signalPaperMode?: boolean }
 
-function QuickRunPanel({ onGenerated }: QuickRunProps) {
+function QuickRunPanel({ onGenerated, signalPaperMode = false }: QuickRunProps) {
   const [open, setOpen]         = useState(false);
   const [activeTab, setActiveTab] = useState(0);
   const [letter, setLetter]     = useState<string | null>(null);
@@ -103,7 +103,7 @@ function QuickRunPanel({ onGenerated }: QuickRunProps) {
       const resp = await fetch("/api/signal", {
         method:  "POST",
         headers: apiHeaders({ "Content-Type": "application/json" }),
-        body:    JSON.stringify({ symbol, asset_class: tab.id, paper_mode: true }),
+        body:    JSON.stringify({ symbol, asset_class: tab.id, paper_mode: signalPaperMode }),
       });
       if (!resp.ok) {
         const d = await resp.json().catch(() => ({}));
@@ -389,7 +389,7 @@ const INTERVAL_OPTIONS = [
 const DEFAULT_INTERVAL_IDX = 1;   // index into INTERVAL_OPTIONS (30s)
 const POLL_DISABLED_MS      = Number.MAX_SAFE_INTEGER;
 
-export function SignalsPage() {
+export function SignalsPage({ signalPaperMode = false }: { signalPaperMode?: boolean }) {
   const [intervalMs, setIntervalMs] = useState<number>(INTERVAL_OPTIONS[DEFAULT_INTERVAL_IDX].ms);
   const { signals, apiState, refresh, refreshing, clearAll, clearing } = useSignals(
     intervalMs > 0 ? intervalMs : POLL_DISABLED_MS,
@@ -535,7 +535,7 @@ export function SignalsPage() {
       </div>
 
       {/* Quick generate */}
-      <QuickRunPanel onGenerated={refresh} />
+      <QuickRunPanel onGenerated={refresh} signalPaperMode={signalPaperMode} />
 
       {/* Filters */}
       <FilterBar

@@ -870,7 +870,14 @@ function IBKRPanel() {
   );
 }
 
-function AlpacaPanel() {
+type PaperSignalMode = "llm" | "rule-based";
+
+interface AlpacaPanelProps {
+  paperSignalMode?: PaperSignalMode;
+  onPaperSignalModeChange?: (mode: PaperSignalMode) => void;
+}
+
+function AlpacaPanel({ paperSignalMode = "llm", onPaperSignalModeChange }: AlpacaPanelProps) {
   const alpaca = useAlpacaSettings();
 
   const [draft, setDraft]         = useState<AlpacaSavePayload | null>(null);
@@ -941,6 +948,32 @@ function AlpacaPanel() {
             Live mode places real orders. Double-check your key is scoped to the correct Alpaca account.
           </SectionNote>
         )}
+      </div>
+
+      {/* Signal engine for paper trading */}
+      <div className="space-y-1.5">
+        <div className="text-[10px] text-slate-500 uppercase tracking-widest font-mono">Signal engine (paper trading)</div>
+        <div className="flex gap-2">
+          {(["llm", "rule-based"] as const).map((mode) => (
+            <button
+              key={mode}
+              onClick={() => onPaperSignalModeChange?.(mode)}
+              className={clsx(
+                "flex-1 py-2 rounded-xl text-xs font-mono font-semibold transition-all border",
+                paperSignalMode === mode
+                  ? "border-brand-500/60 bg-brand-500/15 text-brand-300"
+                  : "border-white/5 bg-surface-700 text-slate-500 hover:border-white/10",
+              )}
+            >
+              {mode === "llm" ? "LLM Agents" : "Rule-based"}
+            </button>
+          ))}
+        </div>
+        <p className="text-[10px] text-slate-600">
+          {paperSignalMode === "llm"
+            ? "Paper trading uses the full 27-agent LLM debate for signals. Uses OpenRouter credits."
+            : "Paper trading uses fast rule-based analysis with no LLM calls. Zero credit cost."}
+        </p>
       </div>
 
       {/* Key fields */}
@@ -1793,7 +1826,12 @@ function DemoSnapshotPanel() {
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export function SettingsPage() {
+interface SettingsPageProps {
+  paperSignalMode?: PaperSignalMode;
+  onPaperSignalModeChange?: (mode: PaperSignalMode) => void;
+}
+
+export function SettingsPage({ paperSignalMode = "llm", onPaperSignalModeChange }: SettingsPageProps) {
   const [profile, setProfile] = useState<UserProfile>(loadProfile);
   const [saved, setSaved] = useState(false);
   const configStatus = useConfigStatus();
@@ -1893,7 +1931,7 @@ export function SettingsPage() {
           title="Alpaca Account"
           subtitle="Per-user Alpaca key for manual signals from the dashboard — stored encrypted"
         >
-          <AlpacaPanel />
+          <AlpacaPanel paperSignalMode={paperSignalMode} onPaperSignalModeChange={onPaperSignalModeChange} />
         </Section>
       )}
 
