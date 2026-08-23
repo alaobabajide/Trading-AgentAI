@@ -37,8 +37,6 @@ _TRADING_PAUSED: bool = False
 _shared_services_cache: Any = None
 # Per-LLM-config DebateOrchestrators — keyed by hash of (t_provider, t_model, s_provider, s_model).
 _debate_cache: dict[str, Any] = {}
-# Legacy alias kept so PATCH /config still invalidates everything
-_services_cache: Any = None  # not used directly; kept for _services_cache = None in config reset
 
 # ── Encryption key (derived at startup from BRAIN_API_KEY via HKDF) ───────────
 _enc_key: bytes | None = None

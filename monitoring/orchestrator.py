@@ -23,7 +23,7 @@ import schedule
 
 from config import get_settings
 from data.portfolio import PortfolioFetcher, PortfolioState
-from watchlist import STOCK_WATCHLIST, ETF_WATCHLIST, CRYPTO_WATCHLIST, CYCLE_INTERVAL_MINUTES, MAX_WATCH_RULES_DEFAULT  # noqa: F401
+from watchlist import STOCK_WATCHLIST, ETF_WATCHLIST, CRYPTO_WATCHLIST, CYCLE_INTERVAL_MINUTES
 from monitoring.metrics import (
     brain_latency_histogram,
     cash_gauge,

@@ -269,8 +269,6 @@ def resolve_pending_outcomes(fetch_price_fn) -> int:
             "outcome_1h", "outcome_4h", "outcome_24h", "outcome_72h", "outcome_7d"
         ))
         if all_resolved:
-            changes["outcome_final"] = _derive_final(sqlite3.Row)
-            # Re-derive using merged values since row is old
             finals = [merged.get(c) for c in (
                 "outcome_1h", "outcome_4h", "outcome_24h", "outcome_72h", "outcome_7d"
             )]
