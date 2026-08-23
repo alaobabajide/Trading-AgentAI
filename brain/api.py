@@ -80,11 +80,6 @@ class _RateLimiter:
 
 _rate_limiter = _RateLimiter()
 
-# Audit log — append-only JSONL, one entry per order.
-# Default to the same persistent DATA_DIR used for all other storage so the
-# audit trail survives container restarts. /tmp is ephemeral and must not be used.
-_AUDIT_LOG = os.environ.get("AUDIT_LOG_FILE", os.path.join(_DATA_DIR, "ta_audit.log"))
-
 
 def _write_audit(
     symbol: str, action: str, qty: float, notional: float,
@@ -166,6 +161,7 @@ def _find_data_dir() -> str:
     return "/tmp"
 
 _DATA_DIR = _find_data_dir()
+_AUDIT_LOG = os.environ.get("AUDIT_LOG_FILE", os.path.join(_DATA_DIR, "ta_audit.log"))
 
 # ── Dynamic risk config (frontend-editable, persisted to file) ────────────────
 # Overrides env-var defaults without a redeploy.
