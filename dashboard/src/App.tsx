@@ -12,6 +12,7 @@ import { ChartsPage } from "./pages/ChartsPage";
 import { IndicesPage } from "./pages/IndicesPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ResearchPage } from "./pages/ResearchPage";
+import { PerformancePage } from "./pages/PerformancePage";
 import { HITLProvider, useHITLContext } from "./context/HITLContext";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { LoginPage } from "./pages/LoginPage";
@@ -21,7 +22,7 @@ import { useCreditStatus, getActiveUserId } from "./lib/api";
 import { DEMO_USER_ID } from "./lib/supabase";
 import { AlertTriangle, Loader2, X, Eye } from "lucide-react";
 
-type Page = "dashboard" | "signals" | "positions" | "technical" | "fundamental" | "charts" | "indices" | "research" | "brain" | "settings";
+type Page = "dashboard" | "signals" | "positions" | "technical" | "fundamental" | "charts" | "indices" | "research" | "performance" | "brain" | "settings";
 type TradingEnv = "paper" | "live";
 
 function CreditWarningBanner() {
@@ -277,6 +278,7 @@ function AppInner() {
           {page === "charts"      && <ChartsPage />}
           {page === "indices"     && <IndicesPage paperMode={isPaper} signalPaperMode={signalPaperMode} />}
           {page === "research"    && <ResearchPage />}
+          {page === "performance" && <PerformancePage />}
           {page === "brain"       && <BrainPage paperMode={isPaper} signalPaperMode={signalPaperMode} />}
           {page === "settings"    && <SettingsPage paperSignalMode={paperSignalMode} onPaperSignalModeChange={setPaperSignalMode} />}
         </div>

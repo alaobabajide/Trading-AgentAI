@@ -868,6 +868,34 @@ class Orchestrator:
             except Exception as exc:
                 log.warning("Telegram credit alert failed for %s: %s", chat_id, exc)
 
+    # ── Signal outcome resolution ─────────────────────────────────────────────
+
+    def _resolve_signal_outcomes(self) -> None:
+        """Hourly job: fill in price/outcome columns for pending signal history rows."""
+        try:
+            from brain import signal_history as _sh
+
+            def _fetch_price(symbol: str, asset_class: str) -> float | None:
+                try:
+                    r = httpx.get(
+                        f"{self._brain_url}/bars/{symbol}",
+                        params={"days": 1, "asset_class": asset_class},
+                        timeout=10,
+                        headers=self._brain_headers(),
+                    )
+                    if r.status_code == 200:
+                        d = r.json()
+                        return d.get("current_price") or None
+                except Exception as exc:
+                    log.debug("Price fetch for outcome resolution failed %s: %s", symbol, exc)
+                return None
+
+            updated = _sh.resolve_pending_outcomes(_fetch_price)
+            if updated:
+                log.info("Signal outcome resolution: %d rows updated", updated)
+        except Exception as exc:
+            log.warning("Signal outcome resolution failed (non-fatal): %s", exc)
+
     # ── Scheduled jobs ────────────────────────────────────────────────────────
 
     def _run_cycle(self) -> None:
@@ -954,6 +982,7 @@ class Orchestrator:
         schedule.every(1).minutes.do(self._refresh_portfolio_metrics)
         schedule.every(1).minutes.do(self._monitor_positions)
         schedule.every(30).minutes.do(self._check_api_credits)
+        schedule.every(1).hours.do(self._resolve_signal_outcomes)
 
         total_symbols = len(STOCK_WATCHLIST) + len(ETF_WATCHLIST) + len(CRYPTO_WATCHLIST)
         log.info(

@@ -1,11 +1,11 @@
-import { useState } from "react";
-import { DollarSign, TrendingDown, TrendingUp, Wallet } from "lucide-react";
+import { useState, useEffect } from "react";
+import { DollarSign, TrendingDown, TrendingUp, Trophy, Wallet } from "lucide-react";
 import { AllocationDonut } from "../components/AllocationDonut";
 import { EquityChart } from "../components/EquityChart";
 import { PositionsTable } from "../components/PositionsTable";
 import { SignalCard } from "../components/SignalCard";
 import { StatCard } from "../components/StatCard";
-import { usePortfolio, useSignals, useEquitySeries, useRiskConfig, getActiveUserId } from "../lib/api";
+import { usePortfolio, useSignals, useEquitySeries, useRiskConfig, getActiveUserId, apiHeaders } from "../lib/api";
 import { DEMO_USER_ID } from "../lib/supabase";
 import type { EquityPoint } from "../lib/types";
 
@@ -23,10 +23,27 @@ function LiveBadge({ live }: { live: boolean }) {
 
 type EquityPeriod = "1D" | "1M" | "1Y";
 
+interface SignalStats {
+  "7d":  { total: number; wins: number; losses: number; win_rate: number | null };
+  "30d": { total: number; wins: number; losses: number; win_rate: number | null };
+}
+
+function useSignalStats() {
+  const [stats, setStats] = useState<SignalStats | null>(null);
+  useEffect(() => {
+    fetch("/api/signal/stats", { headers: apiHeaders() })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setStats(d); })
+      .catch(() => {});
+  }, []);
+  return stats;
+}
+
 export function Dashboard() {
   const { portfolio: p, apiState } = usePortfolio();
   const { signals, apiState: sigState } = useSignals();
   const { config: riskCfg } = useRiskConfig();
+  const signalStats = useSignalStats();
   const [equityPeriod, setEquityPeriod] = useState<EquityPeriod>("1D");
   const { series: liveSeries, isLive: equityLive } = useEquitySeries(equityPeriod);
   const isLive = apiState === "live";
@@ -151,6 +168,40 @@ export function Dashboard() {
                   <span className="text-slate-200">{v}</span>
                 </div>
               ))}
+            </div>
+          </div>
+
+          <div className="glass rounded-2xl p-5">
+            <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
+              <Trophy className="w-3.5 h-3.5 text-amber-400" />
+              Signal Performance
+            </h2>
+            <div className="space-y-3 text-xs font-mono">
+              {(["7d", "30d"] as const).map(w => {
+                const s = signalStats?.[w];
+                const wr = s?.win_rate;
+                return (
+                  <div key={w}>
+                    <div className="flex justify-between text-slate-500 mb-1">
+                      <span className="uppercase tracking-wider">{w}</span>
+                      <span>{s ? `${s.total} signals` : "—"}</span>
+                    </div>
+                    {s && s.total > 0 ? (
+                      <div className="flex items-center gap-2">
+                        <div className="flex h-1.5 flex-1 rounded-full overflow-hidden bg-surface-700">
+                          <div className="bg-emerald-500" style={{ width: `${((s.wins / s.total) * 100).toFixed(0)}%` }} />
+                          <div className="bg-red-500"     style={{ width: `${((s.losses / s.total) * 100).toFixed(0)}%` }} />
+                        </div>
+                        <span className={wr != null && wr >= 50 ? "text-emerald-400" : "text-red-400"}>
+                          {wr != null ? `${wr.toFixed(0)}%` : "pending"}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="text-slate-600">No resolved signals yet</div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>

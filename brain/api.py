@@ -2413,6 +2413,19 @@ def generate_signal(req: SignalRequest, request: Request):
         _cache_key = f"{user_id or 'system'}::{req.symbol}"
         _signal_cache[_cache_key] = {**d, "_uid": user_id or "system"}
         _save_cache(_signal_cache)
+
+        # Persist to history log (non-fatal)
+        try:
+            from brain import signal_history as _sh
+            _cp = (
+                market.latest_quote.mid
+                if market.latest_quote and getattr(market.latest_quote, "mid", None)
+                else (market.bars[-1].close if market.bars else None)
+            )
+            _sh.record(user_id or "system", d, _cp)
+        except Exception as _sh_exc:
+            log.debug("signal_history.record skipped: %s", _sh_exc)
+
     return SignalResponse(
         symbol=d["symbol"],
         asset_class=d["asset_class"],
@@ -2511,6 +2524,38 @@ def clear_all_cached_signals(request: Request):
         del _signal_cache[k]
     _save_cache(_signal_cache)
     return {"cleared": True}
+
+
+# ── Signal history endpoints ───────────────────────────────────────────────────
+
+@app.get("/signal/history")
+def get_signal_history(
+    request: Request,
+    symbol:  str | None = None,
+    action:  str | None = None,
+    tier:    str | None = None,
+    outcome: str | None = None,
+    limit:   int = 100,
+    offset:  int = 0,
+):
+    uid = getattr(request.state, "user_id", None) or "system"
+    from brain import signal_history as _sh
+    return _sh.list_history(uid, symbol=symbol, action=action,
+                             tier=tier, outcome=outcome, limit=limit, offset=offset)
+
+
+@app.get("/signal/leaderboard")
+def get_signal_leaderboard(request: Request, group_by: str = "tier"):
+    uid = getattr(request.state, "user_id", None) or "system"
+    from brain import signal_history as _sh
+    return {"group_by": group_by, "rows": _sh.get_leaderboard(uid, group_by=group_by)}
+
+
+@app.get("/signal/stats")
+def get_signal_stats(request: Request):
+    uid = getattr(request.state, "user_id", None) or "system"
+    from brain import signal_history as _sh
+    return _sh.get_stats(uid)
 
 
 # ── Brain NLP query endpoint ───────────────────────────────────────────────────
