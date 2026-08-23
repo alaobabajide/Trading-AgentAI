@@ -996,7 +996,10 @@ class Orchestrator:
         self._run_cycle()          # run immediately on start
 
         while True:
-            schedule.run_pending()
+            try:
+                schedule.run_pending()
+            except Exception as exc:
+                log.error("Unhandled exception in scheduler loop (non-fatal, continuing): %s", exc, exc_info=True)
             time.sleep(10)
 
 

@@ -115,6 +115,8 @@ CREATE INDEX IF NOT EXISTS idx_sh_pending   ON signal_history(generated_at) WHER
 
 def _init_db() -> None:
     with _conn() as con:
+        con.execute("PRAGMA journal_mode=WAL")   # concurrent reads don't block writers
+        con.execute("PRAGMA synchronous=NORMAL")  # safe with WAL; faster than FULL
         con.executescript(_DDL)
 
 

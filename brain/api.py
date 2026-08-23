@@ -80,8 +80,10 @@ class _RateLimiter:
 
 _rate_limiter = _RateLimiter()
 
-# Audit log — append-only JSONL, one entry per order
-_AUDIT_LOG = os.environ.get("AUDIT_LOG_FILE", "/tmp/ta_audit.log")
+# Audit log — append-only JSONL, one entry per order.
+# Default to the same persistent DATA_DIR used for all other storage so the
+# audit trail survives container restarts. /tmp is ephemeral and must not be used.
+_AUDIT_LOG = os.environ.get("AUDIT_LOG_FILE", os.path.join(_DATA_DIR, "ta_audit.log"))
 
 
 def _write_audit(
@@ -529,7 +531,7 @@ _PUBLIC_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc", "/schwab-au
 # ── Supabase JWT validation (lazy init, cached results) ───────────────────────
 _supabase_admin = None
 _supabase_admin_lock = __import__("threading").Lock()
-_jwt_cache: dict[str, tuple[str | None, float]] = {}   # last-20-chars → (user_id, monotonic_expiry)
+_jwt_cache: dict[str, tuple[str | None, float]] = {}   # sha256[:32] hex → (user_id, monotonic_expiry)
 _JWT_CACHE_TTL = 300  # 5 min — tokens live 1 h so this is a safe cache window
 
 
@@ -548,7 +550,8 @@ def _get_supabase_admin():
 
 def _verify_supabase_jwt(token: str) -> str | None:
     """Return user_id if the Supabase JWT is valid, else None. Results cached 5 min."""
-    cache_key = token[-24:]          # last 24 chars as cache key — unique enough, avoids storing full token
+    import hashlib as _hl
+    cache_key = _hl.sha256(token.encode()).hexdigest()[:32]  # collision-safe; never stores the raw token
     cached = _jwt_cache.get(cache_key)
     if cached:
         user_id, expires = cached
@@ -576,10 +579,10 @@ async def api_key_middleware(request: Request, call_next):
     from config import get_settings
     cfg = get_settings()
 
-    # Dev / initial-setup mode: no auth configured at all → fail-open
+    # Fail-closed: if neither auth mechanism is configured the API is not safe to serve.
     if not cfg.brain_api_key and not cfg.supabase_service_role_key:
-        log.critical("No auth configured (BRAIN_API_KEY + SUPABASE_SERVICE_ROLE_KEY both missing) — API is UNAUTHENTICATED")
-        return await call_next(request)
+        log.critical("BRAIN_API_KEY and SUPABASE_SERVICE_ROLE_KEY are both unset — rejecting all requests until auth is configured")
+        return JSONResponse(status_code=503, content={"detail": "Service unavailable — authentication is not configured. Set BRAIN_API_KEY or SUPABASE_SERVICE_ROLE_KEY."})
 
     # Path 1: X-Api-Key — machine-to-machine (orchestrator, Telegram bot)
     if cfg.brain_api_key and request.headers.get("X-Api-Key", "") == cfg.brain_api_key:
