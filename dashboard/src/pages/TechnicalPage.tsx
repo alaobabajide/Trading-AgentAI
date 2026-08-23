@@ -13,9 +13,9 @@ import { NGX_LIST } from "../lib/marketMock";
 import type { Candle } from "../components/CandlestickChart";
 import type { IndicatorPoint } from "../components/PriceChart";
 
-type Timeframe = "1W" | "1M" | "3M";
+type Timeframe = "1W" | "1M" | "3M" | "1Y";
 
-const TF_DAYS: Record<Timeframe, number> = { "1W": 7, "1M": 30, "3M": 90 };
+const TF_DAYS: Record<Timeframe, number> = { "1W": 7, "1M": 30, "3M": 90, "1Y": 365 };
 
 const RSI_OVERBOUGHT = 70;
 const RSI_OVERSOLD   = 30;
@@ -175,9 +175,8 @@ export function TechnicalPage() {
 
       <SymbolSelector value={symbol} onChange={setSymbol} enabledTabs={brokerTabs} />
 
-      {/* Timeframe tabs — removed 1D since intraday requires separate handling */}
       <div className="flex gap-1">
-        {(["1W", "1M", "3M"] as Timeframe[]).map((t) => (
+        {(["1W", "1M", "3M", "1Y"] as Timeframe[]).map((t) => (
           <button
             key={t}
             onClick={() => setTf(t)}

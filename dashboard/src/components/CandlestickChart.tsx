@@ -15,6 +15,7 @@ export type Candle = {
 interface Props {
   candles: Candle[];
   height?: number;
+  maxCandles?: number;
 }
 
 const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: { payload: Candle }[] }) => {
@@ -43,16 +44,16 @@ const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: { payl
   );
 };
 
-export function CandlestickChart({ candles, height = 300 }: Props) {
+export function CandlestickChart({ candles, height = 300, maxCandles }: Props) {
   if (!candles.length) return null;
 
-  const prices = candles.flatMap((c) => [c.high, c.low]);
+  const visible = maxCandles ? candles.slice(-maxCandles) : candles;
+
+  const prices = visible.flatMap((c) => [c.high, c.low]);
   const minP   = Math.min(...prices);
   const maxP   = Math.max(...prices);
   const pad    = (maxP - minP) * 0.05;
   const yDomain: [number, number] = [minP - pad, maxP + pad];
-
-  const visible = candles.slice(-60);
 
   // Single custom shape that draws wick + body as SVG in one pass.
   // Recharts passes the full data payload as props alongside bar geometry:
