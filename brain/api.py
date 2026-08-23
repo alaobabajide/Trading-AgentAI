@@ -579,10 +579,11 @@ async def api_key_middleware(request: Request, call_next):
     from config import get_settings
     cfg = get_settings()
 
-    # Fail-closed: if neither auth mechanism is configured the API is not safe to serve.
+    # No auth configured: warn loudly but allow through so the app remains usable
+    # during initial setup. Set BRAIN_API_KEY in Railway to lock this down.
     if not cfg.brain_api_key and not cfg.supabase_service_role_key:
-        log.critical("BRAIN_API_KEY and SUPABASE_SERVICE_ROLE_KEY are both unset — rejecting all requests until auth is configured")
-        return JSONResponse(status_code=503, content={"detail": "Service unavailable — authentication is not configured. Set BRAIN_API_KEY or SUPABASE_SERVICE_ROLE_KEY."})
+        log.warning("BRAIN_API_KEY and SUPABASE_SERVICE_ROLE_KEY both unset — API is UNAUTHENTICATED. Set BRAIN_API_KEY in Railway env vars.")
+        return await call_next(request)
 
     # Path 1: X-Api-Key — machine-to-machine (orchestrator, Telegram bot)
     if cfg.brain_api_key and request.headers.get("X-Api-Key", "") == cfg.brain_api_key:
