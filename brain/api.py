@@ -4310,8 +4310,12 @@ def get_bars(symbol: str, days: int = 60, asset_class: str = "stock"):
             df["bb_mid"]   = _bb.bollinger_mavg()
             df["bb_lower"] = _bb.bollinger_lband()
 
-        df = df.where(pd.notna(df), other=None)
-        bars_out = df.tail(days).to_dict(orient="records")
+        # Use to_json → json.loads to guarantee NaN → null conversion.
+        # df.where(notna, other=None) cannot replace NaN in float64 columns
+        # (pandas stores NaN back), so warmup rows at the start of a long
+        # series would contain float NaN which Python's json module rejects.
+        import json as _json
+        bars_out = _json.loads(df.tail(days).to_json(orient="records"))
 
         if asset_class == "ngx":
             current_price = bars_clean[-1]["close"] if bars_clean else None

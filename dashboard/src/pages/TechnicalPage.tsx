@@ -46,6 +46,7 @@ function useBars(symbol: string, days: number, assetClass: string, refreshMs: nu
 
   useEffect(() => {
     let cancelled = false;
+    setBars([]);
     setLoading(true);
     setError(null);
 
