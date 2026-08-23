@@ -4202,10 +4202,9 @@ def get_bars(symbol: str, days: int = 60, asset_class: str = "stock"):
     if days < 1 or days > 730:
         raise HTTPException(400, "days must be 1–730")
 
-    from config import get_settings
-    cfg = get_settings()
-
     try:
+        from config import get_settings
+        cfg = get_settings()
         import pandas as pd
         import ta as _ta
 

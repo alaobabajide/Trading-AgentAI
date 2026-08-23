@@ -15,7 +15,8 @@ import type { IndicatorPoint } from "../components/PriceChart";
 
 type Timeframe = "1W" | "1M" | "3M" | "1Y";
 
-const TF_DAYS: Record<Timeframe, number> = { "1W": 7, "1M": 30, "3M": 90, "1Y": 365 };
+const TF_DAYS: Record<Timeframe, number>    = { "1W": 7, "1M": 30, "3M": 90, "1Y": 365 };
+const TF_REFRESH: Record<Timeframe, number> = { "1W": 60_000, "1M": 60_000, "3M": 120_000, "1Y": 300_000 };
 
 const RSI_OVERBOUGHT = 70;
 const RSI_OVERSOLD   = 30;
@@ -37,7 +38,7 @@ interface BarData {
   atr?: number | null;
 }
 
-function useBars(symbol: string, days: number, assetClass: string) {
+function useBars(symbol: string, days: number, assetClass: string, refreshMs: number) {
   const [bars, setBars]       = useState<BarData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
@@ -52,7 +53,7 @@ function useBars(symbol: string, days: number, assetClass: string) {
       try {
         const res = await fetch(
           `/api/bars/${encodeURIComponent(symbol)}?days=${days}&asset_class=${assetClass}`,
-          { headers: apiHeaders(), signal: AbortSignal.timeout(20000) },
+          { headers: apiHeaders(), signal: AbortSignal.timeout(30000) },
         );
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
@@ -72,9 +73,9 @@ function useBars(symbol: string, days: number, assetClass: string) {
     }
 
     load();
-    const id = setInterval(load, 60_000);
+    const id = setInterval(load, refreshMs);
     return () => { cancelled = true; clearInterval(id); };
-  }, [symbol, days, assetClass]);
+  }, [symbol, days, assetClass, refreshMs]);
 
   return { bars, loading, error, updatedAt };
 }
@@ -120,7 +121,7 @@ export function TechnicalPage() {
       ? "crypto"
       : "stock";
 
-  const { bars, loading, error, updatedAt } = useBars(symbol, TF_DAYS[tf], assetClass);
+  const { bars, loading, error, updatedAt } = useBars(symbol, TF_DAYS[tf], assetClass, TF_REFRESH[tf]);
 
   const candles    = toCandles(bars);
   const indicators = toIndicators(bars);
@@ -161,6 +162,12 @@ export function TechnicalPage() {
           {updatedAt && !loading && (
             <span>Updated {updatedAt.toLocaleTimeString()}</span>
           )}
+          {!loading && error && bars.length > 0 && (
+            <span className="flex items-center gap-1 text-amber-500">
+              <AlertCircle className="w-3 h-3" />
+              Stale — refresh failed
+            </span>
+          )}
           {!loading && !error && (
             <span className="flex items-center gap-1">
               <span className="relative flex h-2 w-2">
@@ -192,8 +199,8 @@ export function TechnicalPage() {
         ))}
       </div>
 
-      {/* Error state */}
-      {error && (
+      {/* Error state — full banner only when no data is loaded yet */}
+      {error && bars.length === 0 && (
         <div className="glass rounded-2xl p-6 flex items-center gap-3 text-amber-400">
           <AlertCircle className="w-5 h-5 shrink-0" />
           <div>
