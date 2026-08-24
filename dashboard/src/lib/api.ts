@@ -2187,6 +2187,34 @@ export interface DisclosureSettings {
   congress_refresh_hours:        number;
   holdings_refresh_hours:        number;
   min_confidence_pct:            number;
+  quiver_api_key:                string;
+  quiver_api_key_configured:     boolean;
+}
+
+// ── Execute order (copy-trade one-click) ─────────────────────────────────────
+
+export interface ExecuteOrderPayload {
+  symbol:                  string;
+  asset_class:             "stock" | "crypto";
+  action:                  "BUY" | "SELL";
+  suggested_position_pct?: number;
+  stop_loss_pct?:          number;
+  take_profit_pct?:        number;
+  qty?:                    number;
+}
+
+export async function executeOrder(payload: ExecuteOrderPayload): Promise<unknown> {
+  const res = await fetch(`${BASE}/execute`, {
+    method:  "POST",
+    headers: apiHeaders({ "Content-Type": "application/json" }),
+    body:    JSON.stringify(payload),
+    signal:  AbortSignal.timeout(20000),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error((d as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  return safeJson(res);
 }
 
 export async function fetchDisclosureSettings(): Promise<DisclosureSettings> {

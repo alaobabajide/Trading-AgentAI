@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import clsx from "clsx";
-import { RefreshCw, AlertTriangle, ChevronDown, TrendingUp, TrendingDown } from "lucide-react";
-import { apiHeaders } from "../lib/api";
+import { RefreshCw, AlertTriangle, ChevronDown, TrendingUp, TrendingDown, Copy, X, CheckCircle } from "lucide-react";
+import { apiHeaders, executeOrder } from "../lib/api";
 
 const API_BASE = "/api";
 
@@ -137,6 +137,7 @@ function InvestorRow({
   isOpen: boolean;
   onToggle: () => void;
 }) {
+  const [copyTarget, setCopyTarget] = useState<CopyTradeTarget | null>(null);
   const holdingsPath = `/disclosures/investors/${investor.id}/holdings`;
   const { data, loading } = useBrainFetch<{
     period: string;
@@ -213,6 +214,7 @@ function InvestorRow({
                     <th className="text-right px-3 py-2 text-xs text-slate-400 font-medium">Value</th>
                     <th className="text-right px-3 py-2 text-xs text-slate-400 font-medium">% Portfolio</th>
                     <th className="text-right px-3 py-2 text-xs text-slate-400 font-medium">Shares</th>
+                    <th className="px-3 py-2" />
                   </tr>
                 </thead>
                 <tbody>
@@ -235,6 +237,23 @@ function InvestorRow({
                       <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-400">
                         {h.shares != null ? h.shares.toLocaleString(undefined, { maximumFractionDigits: 0 }) : "—"}
                       </td>
+                      <td className="px-3 py-2">
+                        {h.symbol && (
+                          <button
+                            onClick={() => setCopyTarget({
+                              symbol:       h.symbol,
+                              action:       "BUY",
+                              member_name:  investor.name,
+                              amount_range: fmt(h.value_usd),
+                              trade_type:   "purchase",
+                            })}
+                            className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs border border-slate-600 text-slate-300 hover:border-blue-500 hover:text-blue-400 transition-colors"
+                          >
+                            <Copy className="h-3 w-3" />
+                            Copy
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -245,6 +264,9 @@ function InvestorRow({
             <p className="text-xs text-amber-400/70">{data.lag_warning}</p>
           )}
         </div>
+      )}
+      {copyTarget && (
+        <CopyTradeModal target={copyTarget} onClose={() => setCopyTarget(null)} />
       )}
     </div>
   );
@@ -282,6 +304,155 @@ function InstitutionalTab() {
   );
 }
 
+// ── Copy Trade Modal ──────────────────────────────────────────────────────────
+
+interface CopyTradeTarget {
+  symbol:      string;
+  action:      "BUY" | "SELL";
+  member_name: string;
+  amount_range: string;
+  trade_type:  string;
+}
+
+function CopyTradeModal({ target, onClose }: { target: CopyTradeTarget; onClose: () => void }) {
+  const [positionPct, setPositionPct] = useState(2);
+  const [slPct,       setSlPct]       = useState(2);
+  const [tpPct,       setTpPct]       = useState(5);
+  const [submitting,  setSubmitting]  = useState(false);
+  const [done,        setDone]        = useState(false);
+  const [error,       setError]       = useState<string | null>(null);
+
+  async function handleExecute() {
+    if (!target.symbol) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await executeOrder({
+        symbol:                target.symbol,
+        asset_class:           "stock",
+        action:                target.action,
+        suggested_position_pct: positionPct / 100,
+        stop_loss_pct:          slPct / 100,
+        take_profit_pct:        tpPct / 100,
+      });
+      setDone(true);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
+          <div className="flex items-center gap-2">
+            <Copy className="h-4 w-4 text-blue-400" />
+            <span className="font-semibold text-white">Copy Trade</span>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {done ? (
+          <div className="px-5 py-8 text-center space-y-3">
+            <CheckCircle className="h-10 w-10 text-emerald-400 mx-auto" />
+            <p className="text-white font-medium">Order submitted successfully</p>
+            <p className="text-slate-400 text-sm">
+              {target.action} {target.symbol} order sent to your broker.
+            </p>
+            <button onClick={onClose} className="mt-4 px-6 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-sm text-white transition-colors">
+              Close
+            </button>
+          </div>
+        ) : (
+          <div className="px-5 py-4 space-y-4">
+            <div className="rounded-xl bg-slate-800 px-4 py-3 space-y-1">
+              <p className="text-xs text-slate-400">Copying trade from</p>
+              <p className="font-medium text-white">{target.member_name}</p>
+              <div className="flex items-center gap-2 mt-1">
+                <span className={clsx(
+                  "text-xs px-2 py-0.5 rounded border font-medium",
+                  target.action === "BUY"
+                    ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                    : "bg-rose-500/15 text-rose-400 border-rose-500/30"
+                )}>
+                  {target.action === "BUY" ? "▲ Purchase" : "▼ Sale"}
+                </span>
+                <span className="font-mono font-bold text-blue-400 text-sm">{target.symbol}</span>
+                {target.amount_range && (
+                  <span className="text-xs text-slate-400">{target.amount_range}</span>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-xs text-amber-300">
+              <AlertTriangle className="inline h-3.5 w-3.5 mr-1 -mt-0.5" />
+              This disclosure may be up to 45 days old. Review before executing.
+            </div>
+
+            <div className="space-y-3">
+              {[
+                { label: "Position size", value: positionPct, set: setPositionPct, opts: [1,2,3,5,10], suffix: "% of equity" },
+                { label: "Stop-loss",     value: slPct,       set: setSlPct,       opts: [1,2,3,5],    suffix: "% below entry" },
+                { label: "Take-profit",   value: tpPct,       set: setTpPct,       opts: [3,5,10,15],  suffix: "% above entry" },
+              ].map(({ label, value, set, opts, suffix }) => (
+                <div key={label} className="space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-400">{label}</span>
+                    <span className="text-slate-200 font-mono font-medium">{value}% {suffix}</span>
+                  </div>
+                  <div className="flex gap-1.5">
+                    {opts.map(o => (
+                      <button
+                        key={o}
+                        onClick={() => set(o)}
+                        className={clsx(
+                          "flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors border",
+                          value === o
+                            ? "bg-blue-600 border-blue-500 text-white"
+                            : "bg-slate-800 border-slate-600 text-slate-300 hover:border-slate-400"
+                        )}
+                      >
+                        {o}%
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {error && <p className="text-xs text-rose-400 font-mono">{error}</p>}
+
+            <div className="flex gap-3 pt-1">
+              <button
+                onClick={onClose}
+                className="flex-1 py-2.5 rounded-xl border border-slate-600 text-sm text-slate-300 hover:border-slate-400 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleExecute}
+                disabled={submitting || !target.symbol}
+                className={clsx(
+                  "flex-1 py-2.5 rounded-xl text-sm font-medium transition-colors",
+                  target.action === "BUY"
+                    ? "bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white"
+                    : "bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white"
+                )}
+              >
+                {submitting ? "Submitting…" : `Confirm ${target.action} ${target.symbol}`}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Congressional STOCK Act tab ───────────────────────────────────────────────
 
 function CongressTab() {
@@ -289,6 +460,7 @@ function CongressTab() {
   const [symbolFilter, setSymbolFilter] = useState("");
   const [appliedMember, setAppliedMember] = useState("");
   const [appliedSymbol, setAppliedSymbol] = useState("");
+  const [copyTarget, setCopyTarget] = useState<CopyTradeTarget | null>(null);
 
   const path = `/disclosures/congress/feed?limit=200${appliedMember ? `&member=${encodeURIComponent(appliedMember)}` : ""}${appliedSymbol ? `&symbol=${encodeURIComponent(appliedSymbol.toUpperCase())}` : ""}`;
   const { data, loading, error, refetch } = useBrainFetch<{
@@ -366,35 +538,61 @@ function CongressTab() {
                   <th className="text-left px-3 py-2 text-xs text-slate-400 font-medium">Amount</th>
                   <th className="text-left px-3 py-2 text-xs text-slate-400 font-medium">Tx Date</th>
                   <th className="text-left px-3 py-2 text-xs text-slate-400 font-medium">Disclosed</th>
+                  <th className="px-3 py-2" />
                 </tr>
               </thead>
               <tbody>
-                {trades.map((t, i) => (
-                  <tr
-                    key={t.id}
-                    className={clsx(
-                      "border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors",
-                      i % 2 === 0 ? "bg-slate-800/20" : ""
-                    )}
-                  >
-                    <td className="px-3 py-2 text-white font-medium">
-                      <div>{t.member_name}</div>
-                      {t.party && (
-                        <div className="text-xs text-slate-500">{t.party} · {t.state}</div>
+                {trades.map((t, i) => {
+                  const isBuy = t.trade_type?.toLowerCase().includes("purchase") || t.trade_type?.toLowerCase().includes("buy");
+                  const isSell = t.trade_type?.toLowerCase().includes("sale") || t.trade_type?.toLowerCase().includes("sell");
+                  const canCopy = t.symbol && (isBuy || isSell);
+                  return (
+                    <tr
+                      key={t.id}
+                      className={clsx(
+                        "border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors",
+                        i % 2 === 0 ? "bg-slate-800/20" : ""
                       )}
-                    </td>
-                    <td className="px-3 py-2 text-slate-300 text-xs">{t.chamber}</td>
-                    <td className="px-3 py-2 text-blue-400 font-mono font-medium">{t.symbol || "—"}</td>
-                    <td className="px-3 py-2 text-slate-300 truncate max-w-[12rem] text-xs">{t.company_name || "—"}</td>
-                    <td className="px-3 py-2"><TradeTypeBadge type={t.trade_type} /></td>
-                    <td className="px-3 py-2 text-slate-300 text-xs whitespace-nowrap">{t.amount_range || "—"}</td>
-                    <td className="px-3 py-2 text-slate-400 text-xs font-mono">{t.transaction_date || "—"}</td>
-                    <td className="px-3 py-2 text-slate-400 text-xs font-mono">{t.disclosure_date || "—"}</td>
-                  </tr>
-                ))}
+                    >
+                      <td className="px-3 py-2 text-white font-medium">
+                        <div>{t.member_name}</div>
+                        {t.party && (
+                          <div className="text-xs text-slate-500">{t.party} · {t.state}</div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-slate-300 text-xs">{t.chamber}</td>
+                      <td className="px-3 py-2 text-blue-400 font-mono font-medium">{t.symbol || "—"}</td>
+                      <td className="px-3 py-2 text-slate-300 truncate max-w-[12rem] text-xs">{t.company_name || "—"}</td>
+                      <td className="px-3 py-2"><TradeTypeBadge type={t.trade_type} /></td>
+                      <td className="px-3 py-2 text-slate-300 text-xs whitespace-nowrap">{t.amount_range || "—"}</td>
+                      <td className="px-3 py-2 text-slate-400 text-xs font-mono">{t.transaction_date || "—"}</td>
+                      <td className="px-3 py-2 text-slate-400 text-xs font-mono">{t.disclosure_date || "—"}</td>
+                      <td className="px-3 py-2">
+                        {canCopy && (
+                          <button
+                            onClick={() => setCopyTarget({
+                              symbol:       t.symbol,
+                              action:       isBuy ? "BUY" : "SELL",
+                              member_name:  t.member_name,
+                              amount_range: t.amount_range || "",
+                              trade_type:   t.trade_type,
+                            })}
+                            className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs border border-slate-600 text-slate-300 hover:border-blue-500 hover:text-blue-400 transition-colors whitespace-nowrap"
+                          >
+                            <Copy className="h-3 w-3" />
+                            Copy
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
+          {copyTarget && (
+            <CopyTradeModal target={copyTarget} onClose={() => setCopyTarget(null)} />
+          )}
           {data?.lag_warning && (
             <p className="text-xs text-amber-400/70">{data.lag_warning}</p>
           )}

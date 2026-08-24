@@ -4829,12 +4829,17 @@ class DisclosureSettingsPayload(BaseModel):
     congress_refresh_hours:        int | None = None
     holdings_refresh_hours:        int | None = None
     min_confidence_pct:            int | None = None
+    quiver_api_key:                str | None = None
 
 
 @app.get("/disclosure-settings")
 def get_disclosure_settings(request: Request):
     from brain.disclosure_settings import as_dict
-    return as_dict()
+    d = as_dict()
+    # Never return the raw API key — replace with a presence indicator
+    d["quiver_api_key_configured"] = bool(d.get("quiver_api_key", ""))
+    d["quiver_api_key"] = ""
+    return d
 
 
 @app.post("/disclosure-settings")

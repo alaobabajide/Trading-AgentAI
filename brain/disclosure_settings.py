@@ -68,6 +68,10 @@ class DisclosureConfig:
     # Display filter
     min_confidence_pct: int = 70
 
+    # Quiver Quantitative API key (free tier at quiverquant.com)
+    # Used for congressional STOCK Act trade disclosures
+    quiver_api_key: str = ""
+
 
 def load() -> DisclosureConfig:
     path = _store_path()
