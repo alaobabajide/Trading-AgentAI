@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import clsx from "clsx";
 import { RefreshCw, AlertTriangle, ChevronDown, TrendingUp, TrendingDown } from "lucide-react";
-import { getActiveUserId } from "../lib/api";
+import { apiHeaders } from "../lib/api";
 
 const API_BASE = "/api";
 
@@ -58,10 +58,7 @@ function useBrainFetch<T>(path: string, deps: unknown[] = []) {
     let active = true;
     setLoading(true);
     setError(null);
-    const userId = getActiveUserId();
-    const headers: Record<string, string> = {};
-    if (userId) headers["X-User-Id"] = userId;
-    fetch(`${API_BASE}${path}`, { headers })
+    fetch(`${API_BASE}${path}`, { headers: apiHeaders() })
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
@@ -418,10 +415,10 @@ export function DisclosureTrackerPage() {
   async function triggerRefresh() {
     setRefreshing(true);
     try {
-      const userId = getActiveUserId();
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (userId) headers["X-User-Id"] = userId;
-      await fetch(`${API_BASE}/disclosures/refresh`, { method: "POST", headers });
+      await fetch(`${API_BASE}/disclosures/refresh`, {
+        method: "POST",
+        headers: apiHeaders({ "Content-Type": "application/json" }),
+      });
     } catch {
       // ignore
     } finally {
