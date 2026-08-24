@@ -1,10 +1,10 @@
 import clsx from "clsx";
-import { Brain, Clock, Database, Landmark, Link, Package, RefreshCw, Shield, TrendingUp, Zap } from "lucide-react";
+import { Brain, Clock, Database, Eye, Landmark, Link, Package, RefreshCw, Shield, TrendingUp, Zap } from "lucide-react";
 import {
   HITLMode, UserProfile, DEFAULT_PROFILE,
   MODE_CONFIG, loadProfile, saveProfile,
 } from "../lib/hitl";
-import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload, useWebhookSettings, useBrokerSettings, useTastytradeSettings, TastytradeSavePayload, usePolygonSettings, useNgxPulseSettings, useSchwabSettings, useIBKRSettings, useKrakenSettings, useCoinbaseSettings, useTradeStationSettings, useFmpSettings } from "../lib/api";
+import { useConfigStatus, useRiskConfig, RiskConfigFields, useLlmSettings, LlmSavePayload, useAlpacaSettings, AlpacaSavePayload, useWebhookSettings, useBrokerSettings, useTastytradeSettings, TastytradeSavePayload, usePolygonSettings, useNgxPulseSettings, useSchwabSettings, useIBKRSettings, useKrakenSettings, useCoinbaseSettings, useTradeStationSettings, useFmpSettings, useDisclosureSettings, DisclosureSettings } from "../lib/api";
 import { useEffect, useState } from "react";
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
@@ -1672,6 +1672,90 @@ function TradeStationPanel() {
   );
 }
 
+// ── Disclosure Tracker settings panel ────────────────────────────────────────
+
+function DisclosureSettingsPanel() {
+  const { settings, saving, saved, error, save } = useDisclosureSettings();
+  const [draft, setDraft] = useState<Partial<DisclosureSettings>>({});
+
+  if (!settings) return <p className="text-xs text-slate-500">Loading…</p>;
+
+  const field = <K extends keyof DisclosureSettings>(key: K) =>
+    (draft[key] !== undefined ? draft[key] : settings[key]) as DisclosureSettings[K];
+
+  const update = (k: keyof DisclosureSettings, v: string | number) =>
+    setDraft(d => ({ ...d, [k]: v }));
+
+  function handleSave() {
+    if (Object.keys(draft).length === 0) return;
+    save(draft).then(() => setDraft({}));
+  }
+
+  const textInput = (key: keyof DisclosureSettings, label: string, hint: string, placeholder = "") => (
+    <div className="space-y-1">
+      <label className="text-[11px] text-slate-400 uppercase tracking-wide">{label}</label>
+      <input
+        type="text"
+        value={String(field(key))}
+        onChange={e => update(key, e.target.value)}
+        placeholder={placeholder}
+        className="w-full bg-surface-700 border border-white/10 rounded-xl px-4 py-2.5 text-sm font-mono text-slate-200 outline-none focus:ring-1 focus:ring-brand-500"
+      />
+      <p className="text-[11px] text-slate-500">{hint}</p>
+    </div>
+  );
+
+  const numInput = (key: keyof DisclosureSettings, label: string, hint: string, min = 1, max = 9999) => (
+    <div className="space-y-1">
+      <label className="text-[11px] text-slate-400 uppercase tracking-wide">{label}</label>
+      <input
+        type="number" min={min} max={max} step={1}
+        value={Number(field(key))}
+        onChange={e => { const v = parseInt(e.target.value); if (!isNaN(v)) update(key, v); }}
+        className="w-full bg-surface-700 border border-white/10 rounded-xl px-4 py-2.5 text-sm font-mono text-slate-200 outline-none focus:ring-1 focus:ring-brand-500"
+      />
+      <p className="text-[11px] text-slate-500">{hint}</p>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <SubSection title="SEC EDGAR" />
+      {textInput(
+        "edgar_user_agent",
+        "EDGAR User-Agent",
+        "Required by SEC fair-use policy. Must include your app name and contact email.",
+        "TradingAgentAI/1.0 you@example.com"
+      )}
+      {numInput("edgar_request_timeout_secs", "Request timeout (seconds)", "How long to wait for an EDGAR response before giving up.", 5, 120)}
+      {numInput("edgar_rate_limit_sleep_secs", "Rate-limit sleep (seconds)", "Pause between investor fetches to stay within SEC's 10 req/sec fair-use limit.", 0, 60)}
+
+      <SubSection title="Congressional Feed URLs" />
+      {textInput("house_feed_url", "House feed URL", "JSON API endpoint for House STOCK Act disclosures.", "https://housestockwatcher.com/api")}
+      {textInput("senate_feed_url", "Senate feed URL", "JSON API endpoint for Senate STOCK Act disclosures.", "https://senatestockwatcher.com/api")}
+      {numInput("congress_request_timeout_secs", "Request timeout (seconds)", "How long to wait for congressional feed responses.", 5, 120)}
+
+      <SubSection title="Refresh Schedule" />
+      {numInput("congress_refresh_hours", "Congress refresh interval (hours)", "How often the orchestrator pulls new STOCK Act disclosures. Changes take effect on next restart.", 1, 168)}
+      {numInput("holdings_refresh_hours", "13F holdings refresh interval (hours)", "How often the orchestrator fetches new 13F filings from EDGAR. Daily (24h) is recommended.", 1, 168)}
+
+      <SubSection title="Display Filter" />
+      {numInput("min_confidence_pct", "Minimum confidence % to display", "Investors and congress members below this threshold are hidden in the Disclosures page.", 0, 100)}
+
+      <div className="flex items-center gap-3 pt-2">
+        <button
+          onClick={handleSave}
+          disabled={saving || Object.keys(draft).length === 0}
+          className="flex-1 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-40 text-sm font-medium transition-colors"
+        >
+          {saved ? "Saved ✓" : saving ? "Saving…" : "Save disclosure settings"}
+        </button>
+      </div>
+      {error && <p className="text-[11px] text-red-400 font-mono">{error}</p>}
+    </div>
+  );
+}
+
 // ── FMP API key panel ─────────────────────────────────────────────────────────
 
 function FmpKeyPanel() {
@@ -2039,6 +2123,15 @@ export function SettingsPage({ paperSignalMode = "llm", onPaperSignalModeChange 
         subtitle="Financial Modeling Prep (FMP) API key — adds company profiles, key metrics, and analyst consensus to the Research page"
       >
         <FmpKeyPanel />
+      </Section>
+
+      {/* ── Public Disclosure Tracker ─────────────────────────────────────── */}
+      <Section
+        icon={<Eye className="w-4 h-4" />}
+        title="Public Disclosure Tracker"
+        subtitle="SEC EDGAR 13F feed, congressional STOCK Act feed URLs, refresh intervals, and display filter"
+      >
+        <DisclosureSettingsPanel />
       </Section>
 
       {/* ── Demo Account ──────────────────────────────────────────────────── */}

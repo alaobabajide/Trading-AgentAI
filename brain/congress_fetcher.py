@@ -22,15 +22,20 @@ from brain.copy_trading import upsert_congress_trades
 
 log = logging.getLogger(__name__)
 
-_HOUSE_URL  = "https://housestockwatcher.com/api"
-_SENATE_URL = "https://senatestockwatcher.com/api"
-_TIMEOUT    = 20  # seconds
+def _cfg():
+    try:
+        from brain.disclosure_settings import load
+        return load()
+    except Exception:
+        from brain.disclosure_settings import DisclosureConfig
+        return DisclosureConfig()
 
 
 def _fetch_json(url: str) -> list[dict]:
+    cfg = _cfg()
     try:
-        r = httpx.get(url, timeout=_TIMEOUT, follow_redirects=True,
-                      headers={"User-Agent": "TradingAgentAI/1.0 (disclosure tracker)"})
+        r = httpx.get(url, timeout=cfg.congress_request_timeout_secs, follow_redirects=True,
+                      headers={"User-Agent": cfg.edgar_user_agent})
         r.raise_for_status()
         data = r.json()
         if isinstance(data, list):
@@ -115,8 +120,9 @@ def _parse_date(raw: str) -> str:
 
 def refresh() -> int:
     """Fetch both chambers and upsert all trades. Returns total new rows inserted."""
-    house_raw  = _fetch_json(_HOUSE_URL)
-    senate_raw = _fetch_json(_SENATE_URL)
+    cfg = _cfg()
+    house_raw  = _fetch_json(cfg.house_feed_url)
+    senate_raw = _fetch_json(cfg.senate_feed_url)
 
     trades: list[dict] = []
     for raw in house_raw:

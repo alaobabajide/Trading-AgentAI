@@ -21,22 +21,31 @@ from brain.copy_trading import TRACKED_INVESTORS, get_holdings_periods, upsert_1
 
 log = logging.getLogger(__name__)
 
-_BASE      = "https://data.sec.gov"
-_ARCHIVES  = "https://www.sec.gov/Archives/edgar"
-_TIMEOUT   = 30
-_HEADERS   = {
-    "User-Agent": "TradingAgentAI/1.0 alao.babajide@gmail.com",
-    "Accept-Encoding": "gzip, deflate",
-}
+_BASE     = "https://data.sec.gov"
+_ARCHIVES = "https://www.sec.gov/Archives/edgar"
+
+
+def _cfg():
+    try:
+        from brain.disclosure_settings import load
+        return load()
+    except Exception:
+        from brain.disclosure_settings import DisclosureConfig
+        return DisclosureConfig()
+
+
+def _headers():
+    return {"User-Agent": _cfg().edgar_user_agent, "Accept-Encoding": "gzip, deflate"}
 
 # CUSIP → ticker symbol cache (populated lazily from EDGAR company facts)
 _CUSIP_CACHE: dict[str, str] = {}
 
 
 def _get(url: str, retries: int = 2) -> Optional[httpx.Response]:
+    cfg = _cfg()
     for attempt in range(retries + 1):
         try:
-            r = httpx.get(url, timeout=_TIMEOUT, headers=_HEADERS, follow_redirects=True)
+            r = httpx.get(url, timeout=cfg.edgar_request_timeout_secs, headers=_headers(), follow_redirects=True)
             if r.status_code == 200:
                 return r
             if r.status_code == 429:
@@ -207,5 +216,5 @@ def refresh_all() -> dict[str, bool]:
         except Exception as exc:
             log.error("13F refresh failed for %s: %s", inv["id"], exc, exc_info=True)
             results[inv["id"]] = False
-        time.sleep(1)  # be polite to EDGAR
+        time.sleep(_cfg().edgar_rate_limit_sleep_secs)
     return results

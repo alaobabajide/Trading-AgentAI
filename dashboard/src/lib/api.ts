@@ -2174,3 +2174,73 @@ export function useWebhookSettings() {
 
   return { settings, generating, revoking, revealed, error, generate, revoke, dismiss };
 }
+
+// ── Disclosure Tracker settings ───────────────────────────────────────────────
+
+export interface DisclosureSettings {
+  edgar_user_agent:              string;
+  edgar_request_timeout_secs:    number;
+  edgar_rate_limit_sleep_secs:   number;
+  house_feed_url:                string;
+  senate_feed_url:               string;
+  congress_request_timeout_secs: number;
+  congress_refresh_hours:        number;
+  holdings_refresh_hours:        number;
+  min_confidence_pct:            number;
+}
+
+export async function fetchDisclosureSettings(): Promise<DisclosureSettings> {
+  const res = await fetch(`${BASE}/disclosure-settings`, {
+    headers: apiHeaders(),
+    signal:  AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export async function saveDisclosureSettings(
+  updates: Partial<DisclosureSettings>
+): Promise<{ saved: boolean; settings: DisclosureSettings }> {
+  const res = await fetch(`${BASE}/disclosure-settings`, {
+    method:  "POST",
+    headers: apiHeaders({ "Content-Type": "application/json" }),
+    body:    JSON.stringify(updates),
+    signal:  AbortSignal.timeout(10000),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error((d as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  return safeJson(res);
+}
+
+export function useDisclosureSettings() {
+  const [settings, setSettings] = useState<DisclosureSettings | null>(null);
+  const [saving,   setSaving]   = useState(false);
+  const [saved,    setSaved]    = useState(false);
+  const [error,    setError]    = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchDisclosureSettings()
+      .then(s => { if (!cancelled) setSettings(s); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  async function save(updates: Partial<DisclosureSettings>) {
+    setSaving(true); setError(null);
+    try {
+      const { settings: updated } = await saveDisclosureSettings(updates);
+      setSettings(updated);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return { settings, saving, saved, error, save };
+}

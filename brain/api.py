@@ -4817,6 +4817,35 @@ async def tradingview_webhook(user_id: str, secret: str, request: Request):
     return _execute_order(broker, _wh_eff, cfg, signal, sl_pct, tp_pct, source="tradingview", user_id=user_id)
 
 
+# ── Disclosure Tracker — settings endpoints ──────────────────────────────────
+
+class DisclosureSettingsPayload(BaseModel):
+    edgar_user_agent:              str | None = None
+    edgar_request_timeout_secs:    int | None = None
+    edgar_rate_limit_sleep_secs:   int | None = None
+    house_feed_url:                str | None = None
+    senate_feed_url:               str | None = None
+    congress_request_timeout_secs: int | None = None
+    congress_refresh_hours:        int | None = None
+    holdings_refresh_hours:        int | None = None
+    min_confidence_pct:            int | None = None
+
+
+@app.get("/disclosure-settings")
+def get_disclosure_settings(request: Request):
+    from brain.disclosure_settings import as_dict
+    return as_dict()
+
+
+@app.post("/disclosure-settings")
+def save_disclosure_settings(payload: DisclosureSettingsPayload, request: Request):
+    from brain.disclosure_settings import save
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    cfg = save(updates)
+    from dataclasses import asdict
+    return {"saved": True, "settings": asdict(cfg)}
+
+
 # ── Public Disclosure Tracker endpoints ──────────────────────────────────────
 # Read-only: returns 13F institutional holdings and STOCK Act congressional
 # trade disclosures. No order placement occurs in these endpoints.
