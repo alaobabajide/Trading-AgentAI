@@ -573,15 +573,31 @@ function BacktestResultsTab() {
   const [launching,  setLaunching]  = useState<string | null>(null);
   const [msg,        setMsg]        = useState<string | null>(null);
   const [expanded,   setExpanded]   = useState<string | null>(null);
+  // optimistic local "running" entries before Supabase confirms
+  const [pending,    setPending]    = useState<{ name: string; label: string; start_date: string; end_date: string }[]>([]);
 
-  const load = useCallback(() => {
-    setLoading(true);
+  const hasRunning = runs.some(r => r.status === "running") || pending.length > 0;
+
+  const load = useCallback((silent = false) => {
+    if (!silent) setLoading(true);
     fetchBacktestRuns()
-      .then(r => { setRuns(r); setLoading(false); })
+      .then(r => {
+        setRuns(r);
+        setLoading(false);
+        // drop pending entries that have a confirmed row now
+        setPending(prev => prev.filter(p => !r.some(row => row.name === p.name)));
+      })
       .catch(() => setLoading(false));
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // auto-poll every 15 s while any run is in-progress
+  useEffect(() => {
+    if (!hasRunning) return;
+    const id = setInterval(() => load(true), 15_000);
+    return () => clearInterval(id);
+  }, [hasRunning, load]);
 
   async function launch(preset: typeof PRESET_RUNS[0]) {
     setLaunching(preset.name);
@@ -593,8 +609,15 @@ function BacktestResultsTab() {
         end_date:   preset.end_date || undefined,
         symbols:    "all",
       });
-      setMsg(`Backtest "${preset.label}" started — refresh in a few minutes.`);
-      setTimeout(load, 3000);
+      // show optimistic row immediately while backtest downloads data
+      setPending(prev => [...prev.filter(p => p.name !== preset.name), {
+        name:       preset.name,
+        label:      preset.label,
+        start_date: preset.start_date,
+        end_date:   preset.end_date || new Date().toISOString().slice(0, 10),
+      }]);
+      setMsg(`Backtest "${preset.label}" started. Downloading ~80 symbols of historical data — this takes 3–10 minutes. The table below auto-refreshes every 15 s.`);
+      setTimeout(() => load(true), 5000);
     } catch (e) {
       setMsg(`Error: ${(e as Error).message}`);
     } finally {
@@ -661,18 +684,24 @@ function BacktestResultsTab() {
             <Database className="w-4 h-4 text-slate-400 inline mr-2" />
             Backtest Runs
           </h3>
-          <button onClick={load} className="ml-auto p-1.5 rounded hover:bg-white/5 text-slate-400">
+          <button onClick={() => load(false)} className="ml-auto p-1.5 rounded hover:bg-white/5 text-slate-400">
             <RefreshCw className={clsx("w-3.5 h-3.5", loading && "animate-spin")} />
           </button>
         </div>
-        {loading ? (
+        {loading && runs.length === 0 && pending.length === 0 ? (
           <div className="px-5 py-8 text-sm text-slate-600">Loading…</div>
-        ) : runs.length === 0 ? (
+        ) : runs.length === 0 && pending.length === 0 ? (
           <div className="px-5 py-8 text-sm text-slate-600">
             No backtests run yet. Click a preset above to start one.
           </div>
         ) : (
           <div className="overflow-x-auto">
+            {hasRunning && (
+              <div className="px-4 py-2.5 text-[11px] text-amber-400 bg-amber-500/5 border-b border-amber-500/10 flex items-center gap-2">
+                <RefreshCw className="w-3 h-3 animate-spin" />
+                Backtest in progress — auto-refreshing every 15 s. This takes 3–10 minutes while historical data downloads.
+              </div>
+            )}
             <table className="w-full text-xs font-mono">
               <thead>
                 <tr className="border-b border-white/5 text-slate-500 text-[10px] uppercase tracking-wider">
@@ -682,6 +711,16 @@ function BacktestResultsTab() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/[0.03]">
+                {/* optimistic pending rows (not yet in Supabase) */}
+                {pending.map(p => (
+                  <tr key={`pending-${p.name}`} className="opacity-60">
+                    <td className="px-3 py-2.5"><Clock className="w-3.5 h-3.5 text-amber-400 animate-pulse" /></td>
+                    <td className="px-3 py-2.5 font-semibold text-slate-200">{p.name}</td>
+                    <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap">{p.start_date} → {p.end_date}</td>
+                    <td className="px-3 py-2.5 text-slate-400">rule_based</td>
+                    <td colSpan={8} className="px-3 py-2.5 text-slate-500 italic">Downloading data…</td>
+                  </tr>
+                ))}
                 {runs.map(r => (
                   <>
                     <tr
