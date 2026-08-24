@@ -896,6 +896,25 @@ class Orchestrator:
         except Exception as exc:
             log.warning("Signal outcome resolution failed (non-fatal): %s", exc)
 
+    def _refresh_congress_disclosures(self) -> None:
+        """6-hourly job: pull latest STOCK Act trade disclosures from public APIs."""
+        try:
+            from brain.congress_fetcher import refresh as _refresh
+            new_rows = _refresh()
+            log.info("Congressional disclosure refresh: %d new trades", new_rows)
+        except Exception as exc:
+            log.warning("Congressional disclosure refresh failed (non-fatal): %s", exc)
+
+    def _refresh_13f_holdings(self) -> None:
+        """Daily job: fetch latest 13F filings from SEC EDGAR for tracked investors."""
+        try:
+            from brain.sec_fetcher import refresh_all as _refresh_all
+            results = _refresh_all()
+            success = sum(1 for v in results.values() if v)
+            log.info("13F holdings refresh: %d/%d investors updated", success, len(results))
+        except Exception as exc:
+            log.warning("13F holdings refresh failed (non-fatal): %s", exc)
+
     # ── Scheduled jobs ────────────────────────────────────────────────────────
 
     def _run_cycle(self) -> None:
@@ -983,6 +1002,8 @@ class Orchestrator:
         schedule.every(1).minutes.do(self._monitor_positions)
         schedule.every(30).minutes.do(self._check_api_credits)
         schedule.every(1).hours.do(self._resolve_signal_outcomes)
+        schedule.every(6).hours.do(self._refresh_congress_disclosures)
+        schedule.every(1).days.do(self._refresh_13f_holdings)
 
         total_symbols = len(STOCK_WATCHLIST) + len(ETF_WATCHLIST) + len(CRYPTO_WATCHLIST)
         log.info(

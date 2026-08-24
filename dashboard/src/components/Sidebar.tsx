@@ -1,9 +1,9 @@
-import { Activity, BarChart2, BarChart3, BookOpen, Brain, CandlestickChart, LayoutDashboard, LogOut, Search, Settings, Trophy, Zap } from "lucide-react";
+import { Activity, BarChart2, BarChart3, BookOpen, Brain, CandlestickChart, Eye, LayoutDashboard, LogOut, Search, Settings, Trophy, Zap } from "lucide-react";
 import clsx from "clsx";
 import { useBrainHealth } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 
-type Page = "dashboard" | "signals" | "positions" | "technical" | "fundamental" | "charts" | "indices" | "research" | "performance" | "brain" | "settings";
+type Page = "dashboard" | "signals" | "positions" | "technical" | "fundamental" | "charts" | "indices" | "research" | "performance" | "disclosures" | "brain" | "settings";
 
 interface Props {
   active: Page;
@@ -20,6 +20,7 @@ const NAV: { id: Page; label: string; icon: typeof LayoutDashboard; group?: stri
   { id: "indices",     label: "Indices",     icon: BarChart3,        group: "Analysis" },
   { id: "research",    label: "Research",    icon: Search,           group: "Analysis" },
   { id: "performance", label: "Performance", icon: Trophy },
+  { id: "disclosures", label: "Disclosures", icon: Eye },
   { id: "brain",       label: "Brain",       icon: Brain },
   { id: "settings",    label: "Settings",    icon: Settings },
 ];

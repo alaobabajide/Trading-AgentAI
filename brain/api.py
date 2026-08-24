@@ -4817,6 +4817,89 @@ async def tradingview_webhook(user_id: str, secret: str, request: Request):
     return _execute_order(broker, _wh_eff, cfg, signal, sl_pct, tp_pct, source="tradingview", user_id=user_id)
 
 
+# ── Public Disclosure Tracker endpoints ──────────────────────────────────────
+# Read-only: returns 13F institutional holdings and STOCK Act congressional
+# trade disclosures. No order placement occurs in these endpoints.
+
+@app.get("/disclosures/investors")
+def get_disclosure_investors(request: Request):
+    """List tracked institutional investors with metadata and confidence scores."""
+    from brain.copy_trading import get_investors
+    return get_investors()
+
+
+@app.get("/disclosures/investors/{investor_id}/holdings")
+def get_investor_holdings(investor_id: str, period: str = "", request: Request = None):
+    """Return 13F holdings for an investor. Omit period for the latest filing."""
+    from brain.copy_trading import get_holdings, get_holdings_periods
+    periods = get_holdings_periods(investor_id)
+    if not periods:
+        return {"investor_id": investor_id, "period": None, "periods_available": [], "holdings": []}
+    target = period if period in periods else periods[0]
+    holdings = get_holdings(investor_id, target)
+    return {
+        "investor_id":       investor_id,
+        "period":            target,
+        "periods_available": periods,
+        "holdings":          holdings,
+        "lag_warning":       "13F filings reflect holdings up to 45 days before the filing date. Positions may have changed.",
+    }
+
+
+@app.get("/disclosures/investors/{investor_id}/periods")
+def get_investor_periods(investor_id: str, request: Request = None):
+    """Return all available filing periods for an investor."""
+    from brain.copy_trading import get_holdings_periods
+    return {"investor_id": investor_id, "periods": get_holdings_periods(investor_id)}
+
+
+@app.get("/disclosures/congress/feed")
+def get_congress_feed(
+    limit: int = 100,
+    member: str = "",
+    symbol: str = "",
+    request: Request = None,
+):
+    """Return congressional STOCK Act trade disclosures, newest first."""
+    from brain.copy_trading import get_congress_feed
+    trades = get_congress_feed(
+        limit=min(limit, 500),
+        member=member or None,
+        symbol=symbol or None,
+    )
+    return {
+        "count":       len(trades),
+        "lag_warning": "STOCK Act disclosures may be up to 45 days after the actual transaction date.",
+        "trades":      trades,
+    }
+
+
+@app.get("/disclosures/congress/members")
+def get_congress_members_list(request: Request = None):
+    """Return members who have disclosed trades, with trade counts."""
+    from brain.copy_trading import get_congress_members
+    return get_congress_members()
+
+
+@app.post("/disclosures/refresh")
+def trigger_disclosure_refresh(request: Request):
+    """Manually trigger a disclosure data refresh. M2M auth required."""
+    import threading
+    def _run():
+        try:
+            from brain.congress_fetcher import refresh as refresh_congress
+            refresh_congress()
+        except Exception as exc:
+            log.error("Manual congress refresh error: %s", exc)
+        try:
+            from brain.sec_fetcher import refresh_all
+            refresh_all()
+        except Exception as exc:
+            log.error("Manual 13F refresh error: %s", exc)
+    threading.Thread(target=_run, daemon=True).start()
+    return {"status": "refresh started in background"}
+
+
 if __name__ == "__main__":
     from config import get_settings
     cfg = get_settings()
