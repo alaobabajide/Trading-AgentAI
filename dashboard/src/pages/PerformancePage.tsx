@@ -679,7 +679,12 @@ function BacktestResultsTab() {
 
   const hasRunning = runs.some(r => r.status === "running") || pending.length > 0;
 
-  const PENDING_TIMEOUT_MS = 16 * 60 * 1000; // 16 min — matches 15 min server timeout + buffer
+  const PENDING_TIMEOUT_MS = 16 * 60 * 1000;
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 10_000);
+    return () => clearInterval(id);
+  }, []);
 
   const load = useCallback((silent = false) => {
     if (!silent) setLoading(true);
@@ -808,12 +813,23 @@ function BacktestResultsTab() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            {hasRunning && (
-              <div className="px-4 py-2.5 text-[11px] text-amber-400 bg-amber-500/5 border-b border-amber-500/10 flex items-center gap-2">
-                <RefreshCw className="w-3 h-3 animate-spin" />
-                Simulation running — auto-refreshing every 15 s (~3–10 min total).
-              </div>
-            )}
+            {hasRunning && (() => {
+              const runningRun = runs.find(r => r.status === "running");
+              const startedAt  = runningRun
+                ? new Date((runningRun as BacktestRun & { started_at?: string }).started_at ?? runningRun.created_at).getTime()
+                : pending[0]?.startedAt ?? now;
+              const elapsedMin = Math.floor((now - startedAt) / 60_000);
+              const elapsedSec = Math.floor(((now - startedAt) % 60_000) / 1_000);
+              return (
+                <div className="px-4 py-2.5 text-[11px] text-amber-400 bg-amber-500/5 border-b border-amber-500/10 flex items-center gap-2">
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  Simulation running — {elapsedMin}m {elapsedSec}s elapsed · auto-refreshing every 15 s
+                  {elapsedMin >= 5 && (
+                    <span className="ml-1 text-red-400">(taking longer than expected — may be stuck)</span>
+                  )}
+                </div>
+              );
+            })()}
             <table className="w-full text-xs font-mono">
               <thead>
                 <tr className="border-b border-white/5 text-slate-500 text-[10px] uppercase tracking-wider">
@@ -823,14 +839,21 @@ function BacktestResultsTab() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/[0.03]">
-                {pending.map(p => (
-                  <tr key={`pending-${p.name}`} className="opacity-60">
-                    <td className="px-3 py-2.5"><Clock className="w-3.5 h-3.5 text-amber-400 animate-pulse" /></td>
-                    <td className="px-3 py-2.5 font-semibold text-slate-200">{p.name}</td>
-                    <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap">{p.start_date} → {p.end_date}</td>
-                    <td colSpan={7} className="px-3 py-2.5 text-slate-500 italic">Running simulation…</td>
-                  </tr>
-                ))}
+                {pending.map(p => {
+                  const elapsedMs  = p.startedAt ? now - p.startedAt : 0;
+                  const elapsedMin = Math.floor(elapsedMs / 60_000);
+                  const elapsedSec = Math.floor((elapsedMs % 60_000) / 1_000);
+                  return (
+                    <tr key={`pending-${p.name}`} className="opacity-60">
+                      <td className="px-3 py-2.5"><Clock className="w-3.5 h-3.5 text-amber-400 animate-pulse" /></td>
+                      <td className="px-3 py-2.5 font-semibold text-slate-200">{p.name}</td>
+                      <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap">{p.start_date} → {p.end_date}</td>
+                      <td colSpan={7} className="px-3 py-2.5 text-slate-500 italic">
+                        Running… {elapsedMin}m {elapsedSec}s
+                      </td>
+                    </tr>
+                  );
+                })}
                 {runs.map(r => (
                   <React.Fragment key={r.id}>
                     <tr

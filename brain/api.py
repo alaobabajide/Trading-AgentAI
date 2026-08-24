@@ -2752,6 +2752,7 @@ async def trigger_backtest(request: Request):
         "start_date": start_date,
         "end_date":   end_date or "",
         "created_at": created_at,
+        "started_at": created_at,   # ISO timestamp so frontend can show elapsed time
         "symbol_universe": [],
     }
 
