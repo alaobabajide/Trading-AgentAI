@@ -2705,13 +2705,17 @@ def get_backtest_run(run_id: str, request: Request):
 
 
 @app.post("/backtest/run")
-def trigger_backtest(request: Request, body: dict):
+async def trigger_backtest(request: Request):
     """Trigger a new rule-based backtest run in a background thread.
 
     Body: {"name": str, "start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD",
            "symbols": ["AAPL", ...] | "all"}
     """
     import threading as _thr
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
     name       = body.get("name", "")
     start_date = body.get("start_date", "2024-01-01")
     end_date   = body.get("end_date", "")
