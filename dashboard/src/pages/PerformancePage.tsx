@@ -8,9 +8,8 @@ import {
   apiHeaders,
   fetchTrackRecordStats, fetchTrackRecordLeaderboard, fetchEquityCurve,
   fetchBacktestRuns, triggerBacktest,
-  triggerSeedHistory, fetchSeedStatus,
   type TrackRecordStats, type EquityCurvePoint,
-  type BacktestRun, type TrackRecordLeaderboardRow, type SeedStatus,
+  type BacktestRun, type TrackRecordLeaderboardRow,
 } from "../lib/api";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -125,8 +124,6 @@ function SignalHistoryTable() {
   const [total, setTotal]     = useState(0);
   const [page, setPage]       = useState(0);
   const [loading, setLoading] = useState(true);
-  const [seed, setSeed]       = useState<SeedStatus | null>(null);
-  const [seeding, setSeeding] = useState(false);
 
   const [filterAction,  setFilterAction]  = useState("ALL");
   const [filterTier,    setFilterTier]    = useState("ALL");
@@ -157,39 +154,6 @@ function SignalHistoryTable() {
   }, [page, filterAction, filterTier, filterOutcome, filterSymbol]);
 
   useEffect(() => { fetch(); }, [fetch]);
-
-  // Poll seed status while seeding is in progress
-  useEffect(() => {
-    if (!seeding) return;
-    const poll = setInterval(async () => {
-      try {
-        const s = await fetchSeedStatus();
-        setSeed(s);
-        if (s.status === "done" || s.status === "error") {
-          setSeeding(false);
-          clearInterval(poll);
-          if (s.status === "done") fetch();   // reload table with new rows
-        }
-      } catch { /* non-fatal */ }
-    }, 3000);
-    return () => clearInterval(poll);
-  }, [seeding, fetch]);
-
-  async function handleSeed(force = false) {
-    setSeeding(true);
-    setSeed({ status: "started", message: "Starting… downloading 2 years of market data." });
-    try {
-      const s = await triggerSeedHistory(force);
-      setSeed(s);
-      if (s.status === "done" || s.status === "already_seeded") {
-        setSeeding(false);
-        fetch();
-      }
-    } catch (e) {
-      setSeed({ status: "error", message: (e as Error).message });
-      setSeeding(false);
-    }
-  }
 
   // Reset page when filters change
   useEffect(() => { setPage(0); }, [filterAction, filterTier, filterOutcome, filterSymbol]);
@@ -248,40 +212,20 @@ function SignalHistoryTable() {
           <tbody className="divide-y divide-white/[0.03]">
             {rows.length === 0 && !loading && (
               <tr>
-                <td colSpan={12} className="px-4 py-6">
-                  <div className="flex flex-col items-center gap-4 text-center">
-                    <p className="text-sm text-slate-500">
-                      No signals recorded yet. Populate the history with 2 years of real backtested trades
-                      so the Leaderboard and charts show meaningful data immediately.
+                <td colSpan={12} className="px-4 py-10">
+                  <div className="flex flex-col items-center gap-3 text-center max-w-lg mx-auto">
+                    <TrendingUp className="w-8 h-8 text-slate-700" />
+                    <p className="text-sm font-medium text-slate-400">
+                      Live track record starts 2026-08-24
                     </p>
-                    {seed && seed.status !== "idle" && (
-                      <div className={clsx(
-                        "text-xs px-4 py-2.5 rounded-lg border max-w-lg",
-                        seed.status === "done"
-                          ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
-                          : seed.status === "error"
-                          ? "text-red-400 bg-red-500/10 border-red-500/20"
-                          : "text-amber-400 bg-amber-500/10 border-amber-500/20"
-                      )}>
-                        {seeding && <RefreshCw className="w-3 h-3 animate-spin inline mr-1.5" />}
-                        {seed.message}
-                      </div>
-                    )}
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => handleSeed(false)}
-                        disabled={seeding}
-                        className="flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 hover:bg-brand-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
-                      >
-                        {seeding
-                          ? <><RefreshCw className="w-4 h-4 animate-spin" /> Populating… (~2 min)</>
-                          : <><Database className="w-4 h-4" /> Populate Historical Data</>
-                        }
-                      </button>
-                    </div>
-                    <p className="text-[11px] text-slate-600 max-w-md">
-                      Runs the same rule-based engine as live paper mode against 2024–2025 daily bars.
-                      Results are clearly labelled as backtest data. Live signals layer on top as they accumulate.
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      Every signal the LLM debate engine generates is recorded here with the full
+                      27-agent vote breakdown and outcome tracked at 1h, 24h, and 7 days.
+                      The record builds forward from today — no historical data is mixed in.
+                    </p>
+                    <p className="text-[11px] text-slate-700 mt-1">
+                      Signals appear here within minutes of each orchestrator cycle.
+                      For historical simulations, see the <strong className="text-slate-500">Backtests</strong> tab.
                     </p>
                   </div>
                 </td>
@@ -624,7 +568,7 @@ function TrackRecordTab() {
 
 // ── Backtest Results tab ───────────────────────────────────────────────────────
 
-const RUN_STATUS_ICON = {
+const RUN_STATUS_ICON: Record<string, React.ReactNode> = {
   completed: <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />,
   running:   <Clock       className="w-3.5 h-3.5 text-amber-400 animate-pulse" />,
   failed:    <XCircle     className="w-3.5 h-3.5 text-red-400" />,
@@ -634,17 +578,103 @@ const PRESET_RUNS = [
   { name: "bull_2024",    start_date: "2024-01-01", end_date: "2024-12-31", label: "Bull 2024" },
   { name: "mixed_2025",   start_date: "2025-01-01", end_date: "2025-12-31", label: "Mixed 2025" },
   { name: "current_2026", start_date: "2026-01-01", end_date: "",           label: "Current 2026" },
-  { name: "full_cycle",   start_date: "2024-01-01", end_date: "",           label: "Full Cycle" },
+  { name: "full_cycle",   start_date: "2024-01-01", end_date: "",           label: "Full Cycle (2yr)" },
 ];
 
+// All 5 evidence approaches — their status and what the user can do with each
+const APPROACHES = [
+  {
+    num: 1,
+    label: "Forward Paper Track Record",
+    description: "Every live signal from the LLM debate engine is logged with full 27-agent votes and outcomes tracked at 1h, 24h, and 7 days. This is the primary evidence — forward-looking, no bias, the only data that mirrors what end-users receive.",
+    status: "live" as const,
+    statusLabel: "Live — accumulating from 2026-08-24",
+    linkTab: "track_record" as const,
+    linkLabel: "View Track Record →",
+    why: "Only forward data can prove how the live LLM system actually performs. Regulators and informed users treat this as the only credible evidence.",
+  },
+  {
+    num: 3,
+    label: "LLM Debate Snapshot Logging",
+    description: "The full reasoning of all 27 AI agents is saved for every signal: who voted BUY/SELL/HOLD, confidence scores, which panels conflicted, and the synthesis decision. Users can audit any recommendation end-to-end.",
+    status: "live" as const,
+    statusLabel: "Live — stored in Supabase on every signal",
+    linkTab: "track_record" as const,
+    linkLabel: "View Track Record →",
+    why: "Transparency is what separates a trustworthy system from a black box. When a signal loses money, users can trace exactly what the AI said and why.",
+  },
+  {
+    num: 5,
+    label: "Benchmark vs Index Returns",
+    description: "Every performance metric is shown alongside SPY and BTC returns for the same period. If the system doesn't beat passive index investing, users are told explicitly.",
+    status: "live" as const,
+    statusLabel: "Live — shown on Dashboard",
+    linkTab: null,
+    linkLabel: "See Dashboard →",
+    why: "No trading system should be evaluated in isolation. Hiding underperformance versus a simple ETF would be misleading to users staking real capital.",
+  },
+  {
+    num: 2,
+    label: "Rule-Based Historical Simulation",
+    description: "Runs the deterministic rule engine (not the LLM system) against historical daily bars. Fast, reproducible, zero API cost. Useful for stress-testing parameters across different market regimes, but does NOT represent the live LLM experience.",
+    status: "available" as const,
+    statusLabel: "Available below — clearly labeled SIMULATION",
+    linkTab: null,
+    linkLabel: null,
+    why: "The rule engine is a different system. Calling this a 'backtest' of the LLM debate would be misleading — it's a parameter stress test, nothing more.",
+  },
+  {
+    num: 4,
+    label: "Hybrid LLM Backtest",
+    description: "Use the rule engine to identify candidate signals historically, then replay those candidates through the LLM debate engine. Requires API calls for every candidate signal — estimated cost $40–200 per full run depending on model and date range.",
+    status: "planned" as const,
+    statusLabel: "Not yet built — requires significant API budget",
+    linkTab: null,
+    linkLabel: null,
+    why: "Closest to a real historical test of the live system, but the 2024–2026 LLM models differ from today's, making historical LLM replay an approximation at best.",
+  },
+] as const;
+
+function ApproachCard({ a }: { a: typeof APPROACHES[number] }) {
+  return (
+    <div className={clsx(
+      "rounded-xl border p-4 space-y-2",
+      a.status === "live"      && "border-emerald-500/20 bg-emerald-500/5",
+      a.status === "available" && "border-amber-500/20 bg-amber-500/5",
+      a.status === "planned"   && "border-slate-700 bg-slate-800/40 opacity-70",
+    )}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-mono text-slate-600 border border-slate-700 rounded px-1.5 py-0.5">
+            Approach {a.num}
+          </span>
+          <span className="text-sm font-semibold text-slate-200">{a.label}</span>
+        </div>
+        <span className={clsx(
+          "shrink-0 text-[10px] font-mono px-2 py-0.5 rounded-full border",
+          a.status === "live"      && "text-emerald-400 border-emerald-500/30 bg-emerald-500/10",
+          a.status === "available" && "text-amber-400 border-amber-500/30 bg-amber-500/10",
+          a.status === "planned"   && "text-slate-500 border-slate-600",
+        )}>
+          {a.status === "live" ? "● LIVE" : a.status === "available" ? "◎ AVAILABLE" : "○ PLANNED"}
+        </span>
+      </div>
+      <p className="text-xs text-slate-400 leading-relaxed">{a.description}</p>
+      <div className="text-[11px] text-slate-600 italic">{a.statusLabel}</div>
+      <div className="text-[11px] text-slate-500 bg-slate-800/60 rounded px-2 py-1 border-l-2 border-slate-600">
+        <strong className="text-slate-400">Why this matters:</strong> {a.why}
+      </div>
+    </div>
+  );
+}
+
 function BacktestResultsTab() {
-  const [runs,       setRuns]       = useState<BacktestRun[]>([]);
-  const [loading,    setLoading]    = useState(true);
+  const [runs,       setRuns]    = useState<BacktestRun[]>([]);
+  const [loading,    setLoading] = useState(true);
   const [launching,  setLaunching]  = useState<string | null>(null);
-  const [msg,        setMsg]        = useState<string | null>(null);
+  const [msg,        setMsg]     = useState<string | null>(null);
   const [expanded,   setExpanded]   = useState<string | null>(null);
-  // optimistic local "running" entries before Supabase confirms
-  const [pending,    setPending]    = useState<{ name: string; label: string; start_date: string; end_date: string }[]>([]);
+  const [pending,    setPending] = useState<{ name: string; start_date: string; end_date: string }[]>([]);
 
   const hasRunning = runs.some(r => r.status === "running") || pending.length > 0;
 
@@ -654,7 +684,6 @@ function BacktestResultsTab() {
       .then(r => {
         setRuns(r);
         setLoading(false);
-        // drop pending entries that have a confirmed row now
         setPending(prev => prev.filter(p => !r.some(row => row.name === p.name)));
       })
       .catch(() => setLoading(false));
@@ -662,7 +691,6 @@ function BacktestResultsTab() {
 
   useEffect(() => { load(); }, [load]);
 
-  // auto-poll every 15 s while any run is in-progress
   useEffect(() => {
     if (!hasRunning) return;
     const id = setInterval(() => load(true), 15_000);
@@ -679,14 +707,12 @@ function BacktestResultsTab() {
         end_date:   preset.end_date || undefined,
         symbols:    "all",
       });
-      // show optimistic row immediately while backtest downloads data
       setPending(prev => [...prev.filter(p => p.name !== preset.name), {
         name:       preset.name,
-        label:      preset.label,
         start_date: preset.start_date,
         end_date:   preset.end_date || new Date().toISOString().slice(0, 10),
       }]);
-      setMsg(`Backtest "${preset.label}" started. Downloading ~80 symbols of historical data — this takes 3–10 minutes. The table below auto-refreshes every 15 s.`);
+      setMsg(`Simulation "${preset.label}" queued — downloads ~80 symbols then runs the rule engine (~3–10 min). Auto-refreshes every 15 s.`);
       setTimeout(() => load(true), 5000);
     } catch (e) {
       setMsg(`Error: ${(e as Error).message}`);
@@ -696,19 +722,35 @@ function BacktestResultsTab() {
   }
 
   return (
-    <div className="space-y-5">
-      <div className="text-[11px] text-slate-500 bg-slate-800/60 rounded-lg px-3 py-2 border border-slate-700/50">
-        <strong className="text-slate-400">Rule-based engine only</strong> — deterministic, reproducible.
-        Same symbols and parameters as the live system, replayed against historical daily bars.
-        Results are clearly labeled as backtest data and never mixed with live signals.
+    <div className="space-y-6">
+
+      {/* All 5 approaches overview */}
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold">Evidence Approaches</h3>
+          <span className="text-[10px] text-slate-500 bg-slate-800 rounded px-2 py-0.5 border border-slate-700">
+            How we prove the system works — and what we cannot claim
+          </span>
+        </div>
+        <div className="grid grid-cols-1 gap-3">
+          {APPROACHES.map(a => <ApproachCard key={a.num} a={a} />)}
+        </div>
       </div>
 
-      {/* Preset launch buttons */}
-      <div className="glass rounded-2xl p-5 space-y-3">
-        <h3 className="text-sm font-semibold flex items-center gap-2">
-          <Play className="w-4 h-4 text-brand-400" />
-          Run Preset Backtests
-        </h3>
+      {/* Simulation runner — Approach 2 only */}
+      <div className="border-t border-slate-700/50 pt-6 space-y-4">
+        <div>
+          <h3 className="text-sm font-semibold flex items-center gap-2">
+            <Play className="w-4 h-4 text-amber-400" />
+            Run Rule-Based Simulation <span className="text-[10px] text-amber-400 font-normal">(Approach 2)</span>
+          </h3>
+          <p className="text-[11px] text-slate-500 mt-1 max-w-2xl">
+            This runs the <strong className="text-slate-400">deterministic rule engine</strong> — not the LLM debate system.
+            Results show how the same symbols and risk parameters would have performed historically under rule-based
+            logic only. These are labelled <strong className="text-amber-400/80">SIMULATION</strong> and kept
+            entirely separate from live signal history.
+          </p>
+        </div>
         <div className="flex flex-wrap gap-2">
           {PRESET_RUNS.map(p => {
             const alreadyRun = runs.some(r => r.name === p.name);
@@ -721,17 +763,15 @@ function BacktestResultsTab() {
                   "flex items-center gap-2 px-4 py-2 text-sm rounded-lg border transition-colors",
                   alreadyRun
                     ? "border-emerald-500/30 text-emerald-400 bg-emerald-500/5"
-                    : "border-slate-600 text-slate-300 hover:border-brand-500 hover:text-brand-400",
+                    : "border-slate-600 text-slate-300 hover:border-amber-500/50 hover:text-amber-400",
                   launching === p.name && "opacity-60 cursor-not-allowed"
                 )}
               >
-                {launching === p.name ? (
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                ) : alreadyRun ? (
-                  <CheckCircle className="w-3.5 h-3.5" />
-                ) : (
-                  <Play className="w-3.5 h-3.5" />
-                )}
+                {launching === p.name
+                  ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  : alreadyRun
+                  ? <CheckCircle className="w-3.5 h-3.5" />
+                  : <Play className="w-3.5 h-3.5" />}
                 {p.label}
                 <span className="text-[10px] text-slate-500 font-mono">
                   {p.start_date}→{p.end_date || "now"}
@@ -741,7 +781,7 @@ function BacktestResultsTab() {
           })}
         </div>
         {msg && (
-          <div className="text-xs text-brand-400 bg-brand-500/10 rounded px-3 py-2 border border-brand-500/20">
+          <div className="text-xs text-amber-400 bg-amber-500/10 rounded px-3 py-2 border border-amber-500/20">
             {msg}
           </div>
         )}
@@ -752,8 +792,11 @@ function BacktestResultsTab() {
         <div className="px-5 py-4 border-b border-white/5 flex items-center gap-2">
           <h3 className="text-sm font-semibold">
             <Database className="w-4 h-4 text-slate-400 inline mr-2" />
-            Backtest Runs
+            Simulation Results
           </h3>
+          <span className="text-[10px] text-amber-400/70 bg-amber-500/10 border border-amber-500/20 rounded px-2 py-0.5 font-mono">
+            RULE-BASED · NOT LIVE LLM
+          </span>
           <button onClick={() => load(false)} className="ml-auto p-1.5 rounded hover:bg-white/5 text-slate-400">
             <RefreshCw className={clsx("w-3.5 h-3.5", loading && "animate-spin")} />
           </button>
@@ -762,48 +805,42 @@ function BacktestResultsTab() {
           <div className="px-5 py-8 text-sm text-slate-600">Loading…</div>
         ) : runs.length === 0 && pending.length === 0 ? (
           <div className="px-5 py-8 text-sm text-slate-600">
-            No backtests run yet. Click a preset above to start one.
+            No simulations run yet. Click a preset above to start one.
           </div>
         ) : (
           <div className="overflow-x-auto">
             {hasRunning && (
               <div className="px-4 py-2.5 text-[11px] text-amber-400 bg-amber-500/5 border-b border-amber-500/10 flex items-center gap-2">
                 <RefreshCw className="w-3 h-3 animate-spin" />
-                Backtest in progress — auto-refreshing every 15 s. This takes 3–10 minutes while historical data downloads.
+                Simulation running — auto-refreshing every 15 s (~3–10 min total).
               </div>
             )}
             <table className="w-full text-xs font-mono">
               <thead>
                 <tr className="border-b border-white/5 text-slate-500 text-[10px] uppercase tracking-wider">
-                  {["", "Name", "Period", "Engine", "Return", "Ann. Return", "Sharpe", "Max DD", "Win Rate", "Trades", "vs SPY", "vs BTC"].map(h => (
+                  {["", "Name", "Period", "Return", "Ann.", "Sharpe", "Max DD", "Win Rate", "Trades", "vs SPY"].map(h => (
                     <th key={h} className="px-3 py-2.5 text-left font-medium whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/[0.03]">
-                {/* optimistic pending rows (not yet in Supabase) */}
                 {pending.map(p => (
                   <tr key={`pending-${p.name}`} className="opacity-60">
                     <td className="px-3 py-2.5"><Clock className="w-3.5 h-3.5 text-amber-400 animate-pulse" /></td>
                     <td className="px-3 py-2.5 font-semibold text-slate-200">{p.name}</td>
                     <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap">{p.start_date} → {p.end_date}</td>
-                    <td className="px-3 py-2.5 text-slate-400">rule_based</td>
-                    <td colSpan={8} className="px-3 py-2.5 text-slate-500 italic">Downloading data…</td>
+                    <td colSpan={7} className="px-3 py-2.5 text-slate-500 italic">Running simulation…</td>
                   </tr>
                 ))}
                 {runs.map(r => (
-                  <>
+                  <React.Fragment key={r.id}>
                     <tr
-                      key={r.id}
                       className="hover:bg-white/[0.02] cursor-pointer"
                       onClick={() => setExpanded(e => e === r.id ? null : r.id)}
                     >
                       <td className="px-3 py-2.5">{RUN_STATUS_ICON[r.status] ?? null}</td>
                       <td className="px-3 py-2.5 font-semibold text-slate-200">{r.name}</td>
-                      <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap">
-                        {r.start_date} → {r.end_date}
-                      </td>
-                      <td className="px-3 py-2.5 text-slate-400">{r.engine}</td>
+                      <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap">{r.start_date} → {r.end_date}</td>
                       <td className={clsx("px-3 py-2.5", (r.total_return ?? 0) >= 0 ? "text-emerald-400" : "text-red-400")}>
                         {pct(r.total_return ? r.total_return * 100 : null)}
                       </td>
@@ -817,41 +854,28 @@ function BacktestResultsTab() {
                         {r.max_drawdown != null ? pct(r.max_drawdown * 100) : "—"}
                       </td>
                       <td className="px-3 py-2.5">
-                        {r.win_rate != null ? (
-                          <span className={r.win_rate >= 50 ? "text-emerald-400" : "text-red-400"}>
-                            {r.win_rate.toFixed(0)}%
-                          </span>
-                        ) : "—"}
+                        {r.win_rate != null
+                          ? <span className={r.win_rate >= 50 ? "text-emerald-400" : "text-red-400"}>{r.win_rate.toFixed(0)}%</span>
+                          : "—"}
                       </td>
-                      <td className="px-3 py-2.5 text-slate-300">
-                        {r.total_trades ?? "—"}
-                      </td>
+                      <td className="px-3 py-2.5 text-slate-300">{r.total_trades ?? "—"}</td>
                       <td className={clsx("px-3 py-2.5", (r.spy_return ?? 0) >= 0 ? "text-emerald-400" : "text-red-400")}>
                         {pct(r.spy_return ? r.spy_return * 100 : null)}
-                      </td>
-                      <td className={clsx("px-3 py-2.5", (r.btc_return ?? 0) >= 0 ? "text-emerald-400" : "text-red-400")}>
-                        {pct(r.btc_return ? r.btc_return * 100 : null)}
                       </td>
                     </tr>
                     {expanded === r.id && (
                       <tr key={`${r.id}-detail`}>
-                        <td colSpan={12} className="px-5 py-4 bg-slate-800/40 text-xs text-slate-400 space-y-1">
-                          <div>
-                            <strong className="text-slate-300">Symbols tested:</strong>{" "}
-                            {r.symbol_universe?.slice(0, 15).join(", ")}
-                            {(r.symbol_universe?.length ?? 0) > 15 ? ` … +${(r.symbol_universe?.length ?? 0) - 15} more` : ""}
+                        <td colSpan={10} className="px-5 py-3 bg-slate-800/40 text-xs text-slate-400 space-y-1">
+                          <div className="text-amber-400/80 text-[11px] font-medium mb-1">
+                            ⚠ Simulation result — rule-based engine only, not the live LLM debate system
                           </div>
-                          <div>
-                            <strong className="text-slate-300">Final NAV:</strong>{" "}
-                            ${r.final_nav?.toLocaleString() ?? "—"}
-                          </div>
-                          <div className="text-[10px] text-slate-600 mt-1">
-                            Run ID: {r.id} · Created: {new Date(r.created_at).toLocaleDateString()}
-                          </div>
+                          <div><strong className="text-slate-300">Final NAV:</strong> ${r.final_nav?.toLocaleString() ?? "—"}</div>
+                          <div><strong className="text-slate-300">Symbols:</strong> {r.symbol_universe?.slice(0, 12).join(", ")}{(r.symbol_universe?.length ?? 0) > 12 ? ` +${(r.symbol_universe?.length ?? 0) - 12} more` : ""}</div>
+                          <div className="text-[10px] text-slate-600">Run ID: {r.id} · {new Date(r.created_at).toLocaleDateString()}</div>
                         </td>
                       </tr>
                     )}
-                  </>
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>

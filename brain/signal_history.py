@@ -305,9 +305,6 @@ def resolve_pending_outcomes(fetch_price_fn) -> int:
 
 # ── Queries ───────────────────────────────────────────────────────────────────
 
-SEED_USER = "backtest_seed"   # rows created by seed_signal_history.py, always visible
-
-
 def list_history(
     user_id: str,
     symbol: str | None = None,
@@ -318,8 +315,8 @@ def list_history(
     offset: int = 0,
 ) -> list[dict]:
     _init_db()
-    clauses = ["(user_id = ? OR user_id = ?)"]
-    params: list = [user_id, SEED_USER]
+    clauses = ["user_id = ?"]
+    params: list = [user_id]
     if symbol:
         clauses.append("symbol = ?")
         params.append(symbol.upper())
@@ -383,12 +380,12 @@ def get_leaderboard(user_id: str, group_by: str = "tier") -> list[dict]:
                 ROUND(AVG(confidence), 4)                      AS avg_confidence,
                 ROUND(AVG(votes_for),  2)                      AS avg_votes
             FROM signal_history
-            WHERE (user_id = ? OR user_id = ?)
+            WHERE user_id = ?
               AND action != 'HOLD'
             GROUP BY {group_by}
             ORDER BY wins DESC
             """,
-            (user_id, SEED_USER),
+            (user_id,),
         ).fetchall()
 
     result = []
@@ -420,9 +417,9 @@ def get_stats(user_id: str) -> dict:
                     SUM(CASE WHEN tier='WARM' THEN 1 ELSE 0 END)          AS warm,
                     SUM(CASE WHEN tier='COLD' THEN 1 ELSE 0 END)          AS cold
                 FROM signal_history
-                WHERE (user_id = ? OR user_id = ?) AND generated_at >= ?
+                WHERE user_id = ? AND generated_at >= ?
                 """,
-                (user_id, SEED_USER, cutoff),
+                (user_id, cutoff),
             ).fetchone()
         d = dict(r)
         resolved = (d["wins"] or 0) + (d["losses"] or 0)

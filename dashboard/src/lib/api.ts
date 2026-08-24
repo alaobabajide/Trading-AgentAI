@@ -2491,32 +2491,3 @@ export function useBenchmarkComparison(days = 30) {
   return { data, loading };
 }
 
-// ── Signal history seed ───────────────────────────────────────────────────────
-
-export interface SeedStatus {
-  status:           "idle" | "running" | "done" | "error" | "already_seeded" | "already_running" | "started";
-  message:          string;
-  seeded?:          number;
-  total_return_pct?: number;
-  win_rate_pct?:    number;
-}
-
-export async function triggerSeedHistory(force = false): Promise<SeedStatus> {
-  const url = force ? `${BASE}/signal/seed-history?force=true` : `${BASE}/signal/seed-history`;
-  const res = await fetch(url, {
-    method:  "POST",
-    headers: apiHeaders(),
-    signal:  AbortSignal.timeout(10000),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return safeJson(res);
-}
-
-export async function fetchSeedStatus(): Promise<SeedStatus> {
-  const res = await fetch(`${BASE}/signal/seed-status`, {
-    headers: apiHeaders(),
-    signal:  AbortSignal.timeout(5000),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return safeJson(res);
-}
