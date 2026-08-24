@@ -473,6 +473,32 @@ async def lifespan(app: FastAPI):
     import threading as _threading
     _threading.Thread(target=_bootstrap_disclosures, daemon=True, name="disclosure-bootstrap").start()
 
+    # On every server start, any backtest_runs row with status="running" in Supabase
+    # is orphaned — its thread died in the previous container. Mark them failed now
+    # so the UI stops showing them as running indefinitely.
+    def _cleanup_stale_backtests():
+        import time as _t
+        _t.sleep(3)
+        try:
+            from brain.signal_snapshots import _get_sb
+            sb = _get_sb()
+            if sb is None:
+                return
+            resp = sb.table("backtest_runs").select("id,name,created_at").eq("status", "running").execute()
+            stale = resp.data or []
+            if stale:
+                ids = [r["id"] for r in stale]
+                names = [r["name"] for r in stale]
+                sb.table("backtest_runs").update({
+                    "status": "failed",
+                    "error":  "Server restarted — run was interrupted and must be re-triggered",
+                }).in_("id", ids).execute()
+                log.warning("Startup: marked %d orphaned backtest run(s) as failed: %s", len(ids), names)
+        except Exception as exc:
+            log.warning("Startup backtest cleanup failed (non-fatal): %s", exc)
+
+    _threading.Thread(target=_cleanup_stale_backtests, daemon=True, name="backtest-cleanup").start()
+
     yield
     log.info("Brain API shutting down.")
 
@@ -2688,6 +2714,20 @@ def list_backtest_runs(request: Request, limit: int = 20):
             sb_runs = resp.data or []
     except Exception as exc:
         log.debug("backtest list from Supabase failed (non-fatal): %s", exc)
+
+    # Mark any Supabase "running" row older than 20 minutes as stale in the response.
+    # These are orphaned threads from a previous container that will never complete.
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    _stale_cutoff = _dt.now(_tz.utc) - _td(minutes=20)
+    for row in sb_runs:
+        if row.get("status") == "running":
+            try:
+                created = _dt.fromisoformat(row["created_at"].replace("Z", "+00:00"))
+                if created < _stale_cutoff:
+                    row["status"] = "failed"
+                    row["error"]  = "Run timed out — server was restarted. Please re-run."
+            except Exception:
+                pass
 
     # Merge: Supabase rows take precedence; fall back to cache for runs not yet persisted
     sb_names = {r["name"] for r in sb_runs}
