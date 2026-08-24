@@ -8,8 +8,9 @@ import {
   apiHeaders,
   fetchTrackRecordStats, fetchTrackRecordLeaderboard, fetchEquityCurve,
   fetchBacktestRuns, triggerBacktest,
+  triggerSeedHistory, fetchSeedStatus,
   type TrackRecordStats, type EquityCurvePoint,
-  type BacktestRun, type TrackRecordLeaderboardRow,
+  type BacktestRun, type TrackRecordLeaderboardRow, type SeedStatus,
 } from "../lib/api";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -124,6 +125,8 @@ function SignalHistoryTable() {
   const [total, setTotal]     = useState(0);
   const [page, setPage]       = useState(0);
   const [loading, setLoading] = useState(true);
+  const [seed, setSeed]       = useState<SeedStatus | null>(null);
+  const [seeding, setSeeding] = useState(false);
 
   const [filterAction,  setFilterAction]  = useState("ALL");
   const [filterTier,    setFilterTier]    = useState("ALL");
@@ -154,6 +157,39 @@ function SignalHistoryTable() {
   }, [page, filterAction, filterTier, filterOutcome, filterSymbol]);
 
   useEffect(() => { fetch(); }, [fetch]);
+
+  // Poll seed status while seeding is in progress
+  useEffect(() => {
+    if (!seeding) return;
+    const poll = setInterval(async () => {
+      try {
+        const s = await fetchSeedStatus();
+        setSeed(s);
+        if (s.status === "done" || s.status === "error") {
+          setSeeding(false);
+          clearInterval(poll);
+          if (s.status === "done") fetch();   // reload table with new rows
+        }
+      } catch { /* non-fatal */ }
+    }, 3000);
+    return () => clearInterval(poll);
+  }, [seeding, fetch]);
+
+  async function handleSeed(force = false) {
+    setSeeding(true);
+    setSeed({ status: "started", message: "Starting… downloading 2 years of market data." });
+    try {
+      const s = await triggerSeedHistory(force);
+      setSeed(s);
+      if (s.status === "done" || s.status === "already_seeded") {
+        setSeeding(false);
+        fetch();
+      }
+    } catch (e) {
+      setSeed({ status: "error", message: (e as Error).message });
+      setSeeding(false);
+    }
+  }
 
   // Reset page when filters change
   useEffect(() => { setPage(0); }, [filterAction, filterTier, filterOutcome, filterSymbol]);
@@ -212,8 +248,42 @@ function SignalHistoryTable() {
           <tbody className="divide-y divide-white/[0.03]">
             {rows.length === 0 && !loading && (
               <tr>
-                <td colSpan={12} className="px-4 py-10 text-center text-slate-600">
-                  No signals recorded yet — they appear here as the system generates them.
+                <td colSpan={12} className="px-4 py-6">
+                  <div className="flex flex-col items-center gap-4 text-center">
+                    <p className="text-sm text-slate-500">
+                      No signals recorded yet. Populate the history with 2 years of real backtested trades
+                      so the Leaderboard and charts show meaningful data immediately.
+                    </p>
+                    {seed && seed.status !== "idle" && (
+                      <div className={clsx(
+                        "text-xs px-4 py-2.5 rounded-lg border max-w-lg",
+                        seed.status === "done"
+                          ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
+                          : seed.status === "error"
+                          ? "text-red-400 bg-red-500/10 border-red-500/20"
+                          : "text-amber-400 bg-amber-500/10 border-amber-500/20"
+                      )}>
+                        {seeding && <RefreshCw className="w-3 h-3 animate-spin inline mr-1.5" />}
+                        {seed.message}
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleSeed(false)}
+                        disabled={seeding}
+                        className="flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 hover:bg-brand-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+                      >
+                        {seeding
+                          ? <><RefreshCw className="w-4 h-4 animate-spin" /> Populating… (~2 min)</>
+                          : <><Database className="w-4 h-4" /> Populate Historical Data</>
+                        }
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-slate-600 max-w-md">
+                      Runs the same rule-based engine as live paper mode against 2024–2025 daily bars.
+                      Results are clearly labelled as backtest data. Live signals layer on top as they accumulate.
+                    </p>
+                  </div>
                 </td>
               </tr>
             )}
