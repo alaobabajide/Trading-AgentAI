@@ -525,20 +525,26 @@ def run_backtest(
         "Downloading %d symbols from %s to %s …",
         len(download_syms), start_dt, end_dt,
     )
+    # threads=False avoids hammering Yahoo Finance with concurrent requests from
+    # Railway's shared IP, which triggers rate-limiting and hangs indefinitely.
+    # The executor is NOT used as a context manager so shutdown(wait=False) can
+    # be called on timeout — the context manager's __exit__ calls shutdown(wait=True)
+    # which blocks until the thread finishes, making the timeout useless.
     import concurrent.futures as _cf_dl
-    with _cf_dl.ThreadPoolExecutor(max_workers=1) as _dl_ex:
-        _dl_fut = _dl_ex.submit(
-            yf.download, download_syms,
-            start=str(start_dt), end=str(end_dt),
-            progress=False, auto_adjust=True, threads=True,
+    _dl_ex  = _cf_dl.ThreadPoolExecutor(max_workers=1)
+    _dl_fut = _dl_ex.submit(
+        yf.download, download_syms,
+        start=str(start_dt), end=str(end_dt),
+        progress=False, auto_adjust=True, threads=False,
+    )
+    try:
+        raw = _dl_fut.result(timeout=180)
+    except _cf_dl.TimeoutError:
+        _dl_ex.shutdown(wait=False)   # abandon the stuck thread; don't block
+        raise RuntimeError(
+            f"yfinance download timed out after 180s for {len(download_syms)} symbols."
         )
-        try:
-            raw = _dl_fut.result(timeout=180)   # 3-minute hard cap on the download phase
-        except _cf_dl.TimeoutError:
-            raise RuntimeError(
-                f"yfinance download timed out after 180s for {len(download_syms)} symbols. "
-                "Check network connectivity on the server."
-            )
+    _dl_ex.shutdown(wait=False)
 
     # Build per-symbol OHLCV dict
     if len(download_syms) == 1:

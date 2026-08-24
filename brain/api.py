@@ -2760,23 +2760,26 @@ async def trigger_backtest(request: Request):
 
     def _run():
         import time as _time
+        import concurrent.futures as _cf
         t0 = _time.monotonic()
         try:
             from backtest.supabase_engine import run_backtest
 
-            # Run in a sub-thread so we can enforce a wall-clock timeout
-            import concurrent.futures as _cf
-            with _cf.ThreadPoolExecutor(max_workers=1) as ex:
-                fut = ex.submit(run_backtest, name=name, start_date=start_date,
-                                end_date=end_date or None, symbols=symbols)
-                try:
-                    result = fut.result(timeout=BACKTEST_TIMEOUT_S)
-                except _cf.TimeoutError:
-                    elapsed = int(_time.monotonic() - t0)
-                    raise RuntimeError(
-                        f"Backtest timed out after {elapsed}s — "
-                        "try a shorter date range or fewer symbols"
-                    )
+            # Do NOT use ThreadPoolExecutor as a context manager — __exit__ calls
+            # shutdown(wait=True) which blocks until the thread finishes, making
+            # the timeout completely ineffective.
+            _ex  = _cf.ThreadPoolExecutor(max_workers=1)
+            _fut = _ex.submit(run_backtest, name=name, start_date=start_date,
+                              end_date=end_date or None, symbols=symbols)
+            try:
+                result = _fut.result(timeout=BACKTEST_TIMEOUT_S)
+            except _cf.TimeoutError:
+                _ex.shutdown(wait=False)   # abandon — don't block waiting for the thread
+                elapsed = int(_time.monotonic() - t0)
+                raise RuntimeError(
+                    f"Backtest timed out after {elapsed}s — server may be under load"
+                )
+            _ex.shutdown(wait=False)
 
             _BACKTEST_CACHE[name] = {
                 "id":                run_id,
