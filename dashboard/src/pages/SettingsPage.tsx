@@ -1740,14 +1740,14 @@ function DisclosureSettingsPanel() {
       {numInput("holdings_refresh_hours", "13F holdings refresh interval (hours)", "How often the orchestrator fetches new 13F filings from EDGAR. Daily (24h) is recommended.", 1, 168)}
 
       <SubSection title="Congressional Data Source" />
-      <SectionNote variant="warn">
-        The original free feeds (HouseStockWatcher, SenateStockWatcher) are no longer reachable.
-        Add a free Quiver Quantitative API key to restore congressional trade data.
-        Register at quiverquant.com — the free tier includes congressional trading.
+      <SectionNote variant="info">
+        Congressional STOCK Act trades are fetched from <strong>Bargo.ai</strong> — a free, anonymous API
+        that aggregates official House Clerk and Senate eFD filings. No API key required.
+        Quiver Quantitative can be added as an optional fallback/enhancement.
       </SectionNote>
       <div className="space-y-1">
         <label className="text-[11px] text-slate-400 uppercase tracking-wide">
-          Quiver Quantitative API Key
+          Quiver Quantitative API Key <span className="normal-case font-normal text-slate-500">(optional — fallback if Bargo.ai is unavailable)</span>
           {settings.quiver_api_key_configured && (
             <span className="text-emerald-400/80 ml-2 normal-case">(key saved)</span>
           )}
@@ -1756,11 +1756,11 @@ function DisclosureSettingsPanel() {
           type="password"
           value={draft.quiver_api_key ?? ""}
           onChange={e => update("quiver_api_key", e.target.value)}
-          placeholder={settings.quiver_api_key_configured ? "leave blank to keep saved key" : "Paste your Quiver Quantitative API key…"}
+          placeholder={settings.quiver_api_key_configured ? "leave blank to keep saved key" : "Optional — paste Quiver Quantitative API key for fallback…"}
           className="w-full bg-surface-700 border border-white/10 rounded-xl px-4 py-2.5 text-sm font-mono text-slate-200 outline-none focus:ring-1 focus:ring-brand-500"
         />
         <p className="text-[11px] text-slate-500">
-          Free at quiverquant.com → Dashboard → API Key. Enables congressional STOCK Act trade data.
+          Free at quiverquant.com → Dashboard → API Key. Used as fallback if Bargo.ai is unavailable.
         </p>
       </div>
 

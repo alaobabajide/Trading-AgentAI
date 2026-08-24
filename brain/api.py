@@ -459,13 +459,9 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             log.warning("Startup 13F bootstrap failed: %s", exc)
         try:
-            from brain.disclosure_settings import load as _ds_load
-            if _ds_load().quiver_api_key:
-                from brain.congress_fetcher import refresh as _cr
-                _cr()
-                log.info("Startup congress bootstrap complete")
-            else:
-                log.info("Startup congress bootstrap skipped — no Quiver API key configured")
+            from brain.congress_fetcher import refresh as _cr
+            _cr()
+            log.info("Startup congress bootstrap complete")
         except Exception as exc:
             log.warning("Startup congress bootstrap failed: %s", exc)
 

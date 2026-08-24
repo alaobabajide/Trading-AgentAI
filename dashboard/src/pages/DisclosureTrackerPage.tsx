@@ -455,7 +455,7 @@ function CopyTradeModal({ target, onClose }: { target: CopyTradeTarget; onClose:
 
 // ── Congressional STOCK Act tab ───────────────────────────────────────────────
 
-function CongressTab({ quiverKeyConfigured }: { quiverKeyConfigured: boolean }) {
+function CongressTab() {
   const [memberFilter, setMemberFilter] = useState("");
   const [symbolFilter, setSymbolFilter] = useState("");
   const [appliedMember, setAppliedMember] = useState("");
@@ -477,7 +477,7 @@ function CongressTab({ quiverKeyConfigured }: { quiverKeyConfigured: boolean }) 
         <AlertTriangle className="h-4 w-4 shrink-0" />
         <span>
           <strong>STOCK Act Disclosures:</strong> Public government data. Congressional trades must be
-          reported within 45 days of the transaction. Source: HouseStockWatcher &amp; SenateStockWatcher.
+          reported within 45 days of the transaction. Source: Bargo.ai (aggregates official House Clerk &amp; Senate eFD filings).
         </span>
       </div>
 
@@ -520,26 +520,9 @@ function CongressTab({ quiverKeyConfigured }: { quiverKeyConfigured: boolean }) 
           <button onClick={refetch} className="ml-2 text-blue-400 underline text-sm">Retry</button>
         </div>
       ) : trades.length === 0 ? (
-        !quiverKeyConfigured ? (
-          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-6 py-8 text-center space-y-3">
-            <AlertTriangle className="h-8 w-8 text-amber-400 mx-auto" />
-            <p className="text-white font-medium">Quiver Quantitative API key required</p>
-            <p className="text-slate-400 text-sm max-w-md mx-auto">
-              Congressional STOCK Act trade data is sourced from Quiver Quantitative.
-              The free tier includes full congressional trading history.
-            </p>
-            <ol className="text-left text-sm text-slate-300 space-y-1 max-w-xs mx-auto list-decimal list-inside">
-              <li>Register free at <span className="text-blue-400">quiverquant.com</span></li>
-              <li>Go to Dashboard → API Key</li>
-              <li>Paste the key in <span className="text-blue-400">Settings → Public Disclosure Tracker</span></li>
-              <li>Click <strong>Refresh data</strong> above to load trades</li>
-            </ol>
-          </div>
-        ) : (
-          <div className="text-center py-12 text-slate-500">
-            No trades on file yet — click <strong className="text-slate-300">Refresh data</strong> above to load.
-          </div>
-        )
+        <div className="text-center py-12 text-slate-500">
+          No trades on file yet — click <strong className="text-slate-300">Refresh data</strong> above to load.
+        </div>
       ) : (
         <>
           <div className="text-xs text-slate-500">{data?.count ?? trades.length} disclosures</div>
@@ -664,12 +647,6 @@ export function DisclosureTrackerPage() {
                   <span>Last 13F fetch: {status.last_13f_fetch.slice(0, 10)}</span>
                 </>
               )}
-              {!status.quiver_key_configured && (
-                <>
-                  <span>·</span>
-                  <span className="text-amber-400">Quiver API key not set — congressional data unavailable</span>
-                </>
-              )}
             </div>
           )}
         </div>
@@ -710,7 +687,7 @@ export function DisclosureTrackerPage() {
       </div>
 
       {tab === "institutional" && <InstitutionalTab />}
-      {tab === "congress" && <CongressTab quiverKeyConfigured={status?.quiver_key_configured ?? true} />}
+      {tab === "congress" && <CongressTab />}
     </div>
   );
 }

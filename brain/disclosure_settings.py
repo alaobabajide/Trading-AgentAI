@@ -57,6 +57,9 @@ class DisclosureConfig:
     edgar_rate_limit_sleep_secs: int = 1
 
     # Congress feed URLs
+    # Primary: Bargo.ai — free, no API key, open access
+    bargo_feed_url: str = "https://www.bargo.ai/free-apis/congress/v1/trades"
+    # Legacy (no longer reachable as of 2026-08, kept configurable)
     house_feed_url: str = "https://housestockwatcher.com/api"
     senate_feed_url: str = "https://senatestockwatcher.com/api"
     congress_request_timeout_secs: int = 20
