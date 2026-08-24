@@ -674,10 +674,12 @@ function BacktestResultsTab() {
   const [launching,       setLaunching]      = useState<string | null>(null);
   const [msg,             setMsg]            = useState<string | null>(null);
   const [expanded,        setExpanded]       = useState<string | null>(null);
-  const [pending,         setPending]        = useState<{ name: string; start_date: string; end_date: string }[]>([]);
+  const [pending,         setPending]        = useState<{ name: string; start_date: string; end_date: string; startedAt: number }[]>([]);
   const [showApproaches,  setShowApproaches] = useState(false);
 
   const hasRunning = runs.some(r => r.status === "running") || pending.length > 0;
+
+  const PENDING_TIMEOUT_MS = 16 * 60 * 1000; // 16 min — matches 15 min server timeout + buffer
 
   const load = useCallback((silent = false) => {
     if (!silent) setLoading(true);
@@ -685,10 +687,14 @@ function BacktestResultsTab() {
       .then(r => {
         setRuns(r);
         setLoading(false);
-        setPending(prev => prev.filter(p => !r.some(row => row.name === p.name)));
+        const now = Date.now();
+        setPending(prev => prev.filter(p =>
+          // keep if backend doesn't have a row for it yet AND it hasn't timed out
+          !r.some(row => row.name === p.name) && (now - p.startedAt) < PENDING_TIMEOUT_MS
+        ));
       })
       .catch(() => setLoading(false));
-  }, []);
+  }, [PENDING_TIMEOUT_MS]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -712,6 +718,7 @@ function BacktestResultsTab() {
         name:       preset.name,
         start_date: preset.start_date,
         end_date:   preset.end_date || new Date().toISOString().slice(0, 10),
+        startedAt:  Date.now(),
       }]);
       setMsg(`Simulation "${preset.label}" queued — downloads ~80 symbols then runs the rule engine (~3–10 min). Auto-refreshes every 15 s.`);
       setTimeout(() => load(true), 5000);
