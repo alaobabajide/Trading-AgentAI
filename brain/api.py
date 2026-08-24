@@ -2663,32 +2663,46 @@ def get_benchmark_comparison(request: Request, days: int = 30):
 
 # ── Backtest API ──────────────────────────────────────────────────────────────
 
+# In-memory cache — survives without the Supabase migration being applied.
+# Keyed by run name; holds the latest status for each run this process has seen.
+_BACKTEST_CACHE: dict[str, dict] = {}
+
+
 @app.get("/backtest/runs")
 def list_backtest_runs(request: Request, limit: int = 20):
-    """List completed and running backtest runs from Supabase."""
+    """List backtest runs — merges in-memory cache with Supabase (if available)."""
+    sb_runs: list[dict] = []
     try:
         from brain.signal_snapshots import _get_sb
         sb = _get_sb()
-        if sb is None:
-            return {"runs": []}
-        resp = (
-            sb.table("backtest_runs")
-            .select("id,name,engine,start_date,end_date,status,total_return,"
-                    "annualized_return,sharpe_ratio,max_drawdown,win_rate,"
-                    "total_trades,symbol_universe,created_at,spy_return,btc_return,final_nav")
-            .order("created_at", desc=True)
-            .limit(min(limit, 50))
-            .execute()
-        )
-        return {"runs": resp.data or []}
+        if sb is not None:
+            resp = (
+                sb.table("backtest_runs")
+                .select("id,name,engine,start_date,end_date,status,total_return,"
+                        "annualized_return,sharpe_ratio,max_drawdown,win_rate,"
+                        "total_trades,symbol_universe,created_at,spy_return,btc_return,final_nav")
+                .order("created_at", desc=True)
+                .limit(min(limit, 50))
+                .execute()
+            )
+            sb_runs = resp.data or []
     except Exception as exc:
-        log.warning("backtest list failed: %s", exc)
-        return {"runs": []}
+        log.debug("backtest list from Supabase failed (non-fatal): %s", exc)
+
+    # Merge: Supabase rows take precedence; fall back to cache for runs not yet persisted
+    sb_names = {r["name"] for r in sb_runs}
+    cache_only = [v for v in _BACKTEST_CACHE.values() if v.get("name") not in sb_names]
+    merged = sb_runs + sorted(cache_only, key=lambda r: r.get("created_at", ""), reverse=True)
+    return {"runs": merged[:limit]}
 
 
 @app.get("/backtest/runs/{run_id}")
 def get_backtest_run(run_id: str, request: Request):
     """Return full detail for one backtest run."""
+    # Check cache first
+    for entry in _BACKTEST_CACHE.values():
+        if entry.get("id") == run_id:
+            return entry
     try:
         from brain.signal_snapshots import _get_sb
         sb = _get_sb()
@@ -2712,6 +2726,8 @@ async def trigger_backtest(request: Request):
            "symbols": ["AAPL", ...] | "all"}
     """
     import threading as _thr
+    from datetime import datetime as _dt, timezone as _tz
+    import uuid as _uuid
     try:
         body = await request.json()
     except Exception:
@@ -2724,20 +2740,55 @@ async def trigger_backtest(request: Request):
     if not name:
         raise HTTPException(400, "name is required")
 
+    run_id = str(_uuid.uuid4())
+    created_at = _dt.now(_tz.utc).isoformat()
+
+    # Write optimistic "running" entry to cache immediately
+    _BACKTEST_CACHE[name] = {
+        "id":         run_id,
+        "name":       name,
+        "status":     "running",
+        "engine":     "rule_based",
+        "start_date": start_date,
+        "end_date":   end_date or "",
+        "created_at": created_at,
+        "symbol_universe": [],
+    }
+
     def _run():
         try:
             from backtest.supabase_engine import run_backtest
-            run_backtest(
+            result = run_backtest(
                 name=name,
                 start_date=start_date,
                 end_date=end_date or None,
                 symbols=symbols,
             )
+            # Update cache with final metrics regardless of Supabase outcome
+            _BACKTEST_CACHE[name] = {
+                "id":                run_id,
+                "name":              name,
+                "status":            result.get("status", "completed"),
+                "engine":            "rule_based",
+                "start_date":        start_date,
+                "end_date":          end_date or "",
+                "created_at":        created_at,
+                "final_nav":         result.get("final_equity"),
+                "total_return":      result.get("total_return_pct", 0) / 100,
+                "annualized_return": result.get("annualized_return_pct", 0) / 100,
+                "sharpe_ratio":      result.get("sharpe_ratio"),
+                "max_drawdown":      result.get("max_drawdown_pct", 0) / 100,
+                "win_rate":          result.get("win_rate_pct"),
+                "total_trades":      result.get("total_trades"),
+                "symbol_universe":   [],
+            }
+            log.info("Backtest %s completed: %s", name, result)
         except Exception as exc:
             log.error("Backtest %s failed: %s", name, exc, exc_info=True)
+            _BACKTEST_CACHE[name] = {**_BACKTEST_CACHE.get(name, {}), "status": "failed", "error": str(exc)}
 
     _thr.Thread(target=_run, daemon=True, name=f"backtest-{name}").start()
-    return {"status": "started", "name": name, "start_date": start_date, "end_date": end_date}
+    return {"status": "started", "name": name, "start_date": start_date, "end_date": end_date, "run_id": run_id}
 
 
 # ── Brain NLP query endpoint ───────────────────────────────────────────────────
