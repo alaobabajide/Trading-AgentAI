@@ -2755,16 +2755,28 @@ async def trigger_backtest(request: Request):
         "symbol_universe": [],
     }
 
+    BACKTEST_TIMEOUT_S = 900  # 15 minutes — fail visibly rather than hang forever
+
     def _run():
+        import time as _time
+        t0 = _time.monotonic()
         try:
             from backtest.supabase_engine import run_backtest
-            result = run_backtest(
-                name=name,
-                start_date=start_date,
-                end_date=end_date or None,
-                symbols=symbols,
-            )
-            # Update cache with final metrics regardless of Supabase outcome
+
+            # Run in a sub-thread so we can enforce a wall-clock timeout
+            import concurrent.futures as _cf
+            with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(run_backtest, name=name, start_date=start_date,
+                                end_date=end_date or None, symbols=symbols)
+                try:
+                    result = fut.result(timeout=BACKTEST_TIMEOUT_S)
+                except _cf.TimeoutError:
+                    elapsed = int(_time.monotonic() - t0)
+                    raise RuntimeError(
+                        f"Backtest timed out after {elapsed}s — "
+                        "try a shorter date range or fewer symbols"
+                    )
+
             _BACKTEST_CACHE[name] = {
                 "id":                run_id,
                 "name":              name,
@@ -2782,7 +2794,7 @@ async def trigger_backtest(request: Request):
                 "total_trades":      result.get("total_trades"),
                 "symbol_universe":   [],
             }
-            log.info("Backtest %s completed: %s", name, result)
+            log.info("Backtest %s completed in %.0fs", name, _time.monotonic() - t0)
         except Exception as exc:
             log.error("Backtest %s failed: %s", name, exc, exc_info=True)
             _BACKTEST_CACHE[name] = {**_BACKTEST_CACHE.get(name, {}), "status": "failed", "error": str(exc)}

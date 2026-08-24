@@ -32,9 +32,11 @@ def run_backtest(
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
     # ── Resolve symbol list ──────────────────────────────────────────────────
-    from watchlist import STOCK_WATCHLIST, ETF_WATCHLIST, CRYPTO_WATCHLIST
+    from watchlist import STOCK_WATCHLIST, ETF_WATCHLIST
     if symbols == "all" or symbols == ["all"]:
-        resolved = list(STOCK_WATCHLIST) + list(ETF_WATCHLIST) + list(CRYPTO_WATCHLIST)
+        # Crypto tickers in the watchlist are Alpaca format (BTCUSD), not yfinance
+        # format (BTC-USD). The rule-based runner uses yfinance, so crypto is excluded.
+        resolved = list(STOCK_WATCHLIST) + list(ETF_WATCHLIST)
     elif isinstance(symbols, str):
         resolved = [symbols]
     else:
