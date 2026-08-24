@@ -65,6 +65,37 @@ TRACKED_INVESTORS: list[dict] = [
         "disclosure_type": "13F",
         "note":            "Long-term alpha confirmed; recent years mixed vs S&P 500",
     },
+    # ── 70–79 % confidence tier ─────────────────────────────────────────────
+    {
+        "id":              "burry",
+        "name":            "Michael Burry",
+        "fund":            "Scion Asset Management",
+        "cik":             "0001649339",
+        "confidence_pct":  77,
+        "est_alpha_pct":   8.0,
+        "disclosure_type": "13F",
+        "note":            "Highly concentrated; short positions not in 13F; famous for Big Short thesis",
+    },
+    {
+        "id":              "druckenmiller",
+        "name":            "Stanley Druckenmiller",
+        "fund":            "Duquesne Family Office",
+        "cik":             "0001536411",
+        "confidence_pct":  75,
+        "est_alpha_pct":   6.5,
+        "disclosure_type": "13F",
+        "note":            "Macro-focused; frequently rotates positions — 13F lag reduces signal quality",
+    },
+    {
+        "id":              "wood",
+        "name":            "Cathie Wood",
+        "fund":            "ARK Investment Management",
+        "cik":             "0001697748",
+        "confidence_pct":  72,
+        "est_alpha_pct":   -3.0,
+        "disclosure_type": "13F",
+        "note":            "Daily holdings published on ARK site; recent 5-yr alpha negative vs S&P 500",
+    },
 ]
 
 TRACKED_CONGRESS: list[dict] = [
@@ -75,6 +106,31 @@ TRACKED_CONGRESS: list[dict] = [
         "state":           "CA",
         "confidence_pct":  82,
         "note":            "4-year confirmed outperformance; trades via spouse Paul Pelosi",
+    },
+    # ── 70–79 % confidence tier ─────────────────────────────────────────────
+    {
+        "name":            "Dan Crenshaw",
+        "party":           "R",
+        "chamber":         "House",
+        "state":           "TX",
+        "confidence_pct":  71,
+        "note":            "Documented tech-sector outperformance; smaller sample of disclosed trades",
+    },
+    {
+        "name":            "Tommy Tuberville",
+        "party":           "R",
+        "chamber":         "Senate",
+        "state":           "AL",
+        "confidence_pct":  71,
+        "note":            "Active trader; mix of individual stocks and ETFs; shorter disclosure track record",
+    },
+    {
+        "name":            "Josh Gottheimer",
+        "party":           "D",
+        "chamber":         "House",
+        "state":           "NJ",
+        "confidence_pct":  70,
+        "note":            "Documented outperformance but smaller trade volume limits statistical confidence",
     },
 ]
 
