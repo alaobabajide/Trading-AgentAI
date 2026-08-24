@@ -2308,3 +2308,185 @@ export function useDisclosureSettings() {
 
   return { settings, saving, saved, error, save };
 }
+
+// ── Track Record types ────────────────────────────────────────────────────────
+
+export interface TrackRecordStats {
+  "7d":  WindowStats | null;
+  "30d": WindowStats | null;
+}
+
+export interface WindowStats {
+  total:    number;
+  wins:     number;
+  losses:   number;
+  neutral:  number;
+  pending:  number;
+  hot:      number;
+  warm:     number;
+  win_rate: number | null;
+}
+
+export interface EquityCurvePoint {
+  snapshot_date:     string;
+  nav:               number;
+  daily_return:      number | null;
+  cumulative_return: number | null;
+  drawdown:          number | null;
+  spy_close:         number | null;
+  btc_close:         number | null;
+  positions_count:   number | null;
+}
+
+export interface BenchmarkComparison {
+  period_days:       number;
+  since_date:        string;
+  portfolio_return:  number;
+  spy_return:        number | null;
+  btc_return:        number | null;
+  rows:              number;
+  insufficient_data?: boolean;
+}
+
+export interface BacktestRun {
+  id:                string;
+  name:              string;
+  engine:            string;
+  start_date:        string;
+  end_date:          string;
+  status:            "running" | "completed" | "failed";
+  total_return:      number | null;
+  annualized_return: number | null;
+  sharpe_ratio:      number | null;
+  max_drawdown:      number | null;
+  win_rate:          number | null;
+  total_trades:      number | null;
+  symbol_universe:   string[];
+  created_at:        string;
+  spy_return:        number | null;
+  btc_return:        number | null;
+  final_nav:         number | null;
+}
+
+export interface TrackRecordLeaderboardRow {
+  group_key:      string;
+  total:          number;
+  wins:           number;
+  losses:         number;
+  neutral:        number;
+  pending:        number;
+  win_rate:       number | null;
+  avg_confidence: number | null;
+}
+
+// ── Track Record API calls ────────────────────────────────────────────────────
+
+export async function fetchTrackRecordStats(): Promise<TrackRecordStats> {
+  const res = await fetch(`${BASE}/track-record/stats`, {
+    headers: apiHeaders(),
+    signal:  AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export async function fetchBenchmarkComparison(days = 30): Promise<BenchmarkComparison> {
+  const res = await fetch(`${BASE}/track-record/benchmarks?days=${days}`, {
+    headers: apiHeaders(),
+    signal:  AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export async function fetchEquityCurve(days = 90, backtestId?: string): Promise<EquityCurvePoint[]> {
+  const params = new URLSearchParams({ days: String(days) });
+  if (backtestId) params.set("backtest_id", backtestId);
+  const res = await fetch(`${BASE}/track-record/equity-curve?${params}`, {
+    headers: apiHeaders(),
+    signal:  AbortSignal.timeout(10000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const d = await safeJson(res);
+  return (d as { rows: EquityCurvePoint[] }).rows ?? [];
+}
+
+export async function fetchTrackRecordLeaderboard(groupBy = "tier"): Promise<{ group_by: string; rows: TrackRecordLeaderboardRow[] }> {
+  const res = await fetch(`${BASE}/track-record/leaderboard?group_by=${groupBy}`, {
+    headers: apiHeaders(),
+    signal:  AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export async function fetchBacktestRuns(): Promise<BacktestRun[]> {
+  const res = await fetch(`${BASE}/backtest/runs`, {
+    headers: apiHeaders(),
+    signal:  AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const d = await safeJson(res);
+  return (d as { runs: BacktestRun[] }).runs ?? [];
+}
+
+export async function fetchBacktestRun(id: string): Promise<BacktestRun> {
+  const res = await fetch(`${BASE}/backtest/runs/${encodeURIComponent(id)}`, {
+    headers: apiHeaders(),
+    signal:  AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export async function triggerBacktest(params: {
+  name: string;
+  start_date: string;
+  end_date?: string;
+  symbols?: string | string[];
+}): Promise<{ status: string; name: string }> {
+  const res = await fetch(`${BASE}/backtest/run`, {
+    method:  "POST",
+    headers: apiHeaders({ "Content-Type": "application/json" }),
+    body:    JSON.stringify(params),
+    signal:  AbortSignal.timeout(10000),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error((d as { detail?: string }).detail ?? `HTTP ${res.status}`);
+  }
+  return safeJson(res);
+}
+
+export function useTrackRecordStats() {
+  const [data,    setData]    = useState<TrackRecordStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetchTrackRecordStats()
+      .then(d => { if (!cancelled) { setData(d); setLoading(false); } })
+      .catch(e => { if (!cancelled) { setError(e.message); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, []);
+
+  return { data, loading, error };
+}
+
+export function useBenchmarkComparison(days = 30) {
+  const [data,    setData]    = useState<BenchmarkComparison | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetchBenchmarkComparison(days)
+      .then(d => { if (!cancelled) { setData(d); setLoading(false); } })
+      .catch(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [days]);
+
+  return { data, loading };
+}

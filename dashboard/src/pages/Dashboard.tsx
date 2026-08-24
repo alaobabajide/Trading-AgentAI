@@ -1,11 +1,14 @@
 import { useState, useEffect } from "react";
-import { DollarSign, TrendingDown, TrendingUp, Trophy, Wallet } from "lucide-react";
+import { BarChart2, DollarSign, TrendingDown, TrendingUp, Trophy, Wallet } from "lucide-react";
 import { AllocationDonut } from "../components/AllocationDonut";
 import { EquityChart } from "../components/EquityChart";
 import { PositionsTable } from "../components/PositionsTable";
 import { SignalCard } from "../components/SignalCard";
 import { StatCard } from "../components/StatCard";
-import { usePortfolio, useSignals, useEquitySeries, useRiskConfig, getActiveUserId, apiHeaders } from "../lib/api";
+import {
+  usePortfolio, useSignals, useEquitySeries, useRiskConfig,
+  getActiveUserId, apiHeaders, useBenchmarkComparison,
+} from "../lib/api";
 import { DEMO_USER_ID } from "../lib/supabase";
 import type { EquityPoint } from "../lib/types";
 
@@ -37,6 +40,88 @@ function useSignalStats() {
       .catch(() => {});
   }, []);
   return stats;
+}
+
+function BenchmarkCard() {
+  const [period, setPeriod] = useState<7 | 30 | 90>(30);
+  const { data, loading } = useBenchmarkComparison(period);
+
+  const pctBar = (v: number | null, max: number) => {
+    if (v == null) return null;
+    const pct = Math.min(Math.abs(v / max) * 100, 100);
+    const color = v >= 0 ? "bg-emerald-500" : "bg-red-500";
+    return (
+      <div className="flex items-center gap-2 min-w-0">
+        <div className="flex h-1.5 w-24 rounded-full overflow-hidden bg-surface-700 shrink-0">
+          {v >= 0
+            ? <div className={color} style={{ width: `${pct}%` }} />
+            : <div className="ml-auto bg-red-500" style={{ width: `${pct}%` }} />
+          }
+        </div>
+        <span className={`font-mono text-xs ${v >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+          {v >= 0 ? "+" : ""}{v.toFixed(2)}%
+        </span>
+      </div>
+    );
+  };
+
+  const maxAbs = Math.max(
+    Math.abs(data?.portfolio_return ?? 0),
+    Math.abs(data?.spy_return ?? 0),
+    Math.abs(data?.btc_return ?? 0),
+    0.01,
+  );
+
+  return (
+    <div className="glass rounded-2xl p-5">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-sm font-semibold flex items-center gap-2">
+          <BarChart2 className="w-3.5 h-3.5 text-brand-400" />
+          vs Benchmarks
+        </h2>
+        <div className="flex gap-1">
+          {([7, 30, 90] as const).map(d => (
+            <button
+              key={d}
+              onClick={() => setPeriod(d)}
+              className={`text-[10px] px-2 py-0.5 rounded transition-colors ${
+                period === d
+                  ? "bg-brand-600 text-white"
+                  : "text-slate-400 hover:text-white"
+              }`}
+            >{d}D</button>
+          ))}
+        </div>
+      </div>
+      {loading ? (
+        <div className="text-xs text-slate-600 py-3">Loading…</div>
+      ) : !data || data.insufficient_data ? (
+        <div className="text-xs text-slate-600 py-3">
+          Accumulating data — check back after market close today.
+        </div>
+      ) : (
+        <div className="space-y-2.5 text-xs">
+          {data.since_date && (
+            <div className="text-[10px] text-slate-600 font-mono mb-1">
+              Since {data.since_date}
+            </div>
+          )}
+          {([
+            ["Portfolio", data.portfolio_return],
+            ["SPY",       data.spy_return],
+            ["BTC",       data.btc_return],
+          ] as [string, number | null][]).map(([label, val]) => (
+            <div key={label} className="flex items-center justify-between gap-3">
+              <span className="text-slate-400 w-16 shrink-0">{label}</span>
+              {val != null ? pctBar(val, maxAbs) : (
+                <span className="text-slate-600 font-mono text-xs">—</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function Dashboard() {
@@ -205,6 +290,8 @@ export function Dashboard() {
             </div>
           </div>
         </div>
+
+        <BenchmarkCard />
       </div>
 
       {/* Positions */}

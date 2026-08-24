@@ -464,6 +464,11 @@ async def lifespan(app: FastAPI):
             log.info("Startup congress bootstrap complete")
         except Exception as exc:
             log.warning("Startup congress bootstrap failed: %s", exc)
+        try:
+            from brain.track_record import ensure_track_record_config
+            ensure_track_record_config()
+        except Exception as exc:
+            log.warning("Track record config lock failed (non-fatal): %s", exc)
 
     import threading as _threading
     _threading.Thread(target=_bootstrap_disclosures, daemon=True, name="disclosure-bootstrap").start()
@@ -2437,7 +2442,7 @@ def generate_signal(req: SignalRequest, request: Request):
         _signal_cache[_cache_key] = {**d, "_uid": user_id or "system"}
         _save_cache(_signal_cache)
 
-        # Persist to history log (non-fatal)
+        # Persist to SQLite history log (non-fatal)
         try:
             from brain import signal_history as _sh
             _cp = (
@@ -2448,6 +2453,35 @@ def generate_signal(req: SignalRequest, request: Request):
             _sh.record(user_id or "system", d, _cp)
         except Exception as _sh_exc:
             log.debug("signal_history.record skipped: %s", _sh_exc)
+
+        # Persist to Supabase track record (Approaches 1+3) — non-fatal, background thread
+        try:
+            from brain.debate import _compute_indicators as _ci
+            _inds = _ci(market)
+        except Exception:
+            _inds = {}
+
+        def _record_snapshot_bg():
+            try:
+                from brain import signal_snapshots as _ss
+                _source = "live_llm" if not effective_paper_mode else "live_rule"
+                _model  = ""
+                _prov   = ""
+                if effective_llm is not None:
+                    _model = getattr(effective_llm, "tactical_model", "")
+                    _prov  = getattr(effective_llm, "tactical_provider", "")
+                _ss.record_snapshot(
+                    d, _inds,
+                    source=_source,
+                    paper_mode=effective_paper_mode,
+                    model_used=_model,
+                    provider=_prov,
+                )
+            except Exception as _ss_exc:
+                log.debug("signal_snapshots.record_snapshot skipped: %s", _ss_exc)
+
+        import threading as _thr
+        _thr.Thread(target=_record_snapshot_bg, daemon=True, name="snapshot-write").start()
 
     return SignalResponse(
         symbol=d["symbol"],
@@ -2579,6 +2613,127 @@ def get_signal_stats(request: Request):
     uid = getattr(request.state, "user_id", None) or "system"
     from brain import signal_history as _sh
     return _sh.get_stats(uid)
+
+
+# ── Track Record API (Supabase-backed) ───────────────────────────────────────
+
+@app.get("/track-record/stats")
+def get_track_record_stats(request: Request):
+    """7d and 30d signal performance from Supabase signal_snapshots."""
+    from brain import signal_snapshots as _ss
+    return _ss.get_stats()
+
+
+@app.get("/track-record/leaderboard")
+def get_track_record_leaderboard(request: Request, group_by: str = "tier"):
+    """Aggregate win/loss/neutral from Supabase, grouped by tier/asset_class/regime."""
+    from brain import signal_snapshots as _ss
+    return {"group_by": group_by, "rows": _ss.get_leaderboard(group_by=group_by)}
+
+
+@app.get("/track-record/config")
+def get_track_record_config(request: Request):
+    """Return the locked track record configuration."""
+    from brain.track_record import get_config
+    return get_config()
+
+
+@app.get("/track-record/equity-curve")
+def get_equity_curve(
+    request: Request,
+    days: int = 90,
+    backtest_id: str | None = None,
+):
+    """Return daily portfolio NAV snapshots for the equity curve chart."""
+    from brain import portfolio_snapshots as _ps
+    source = "backtest" if backtest_id else "paper_live"
+    return {
+        "source":     source,
+        "backtest_id": backtest_id,
+        "rows":       _ps.get_equity_curve(source=source, backtest_id=backtest_id, days=days),
+    }
+
+
+@app.get("/track-record/benchmarks")
+def get_benchmark_comparison(request: Request, days: int = 30):
+    """Return portfolio vs SPY vs BTC performance for a given period."""
+    from brain import portfolio_snapshots as _ps
+    return _ps.get_benchmark_comparison(days=days)
+
+
+# ── Backtest API ──────────────────────────────────────────────────────────────
+
+@app.get("/backtest/runs")
+def list_backtest_runs(request: Request, limit: int = 20):
+    """List completed and running backtest runs from Supabase."""
+    try:
+        from brain.signal_snapshots import _get_sb
+        sb = _get_sb()
+        if sb is None:
+            return {"runs": []}
+        resp = (
+            sb.table("backtest_runs")
+            .select("id,name,engine,start_date,end_date,status,total_return,"
+                    "annualized_return,sharpe_ratio,max_drawdown,win_rate,"
+                    "total_trades,symbol_universe,created_at,spy_return,btc_return,final_nav")
+            .order("created_at", desc=True)
+            .limit(min(limit, 50))
+            .execute()
+        )
+        return {"runs": resp.data or []}
+    except Exception as exc:
+        log.warning("backtest list failed: %s", exc)
+        return {"runs": []}
+
+
+@app.get("/backtest/runs/{run_id}")
+def get_backtest_run(run_id: str, request: Request):
+    """Return full detail for one backtest run."""
+    try:
+        from brain.signal_snapshots import _get_sb
+        sb = _get_sb()
+        if sb is None:
+            raise HTTPException(503, "Supabase not configured")
+        resp = sb.table("backtest_runs").select("*").eq("id", run_id).limit(1).execute()
+        if not resp.data:
+            raise HTTPException(404, "Backtest run not found")
+        return resp.data[0]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+
+@app.post("/backtest/run")
+def trigger_backtest(request: Request, body: dict):
+    """Trigger a new rule-based backtest run in a background thread.
+
+    Body: {"name": str, "start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD",
+           "symbols": ["AAPL", ...] | "all"}
+    """
+    import threading as _thr
+    name       = body.get("name", "")
+    start_date = body.get("start_date", "2024-01-01")
+    end_date   = body.get("end_date", "")
+    symbols    = body.get("symbols", "all")
+
+    if not name:
+        raise HTTPException(400, "name is required")
+
+    def _run():
+        try:
+            from backtest.supabase_engine import run_backtest
+            run_backtest(
+                name=name,
+                start_date=start_date,
+                end_date=end_date or None,
+                symbols=symbols,
+            )
+        except Exception as exc:
+            log.error("Backtest %s failed: %s", name, exc, exc_info=True)
+
+    _thr.Thread(target=_run, daemon=True, name=f"backtest-{name}").start()
+    return {"status": "started", "name": name, "start_date": start_date, "end_date": end_date}
 
 
 # ── Brain NLP query endpoint ───────────────────────────────────────────────────

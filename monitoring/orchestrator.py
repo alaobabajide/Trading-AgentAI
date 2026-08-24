@@ -915,6 +915,54 @@ class Orchestrator:
         except Exception as exc:
             log.warning("13F holdings refresh failed (non-fatal): %s", exc)
 
+    def _resolve_snapshot_outcomes(self) -> None:
+        """Hourly job: fill price checkpoints for Supabase signal_snapshots."""
+        try:
+            from brain import signal_snapshots as _ss
+
+            def _fetch_price(symbol: str, asset_class: str) -> float | None:
+                try:
+                    r = httpx.get(
+                        f"{self._brain_url}/bars/{symbol}",
+                        params={"days": 1, "asset_class": asset_class},
+                        timeout=10,
+                        headers=self._brain_headers(),
+                    )
+                    if r.status_code == 200:
+                        return r.json().get("current_price") or None
+                except Exception as exc:
+                    log.debug("Price fetch for snapshot outcome failed %s: %s", symbol, exc)
+                return None
+
+            updated = _ss.resolve_pending_outcomes(_fetch_price)
+            if updated:
+                log.info("Snapshot outcome resolution: %d rows updated", updated)
+        except Exception as exc:
+            log.warning("Snapshot outcome resolution failed (non-fatal): %s", exc)
+
+    def _record_daily_portfolio_snapshot(self) -> None:
+        """Daily job at 21:00 UTC: capture NAV + SPY/BTC closes to Supabase."""
+        try:
+            if not self._alpaca_client:
+                log.debug("Daily portfolio snapshot: no Alpaca client — skipping")
+                return
+            acct = self._alpaca_client.get_account()
+            nav      = float(acct.equity or 0)
+            cash     = float(acct.cash or 0)
+            invested = max(nav - cash, 0.0)
+            daily_pnl = float(acct.equity_previous_close or nav) - nav
+            positions = self._alpaca_client.get_all_positions()
+
+            from brain import portfolio_snapshots as _ps
+            _ps.record_daily_snapshot(
+                nav=nav, cash=cash, invested=invested, daily_pnl=daily_pnl,
+                positions_count=len(positions),
+                peak_nav=self._peak_equity,
+                initial_nav=100_000.0,
+            )
+        except Exception as exc:
+            log.warning("Daily portfolio snapshot failed (non-fatal): %s", exc)
+
     # ── Scheduled jobs ────────────────────────────────────────────────────────
 
     def _run_cycle(self) -> None:
@@ -1002,8 +1050,10 @@ class Orchestrator:
         schedule.every(1).minutes.do(self._monitor_positions)
         schedule.every(30).minutes.do(self._check_api_credits)
         schedule.every(1).hours.do(self._resolve_signal_outcomes)
+        schedule.every(1).hours.do(self._resolve_snapshot_outcomes)
         schedule.every(6).hours.do(self._refresh_congress_disclosures)
         schedule.every(1).days.do(self._refresh_13f_holdings)
+        schedule.every(1).days.at("21:00").do(self._record_daily_portfolio_snapshot)
 
         total_symbols = len(STOCK_WATCHLIST) + len(ETF_WATCHLIST) + len(CRYPTO_WATCHLIST)
         log.info(
