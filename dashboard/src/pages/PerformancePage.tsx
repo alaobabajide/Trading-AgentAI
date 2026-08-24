@@ -669,12 +669,13 @@ function ApproachCard({ a }: { a: typeof APPROACHES[number] }) {
 }
 
 function BacktestResultsTab() {
-  const [runs,       setRuns]    = useState<BacktestRun[]>([]);
-  const [loading,    setLoading] = useState(true);
-  const [launching,  setLaunching]  = useState<string | null>(null);
-  const [msg,        setMsg]     = useState<string | null>(null);
-  const [expanded,   setExpanded]   = useState<string | null>(null);
-  const [pending,    setPending] = useState<{ name: string; start_date: string; end_date: string }[]>([]);
+  const [runs,            setRuns]           = useState<BacktestRun[]>([]);
+  const [loading,         setLoading]        = useState(true);
+  const [launching,       setLaunching]      = useState<string | null>(null);
+  const [msg,             setMsg]            = useState<string | null>(null);
+  const [expanded,        setExpanded]       = useState<string | null>(null);
+  const [pending,         setPending]        = useState<{ name: string; start_date: string; end_date: string }[]>([]);
+  const [showApproaches,  setShowApproaches] = useState(false);
 
   const hasRunning = runs.some(r => r.status === "running") || pending.length > 0;
 
@@ -722,35 +723,25 @@ function BacktestResultsTab() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
 
-      {/* All 5 approaches overview */}
-      <div className="space-y-3">
-        <div className="flex items-center gap-2">
-          <h3 className="text-sm font-semibold">Evidence Approaches</h3>
-          <span className="text-[10px] text-slate-500 bg-slate-800 rounded px-2 py-0.5 border border-slate-700">
-            How we prove the system works — and what we cannot claim
-          </span>
-        </div>
-        <div className="grid grid-cols-1 gap-3">
-          {APPROACHES.map(a => <ApproachCard key={a.num} a={a} />)}
-        </div>
-      </div>
-
-      {/* Simulation runner — Approach 2 only */}
-      <div className="border-t border-slate-700/50 pt-6 space-y-4">
+      {/* ── Simulation runner — primary action, always visible ── */}
+      <div className="glass rounded-2xl p-5 space-y-4">
         <div>
-          <h3 className="text-sm font-semibold flex items-center gap-2">
+          <div className="flex items-center gap-2 mb-1">
             <Play className="w-4 h-4 text-amber-400" />
-            Run Rule-Based Simulation <span className="text-[10px] text-amber-400 font-normal">(Approach 2)</span>
-          </h3>
-          <p className="text-[11px] text-slate-500 mt-1 max-w-2xl">
-            This runs the <strong className="text-slate-400">deterministic rule engine</strong> — not the LLM debate system.
-            Results show how the same symbols and risk parameters would have performed historically under rule-based
-            logic only. These are labelled <strong className="text-amber-400/80">SIMULATION</strong> and kept
-            entirely separate from live signal history.
+            <h3 className="text-sm font-semibold">Run Historical Simulation</h3>
+            <span className="text-[10px] font-mono text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded px-1.5 py-0.5">
+              RULE-BASED · Approach 2
+            </span>
+          </div>
+          <p className="text-[11px] text-slate-500 leading-relaxed max-w-2xl">
+            Replays the <strong className="text-slate-400">deterministic rule engine</strong> against historical daily bars —
+            not the live LLM debate system. Results are kept separate from live signal history and
+            labeled <strong className="text-amber-400/80">SIMULATION</strong> everywhere they appear.
           </p>
         </div>
+
         <div className="flex flex-wrap gap-2">
           {PRESET_RUNS.map(p => {
             const alreadyRun = runs.some(r => r.name === p.name);
@@ -780,6 +771,7 @@ function BacktestResultsTab() {
             );
           })}
         </div>
+
         {msg && (
           <div className="text-xs text-amber-400 bg-amber-500/10 rounded px-3 py-2 border border-amber-500/20">
             {msg}
@@ -787,7 +779,7 @@ function BacktestResultsTab() {
         )}
       </div>
 
-      {/* Results table */}
+      {/* ── Results table ── */}
       <div className="glass rounded-2xl overflow-hidden">
         <div className="px-5 py-4 border-b border-white/5 flex items-center gap-2">
           <h3 className="text-sm font-semibold">
@@ -882,6 +874,39 @@ function BacktestResultsTab() {
           </div>
         )}
       </div>
+
+      {/* ── Evidence approaches — collapsible, below the action ── */}
+      <div className="rounded-xl border border-slate-700/60 overflow-hidden">
+        <button
+          onClick={() => setShowApproaches(v => !v)}
+          className="w-full flex items-center justify-between px-4 py-3 text-sm hover:bg-white/[0.02] transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <span className="font-medium text-slate-300">Evidence Approaches</span>
+            <div className="flex items-center gap-1.5">
+              {APPROACHES.map(a => (
+                <span key={a.num} className={clsx(
+                  "text-[10px] font-mono px-1.5 py-0.5 rounded border",
+                  a.status === "live"      && "text-emerald-400 border-emerald-500/30 bg-emerald-500/10",
+                  a.status === "available" && "text-amber-400 border-amber-500/30 bg-amber-500/10",
+                  a.status === "planned"   && "text-slate-500 border-slate-700",
+                )}>
+                  {a.status === "live" ? "●" : a.status === "available" ? "◎" : "○"} {a.num}
+                </span>
+              ))}
+            </div>
+            <span className="text-[11px] text-slate-600">How we validate the system — and what we cannot claim</span>
+          </div>
+          <span className="text-slate-500 text-xs">{showApproaches ? "▲ collapse" : "▼ expand"}</span>
+        </button>
+
+        {showApproaches && (
+          <div className="border-t border-slate-700/50 p-4 grid grid-cols-1 gap-3 bg-slate-900/40">
+            {APPROACHES.map(a => <ApproachCard key={a.num} a={a} />)}
+          </div>
+        )}
+      </div>
+
     </div>
   );
 }
