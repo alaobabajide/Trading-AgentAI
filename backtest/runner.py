@@ -525,45 +525,66 @@ def run_backtest(
         "Downloading %d symbols from %s to %s …",
         len(download_syms), start_dt, end_dt,
     )
-    # threads=False avoids hammering Yahoo Finance with concurrent requests from
-    # Railway's shared IP, which triggers rate-limiting and hangs indefinitely.
-    # The executor is NOT used as a context manager so shutdown(wait=False) can
-    # be called on timeout — the context manager's __exit__ calls shutdown(wait=True)
-    # which blocks until the thread finishes, making the timeout useless.
-    import concurrent.futures as _cf_dl
-    _dl_ex  = _cf_dl.ThreadPoolExecutor(max_workers=1)
-    _dl_fut = _dl_ex.submit(
-        yf.download, download_syms,
-        start=str(start_dt), end=str(end_dt),
-        progress=False, auto_adjust=True, threads=False,
-    )
-    try:
-        raw = _dl_fut.result(timeout=180)
-    except _cf_dl.TimeoutError:
-        _dl_ex.shutdown(wait=False)   # abandon the stuck thread; don't block
-        raise RuntimeError(
-            f"yfinance download timed out after 180s for {len(download_syms)} symbols."
-        )
-    _dl_ex.shutdown(wait=False)
 
-    # Build per-symbol OHLCV dict
-    if len(download_syms) == 1:
-        ohlcv: dict[str, pd.DataFrame] = {download_syms[0]: raw}
-    else:
-        ohlcv = {}
-        for sym in download_syms:
-            try:
-                df = pd.DataFrame({
-                    "Open":   raw["Open"][sym],
-                    "High":   raw["High"][sym],
-                    "Low":    raw["Low"][sym],
-                    "Close":  raw["Close"][sym],
-                    "Volume": raw["Volume"][sym],
-                }).dropna()
-                if not df.empty:
-                    ohlcv[sym] = df
-            except KeyError:
-                log.warning("No data for %s", sym)
+    import concurrent.futures as _cf_dl
+    import time as _time
+
+    _BATCH_TIMEOUT_S   = 15    # per-batch hard cap — 15 s is plenty for fast networks
+    _DOWNLOAD_BUDGET_S = 90    # total download budget — stop batching after 90 s
+    _dl_start = _time.monotonic()
+
+    def _download_batch(batch: list[str], timeout: float) -> "pd.DataFrame | None":
+        """Download one batch via yf.download with a per-batch hard timeout."""
+        _ex = _cf_dl.ThreadPoolExecutor(max_workers=1)
+        _f  = _ex.submit(yf.download, batch,
+                         start=str(start_dt), end=str(end_dt),
+                         progress=False, auto_adjust=True, threads=False)
+        try:
+            result = _f.result(timeout=timeout)
+            _ex.shutdown(wait=False)
+            return result
+        except _cf_dl.TimeoutError:
+            _ex.shutdown(wait=False)
+            log.warning("Batch timed out (%.0f s), skipping: %s…", timeout, batch[:3])
+            return None
+
+    ohlcv: dict[str, pd.DataFrame] = {}
+    BATCH = 10
+    for _i in range(0, len(download_syms), BATCH):
+        _elapsed  = _time.monotonic() - _dl_start
+        _remaining = _DOWNLOAD_BUDGET_S - _elapsed
+        if _remaining <= 0:
+            log.warning("Download budget exhausted after %.0f s — proceeding with %d/%d symbols",
+                        _elapsed, len(ohlcv), len(download_syms))
+            break
+        _batch   = download_syms[_i:_i + BATCH]
+        _timeout = min(_BATCH_TIMEOUT_S, _remaining)
+        _raw     = _download_batch(_batch, _timeout)
+        if _raw is None:
+            continue
+        if len(_batch) == 1:
+            _df = _raw.dropna()
+            if not _df.empty:
+                ohlcv[_batch[0]] = _df[["Open", "High", "Low", "Close", "Volume"]]
+        else:
+            for sym in _batch:
+                try:
+                    _df = pd.DataFrame({
+                        "Open":   _raw["Open"][sym],
+                        "High":   _raw["High"][sym],
+                        "Low":    _raw["Low"][sym],
+                        "Close":  _raw["Close"][sym],
+                        "Volume": _raw["Volume"][sym],
+                    }).dropna()
+                    if not _df.empty:
+                        ohlcv[sym] = _df
+                except (KeyError, TypeError):
+                    pass
+
+    if not ohlcv:
+        raise RuntimeError(
+            "No price data downloaded — Yahoo Finance may be unreachable from this server."
+        )
 
     # SPY regime series
     spy_up: dict[str, bool] = {}

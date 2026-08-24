@@ -2796,7 +2796,7 @@ async def trigger_backtest(request: Request):
         "symbol_universe": [],
     }
 
-    BACKTEST_TIMEOUT_S = 900  # 15 minutes — fail visibly rather than hang forever
+    BACKTEST_TIMEOUT_S = 300  # 5 minutes — fail fast so the user can retry
 
     def _run():
         import time as _time
