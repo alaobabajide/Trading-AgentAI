@@ -2175,6 +2175,39 @@ export function useWebhookSettings() {
   return { settings, generating, revoking, revealed, error, generate, revoke, dismiss };
 }
 
+// ── Disclosure Tracker status ─────────────────────────────────────────────────
+
+export interface DisclosureStatus {
+  quiver_key_configured:  boolean;
+  investors_count:        number;
+  congress_members_count: number;
+  last_13f_fetch:         string | null;
+  min_confidence_pct:     number;
+}
+
+export async function fetchDisclosureStatus(): Promise<DisclosureStatus> {
+  const res = await fetch(`${BASE}/disclosures/status`, {
+    headers: apiHeaders(),
+    signal:  AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return safeJson(res);
+}
+
+export function useDisclosureStatus() {
+  const [status, setStatus] = useState<DisclosureStatus | null>(null);
+  const [seq, setSeq] = useState(0);
+  const refetch = () => setSeq(s => s + 1);
+  useEffect(() => {
+    let cancelled = false;
+    fetchDisclosureStatus()
+      .then(s => { if (!cancelled) setStatus(s); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [seq]);
+  return { status, refetch };
+}
+
 // ── Disclosure Tracker settings ───────────────────────────────────────────────
 
 export interface DisclosureSettings {
@@ -2258,8 +2291,11 @@ export function useDisclosureSettings() {
 
   async function save(updates: Partial<DisclosureSettings>) {
     setSaving(true); setError(null);
+    // Strip read-only computed fields before sending
+    const payload = { ...updates };
+    delete (payload as Record<string, unknown>).quiver_api_key_configured;
     try {
-      const { settings: updated } = await saveDisclosureSettings(updates);
+      const { settings: updated } = await saveDisclosureSettings(payload);
       setSettings(updated);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);

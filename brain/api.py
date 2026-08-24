@@ -443,6 +443,35 @@ async def lifespan(app: FastAPI):
     else:
         log.warning("BRAIN_API_KEY not set — LLM credential encryption unavailable.")
 
+    # Bootstrap disclosure DB and trigger initial data fetch in background
+    def _bootstrap_disclosures():
+        import time
+        time.sleep(5)  # let uvicorn finish binding before heavy I/O
+        try:
+            from brain.copy_trading import init_db
+            init_db()
+        except Exception as exc:
+            log.warning("Disclosure DB init failed: %s", exc)
+        try:
+            from brain.sec_fetcher import refresh_all
+            refresh_all()
+            log.info("Startup 13F bootstrap complete")
+        except Exception as exc:
+            log.warning("Startup 13F bootstrap failed: %s", exc)
+        try:
+            from brain.disclosure_settings import load as _ds_load
+            if _ds_load().quiver_api_key:
+                from brain.congress_fetcher import refresh as _cr
+                _cr()
+                log.info("Startup congress bootstrap complete")
+            else:
+                log.info("Startup congress bootstrap skipped — no Quiver API key configured")
+        except Exception as exc:
+            log.warning("Startup congress bootstrap failed: %s", exc)
+
+    import threading as _threading
+    _threading.Thread(target=_bootstrap_disclosures, daemon=True, name="disclosure-bootstrap").start()
+
     yield
     log.info("Brain API shutting down.")
 
@@ -4854,6 +4883,25 @@ def save_disclosure_settings(payload: DisclosureSettingsPayload, request: Reques
 # ── Public Disclosure Tracker endpoints ──────────────────────────────────────
 # Read-only: returns 13F institutional holdings and STOCK Act congressional
 # trade disclosures. No order placement occurs in these endpoints.
+
+@app.get("/disclosures/status")
+def get_disclosures_status(request: Request):
+    """Return data availability state for the Disclosure Tracker UI."""
+    from brain.disclosure_settings import load as _ds_load
+    from brain.copy_trading import init_db, get_investors, get_congress_members
+    init_db()
+    cfg = _ds_load()
+    investors = get_investors()
+    members = get_congress_members()
+    last_13f = max((i.get("last_fetched_at") or "" for i in investors), default="") or None
+    return {
+        "quiver_key_configured":   bool(cfg.quiver_api_key),
+        "investors_count":         len(investors),
+        "congress_members_count":  len(members),
+        "last_13f_fetch":          last_13f,
+        "min_confidence_pct":      cfg.min_confidence_pct,
+    }
+
 
 @app.get("/disclosures/investors")
 def get_disclosure_investors(request: Request):
