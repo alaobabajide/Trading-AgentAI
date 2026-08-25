@@ -490,8 +490,8 @@ async def lifespan(app: FastAPI):
                 ids = [r["id"] for r in stale]
                 names = [r["name"] for r in stale]
                 sb.table("backtest_runs").update({
-                    "status": "failed",
-                    "error":  "Server restarted — run was interrupted and must be re-triggered",
+                    "status":        "failed",
+                    "error_message": "Server restarted — run was interrupted and must be re-triggered",
                 }).in_("id", ids).execute()
                 log.warning("Startup: marked %d orphaned backtest run(s) as failed: %s", len(ids), names)
         except Exception as exc:

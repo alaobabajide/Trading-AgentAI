@@ -82,7 +82,7 @@ def run_backtest(
         )
     except Exception as exc:
         log.error("backtest run failed: %s", exc)
-        _update_run(sb, run_id, {"status": "failed", "error": str(exc)})
+        _update_run(sb, run_id, {"status": "failed", "error_message": str(exc)})
         return {"run_id": run_id, "status": "failed", "error": str(exc)}
 
     # ── Persist signal snapshots (one per trade) ─────────────────────────────
@@ -104,12 +104,9 @@ def run_backtest(
         "sharpe_ratio":      result.sharpe_ratio,
         "win_rate":          result.win_rate_pct,
         "total_trades":      result.total_trades,
-        "winning_trades":    result.winning_trades,
-        "losing_trades":     result.losing_trades,
         "profit_factor":     result.profit_factor,
         "spy_return":        spy_ret / 100.0 if spy_ret is not None else None,
-        "btc_return":        None,   # populated separately if BTC benchmark available
-        "completed_at":      datetime.now(timezone.utc).isoformat(),
+        "btc_return":        None,
     }
     _update_run(sb, run_id, final_row)
 
@@ -156,15 +153,15 @@ def _write_signal_snapshots(sb, run_id: str, trades) -> None:
         try:
             rows.append({
                 "symbol":         t.symbol,
+                "asset_class":    "stock",
                 "action":         t.action,
                 "source":         "backtest_rule",
                 "backtest_id":    run_id,
                 "entry_price":    t.entry_price,
-                "signal_date":    t.entry_date,
+                "sim_date":       t.entry_date,
                 "tier":           getattr(t, "tier", "WARM"),
                 "outcome":        _classify_outcome(t.pnl_pct, t.action),
-                "pct_return":     t.pnl_pct * (-1 if t.action == "SELL" else 1),
-                "resolved_at":    t.exit_date,
+                "return_final":   t.pnl_pct * (-1 if t.action == "SELL" else 1),
             })
         except Exception:
             continue
