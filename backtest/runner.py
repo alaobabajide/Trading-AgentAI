@@ -218,17 +218,14 @@ def _paper_signal(
     tier   = _compute_tier(combined, action, regime_label, indicators,
                            panels_conflict=conflict, b_abstaining=b_abstaining)
 
-    # ATR-primary stop — uses atr_multiplier from config if available
     price    = float(indicators.get("price", 1.0))
     atr14    = float(indicators.get("atr_14", 0.0))
     atr_pct  = atr14 / max(price, 1e-9)
     stop_pct = max(0.005, min(0.04, 1.5 * atr_pct))
 
-    # First take-profit target (the Layer 1 trigger)
-    tp_pct = 0.08 if tier == "HOT" else 0.06
-
-    # Position size: HOT = 8%, WARM = 5% of equity
-    pos_pct = 0.08 if tier == "HOT" else 0.05
+    # Position size: fixed at 5% for all tiers — measured data showed HOT at 8%
+    # had a sub-break-even win rate (33-36%), making the size premium a net negative
+    pos_pct = 0.05
 
     # ── Asymmetric Exit Framework — tier × regime matrix ──────────────────────
     is_trending_up  = "TRENDING_UP"     in regime_label
@@ -236,19 +233,16 @@ def _paper_signal(
     is_high_vol     = "HIGH_VOLATILITY" in regime_label
 
     if tier == "HOT" and is_trending_up:
-        # Maximum runner latitude: 40% out at +8%, 60% trails at 12%
         partial_exit_pct = 0.40
         runner_trail_pct = 0.12
         tp_pct           = 0.08
 
     elif tier == "HOT":
-        # HOT but not trending: earlier partial, tighter trail
         partial_exit_pct = 0.50
         runner_trail_pct = 0.08
         tp_pct           = 0.06
 
     elif tier == "WARM" and is_trending_up:
-        # WARM with trend support: modest runner
         partial_exit_pct = 0.50
         runner_trail_pct = 0.10
         tp_pct           = 0.06
@@ -297,6 +291,7 @@ class PortfolioSimulator:
         self._equity_curve: list[dict] = []
         self._peak           = initial_equity
         self._price_peaks:   dict[str, float] = {}   # runner peak tracking
+        self._stop_cooldown: dict[str, int]   = {}   # symbol → bar index when re-entry allowed
 
     @property
     def equity(self) -> float:
@@ -333,8 +328,12 @@ class PortfolioSimulator:
         tier: str,
         partial_exit_pct: float = 0.0,
         runner_trail_pct: float = 0.0,
+        bar_idx: int = 0,
     ) -> bool:
         if symbol in self._open:
+            return False
+        # Block re-entry within 5 bars of a stop-loss on this symbol
+        if self._stop_cooldown.get(symbol, 0) > bar_idx:
             return False
         if len(self._open) >= self._max_concurrent:
             return False
@@ -344,8 +343,8 @@ class PortfolioSimulator:
         if invested / max(self._initial, 1) >= self._max_exposure:
             return False
 
-        effective_max = self._hot_max_pos if tier == "HOT" else self._max_pos
-        notional = self._initial * min(pos_pct, effective_max) * self._size_scale()
+        # Fix 2: all tiers use the same max position cap (5%)
+        notional = self._initial * min(pos_pct, self._max_pos) * self._size_scale()
         if notional < 10 or notional > self._cash:
             return False
 
@@ -420,7 +419,7 @@ class PortfolioSimulator:
 
     # ── Main exit check (called every bar for every open symbol) ──────────────
     def check_exits(self, symbol: str, high: float, low: float,
-                    date_str: str) -> list[Trade]:
+                    date_str: str, bar_idx: int = 0) -> list[Trade]:
         """
         Returns list of Trade records created this bar (0, 1, or 2 items):
           - 0 items: no exit condition met
@@ -441,6 +440,8 @@ class PortfolioSimulator:
             if hit_sl:
                 # Hard stop fires first (worst-case ordering on gap bars)
                 results.append(self._close(symbol, trade.stop_price, date_str, "stop_loss"))
+                # Block re-entry for 5 bars so we don't immediately re-enter a falling stock
+                self._stop_cooldown[symbol] = bar_idx + 5
                 return results
 
             if hit_tp:
@@ -649,7 +650,7 @@ def run_backtest(
             bar_prices[sym] = close
 
             # Check all exit conditions for this bar
-            exits = sim.check_exits(sym, high, low, date_str)
+            exits = sim.check_exits(sym, high, low, date_str, bar_idx=i)
             for t in exits:
                 log.debug("  %s %s → %s qty=%.4f pnl=%.2f (%.1f%%)",
                           date_str, sym, t.exit_reason, t.qty, t.pnl, t.pnl_pct)
@@ -691,6 +692,7 @@ def run_backtest(
                     date_str, tier,
                     partial_exit_pct=partial_exit_pct,
                     runner_trail_pct=runner_trail_pct,
+                    bar_idx=i,
                 )
 
             elif action == "SELL" and sym in sim._open:
