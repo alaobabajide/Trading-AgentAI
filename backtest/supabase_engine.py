@@ -70,14 +70,10 @@ def run_backtest(
     # ── Run the backtest ─────────────────────────────────────────────────────
     try:
         from backtest.runner import run_backtest as _run_backtest
-        # Compute years from start_date to end_date
-        from datetime import date as _date
-        _start = _date.fromisoformat(start_date)
-        _end   = _date.fromisoformat(end_date) if end_date else _date.today()
-        years  = max(1, round((_end - _start).days / 365))
         result = _run_backtest(
             symbols=resolved,
-            years=years,
+            start_date=start_date,
+            end_date=end_date or None,
             initial_equity=initial_equity,
         )
     except Exception as exc:

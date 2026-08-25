@@ -504,7 +504,9 @@ class PortfolioSimulator:
 def run_backtest(
     symbols: list[str],
     asset_class: str = "stock",
-    years: int = 3,
+    years: int = 1,             # ignored when start_date/end_date are provided
+    start_date: str | None = None,
+    end_date: str | None = None,
     initial_equity: float = 100_000.0,
     max_position_pct: float = 0.05,
     hot_position_pct: float = 0.08,
@@ -515,8 +517,9 @@ def run_backtest(
     market_regime_filter: bool = True,
     min_bars: int = 60,
 ) -> BacktestResult:
-    end_dt   = date.today()
-    start_dt = date(end_dt.year - years, end_dt.month, end_dt.day)
+    end_dt   = date.fromisoformat(end_date)   if end_date   else date.today()
+    start_dt = date.fromisoformat(start_date) if start_date else date(end_dt.year - years, end_dt.month, end_dt.day)
+    years    = max((end_dt - start_dt).days / 365.0, 1/12)  # actual years for annualization
 
     spy_only = "SPY" not in symbols
     download_syms = list(dict.fromkeys(symbols + ["SPY"]))
