@@ -1885,6 +1885,8 @@ def take_demo_snapshot(request: Request):
                 "buying_power":          state.buying_power,
                 "daily_pnl":             state.daily_pnl,
                 "daily_pnl_pct":         state.daily_pnl_pct,
+                "open_pnl_today":        state.open_pnl_today,
+                "realized_pnl_today":    state.realized_pnl_today,
                 "crypto_allocation_pct": state.crypto_allocation_pct,
                 "positions": [
                     {
@@ -2682,9 +2684,30 @@ def get_equity_curve(
 
 @app.get("/track-record/benchmarks")
 def get_benchmark_comparison(request: Request, days: int = 30):
-    """Return portfolio vs SPY vs BTC performance for a given period."""
+    """Return portfolio vs SPY vs BTC performance for a given period.
+
+    When Supabase has fewer than 2 historical snapshots, supplements with
+    the live portfolio equity so the tile shows data from day one.
+    """
     from brain import portfolio_snapshots as _ps
-    return _ps.get_benchmark_comparison(days=days)
+    result = _ps.get_benchmark_comparison(days=days)
+    if result.get("insufficient_data"):
+        # Try to provide a real-time reading using live equity
+        try:
+            uid = getattr(request.state, "user_id", None) or "system"
+            from config import get_settings
+            from brain.api import _resolve_alpaca_creds
+            from broker.adapters.alpaca import AlpacaBrokerAdapter
+            from data.portfolio import PortfolioFetcher
+            cfg = get_settings()
+            ak, sk, base_url, _ = _resolve_alpaca_creds(uid, cfg)
+            if ak:
+                fetcher = PortfolioFetcher(AlpacaBrokerAdapter(ak, sk, base_url))
+                snap = fetcher.snapshot()
+                result = _ps.get_benchmark_comparison(days=days, current_nav=snap.equity)
+        except Exception:
+            pass
+    return result
 
 
 # ── Backtest API ──────────────────────────────────────────────────────────────
@@ -3550,6 +3573,8 @@ def get_portfolio(request: Request):
         "buying_power":          state.buying_power,
         "daily_pnl":             state.daily_pnl,
         "daily_pnl_pct":         state.daily_pnl_pct,
+        "open_pnl_today":        state.open_pnl_today,
+        "realized_pnl_today":    state.realized_pnl_today,
         "crypto_allocation_pct": state.crypto_allocation_pct,
         "fetch_error":           fetch_error,
         "positions": [

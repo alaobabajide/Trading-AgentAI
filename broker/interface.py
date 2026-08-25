@@ -38,6 +38,7 @@ class BrokerPosition:
     current_price: float
     market_value: float
     unrealized_pnl: float
+    unrealized_intraday_pnl: float = 0.0  # P&L vs yesterday's close (Alpaca unrealized_intraday_pl)
 
 
 @dataclass

@@ -67,7 +67,8 @@ class AlpacaBrokerAdapter(BrokerAdapter):
             avg_price  = float(p.avg_entry_price or 0)
             cur_price  = float(p.current_price or 0)
             mv         = float(p.market_value or 0)
-            upnl       = float(p.unrealized_pl or 0)
+            upnl          = float(p.unrealized_pl or 0)
+            upnl_intraday = float(p.unrealized_intraday_pl or 0)
             result.append(BrokerPosition(
                 symbol=sym,
                 asset_class="crypto" if is_crypto else "stock",
@@ -76,6 +77,7 @@ class AlpacaBrokerAdapter(BrokerAdapter):
                 current_price=cur_price,
                 market_value=mv,
                 unrealized_pnl=upnl,
+                unrealized_intraday_pnl=upnl_intraday,
             ))
         return result
 

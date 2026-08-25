@@ -146,8 +146,14 @@ def get_equity_curve(source: str = "paper_live", backtest_id: str | None = None,
         return []
 
 
-def get_benchmark_comparison(days: int = 30, source: str = "paper_live") -> dict:
-    """Return portfolio vs SPY vs BTC returns for a given period."""
+def get_benchmark_comparison(days: int = 30, source: str = "paper_live",
+                             current_nav: float | None = None) -> dict:
+    """Return portfolio vs SPY vs BTC returns for a given period.
+
+    When current_nav is provided and Supabase has at least 1 historical row,
+    uses current_nav as the endpoint so the tile shows live data from day one.
+    SPY and BTC current prices are fetched from yfinance when needed.
+    """
     sb = _get_sb()
     if sb is None:
         return {}
@@ -164,21 +170,55 @@ def get_benchmark_comparison(days: int = 30, source: str = "paper_live") -> dict
             .execute()
         )
         rows = resp.data or []
-        if len(rows) < 2:
+
+        # When we have at least 1 historical row and a live NAV, supplement instead of refusing
+        if len(rows) < 2 and (current_nav is None or len(rows) == 0):
             return {"period_days": days, "rows": len(rows), "insufficient_data": True}
 
-        first, last = rows[0], rows[-1]
-        port_ret = (float(last["nav"]) - float(first["nav"])) / float(first["nav"]) * 100
+        first = rows[0] if rows else None
+        end_nav = current_nav if current_nav is not None else float(rows[-1]["nav"])
+        start_nav = float(first["nav"]) if first else end_nav
 
+        port_ret = (end_nav - start_nav) / max(start_nav, 1) * 100
+
+        # For SPY/BTC: use Supabase closes when available; fall back to yfinance spot price
         spy_ret = btc_ret = None
-        if first.get("spy_close") and last.get("spy_close"):
-            spy_ret = (float(last["spy_close"]) - float(first["spy_close"])) / float(first["spy_close"]) * 100
-        if first.get("btc_close") and last.get("btc_close"):
-            btc_ret = (float(last["btc_close"]) - float(first["btc_close"])) / float(first["btc_close"]) * 100
+        last_row = rows[-1] if rows else {}
+        first_spy = float(first["spy_close"]) if first and first.get("spy_close") else None
+        last_spy  = float(last_row.get("spy_close") or 0) or None
 
+        first_btc = float(first["btc_close"]) if first and first.get("btc_close") else None
+        last_btc  = float(last_row.get("btc_close") or 0) or None
+
+        # If last row is stale (not today) and current_nav was supplied, fetch live prices
+        if current_nav is not None:
+            try:
+                import yfinance as yf
+                spy_spot = yf.Ticker("SPY").fast_info.get("lastPrice") or yf.Ticker("SPY").fast_info.get("previousClose")
+                btc_spot = yf.Ticker("BTC-USD").fast_info.get("lastPrice") or yf.Ticker("BTC-USD").fast_info.get("previousClose")
+                if spy_spot:
+                    last_spy = float(spy_spot)
+                if btc_spot:
+                    last_btc = float(btc_spot)
+                # Use Supabase first-row prices as start; if missing, use yfinance history
+                if first_spy is None and first:
+                    import pandas as pd
+                    hist = yf.download("SPY", start=first["snapshot_date"], end=first["snapshot_date"],
+                                       progress=False, auto_adjust=True)
+                    if not hist.empty:
+                        first_spy = float(hist["Close"].iloc[0])
+            except Exception:
+                pass
+
+        if first_spy and last_spy:
+            spy_ret = (last_spy - first_spy) / first_spy * 100
+        if first_btc and last_btc:
+            btc_ret = (last_btc - first_btc) / first_btc * 100
+
+        since = first["snapshot_date"] if first else datetime.now(timezone.utc).date().isoformat()
         return {
             "period_days":      days,
-            "since_date":       first["snapshot_date"],
+            "since_date":       since,
             "portfolio_return": round(port_ret, 2),
             "spy_return":       round(spy_ret, 2) if spy_ret is not None else None,
             "btc_return":       round(btc_ret, 2) if btc_ret is not None else None,

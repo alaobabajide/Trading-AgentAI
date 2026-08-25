@@ -159,18 +159,26 @@ export function Dashboard() {
     return [];   // nothing real yet — EquityChart handles empty gracefully
   })();
 
-  const pnlUp = (p?.daily_pnl ?? 0) >= 0;
+  // Daily P&L breakdown — uses Alpaca's intraday unrealized P&L per position
+  // to split the total NAV change into what came from closed trades vs open positions.
+  // realized_pnl_today + open_pnl_today = daily_pnl (they always reconcile).
+  const pnlUp          = (p?.daily_pnl          ?? 0) >= 0;
+  const realizedToday  = (p as any)?.realized_pnl_today ?? null;
+  const openToday      = (p as any)?.open_pnl_today     ?? null;
+  const fmt = (v: number) =>
+    `${v >= 0 ? "+" : ""}$${Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2 })}`;
 
-  // Sum of unrealized P&L across all currently-open positions (vs entry price).
-  // This will not match daily_pnl because daily_pnl also includes realized P&L
-  // from positions that closed today (stop-losses, take-profits) which no longer
-  // appear in the positions table.
-  const openPnl = (p?.positions ?? []).reduce((sum, pos) => sum + (pos.unrealized_pnl ?? 0), 0);
-  const openPnlUp = openPnl >= 0;
+  const pnlSub2 = realizedToday !== null && openToday !== null
+    ? `Closed trades: ${fmt(realizedToday)} · Open moves: ${fmt(openToday)}`
+    : `${(p?.daily_pnl_pct ?? 0).toFixed(2)}% vs yesterday's close`;
+
+  // Unrealized P&L = open positions vs their entry prices (how much you're up/down vs what you paid)
+  const unrealizedTotal = (p?.positions ?? []).reduce((s, pos) => s + (pos.unrealized_pnl ?? 0), 0);
+  const unrealizedUp    = unrealizedTotal >= 0;
 
   return (
     <div className="space-y-6">
-      {/* Stat row */}
+      {/* ── Row 1: four key numbers ── */}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard
           label="Portfolio Equity"
@@ -181,12 +189,20 @@ export function Dashboard() {
           accent
         />
         <StatCard
-          label="Daily P&L"
+          label="Today's P&L"
           value={`${pnlUp ? "+" : ""}$${(p?.daily_pnl ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
           sub={`${pnlUp ? "+" : ""}${(p?.daily_pnl_pct ?? 0).toFixed(2)}% vs yesterday's close`}
-          sub2={`Open positions: ${openPnlUp ? "+" : ""}$${openPnl.toLocaleString("en-US", { minimumFractionDigits: 2 })} vs entry`}
+          sub2={pnlSub2}
           trend={pnlUp ? "up" : "down"}
           icon={pnlUp ? <TrendingUp className="w-4 h-4 text-emerald-500" /> : <TrendingDown className="w-4 h-4 text-red-500" />}
+        />
+        <StatCard
+          label="Unrealised P&L"
+          value={`${unrealizedUp ? "+" : ""}$${Math.abs(unrealizedTotal).toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
+          sub="Open positions vs entry price"
+          sub2={`${(p?.positions ?? []).length} position${(p?.positions ?? []).length !== 1 ? "s" : ""} held`}
+          trend={unrealizedUp ? "up" : "down"}
+          icon={unrealizedUp ? <TrendingUp className="w-4 h-4 text-emerald-500" /> : <TrendingDown className="w-4 h-4 text-red-500" />}
         />
         <StatCard
           label="Cash"
@@ -195,54 +211,98 @@ export function Dashboard() {
           trend="neutral"
           icon={<Wallet className="w-4 h-4" />}
         />
-        <StatCard
-          label="Crypto Allocation"
-          value={`${((p?.crypto_allocation_pct ?? 0) * 100).toFixed(1)}%`}
-          sub={`Cap: ${((riskCfg?.max_crypto_allocation_pct ?? 0.30) * 100).toFixed(0)}% — ${(((riskCfg?.max_crypto_allocation_pct ?? 0.30) - (p?.crypto_allocation_pct ?? 0)) * 100).toFixed(1)}% headroom`}
-          trend={(p?.crypto_allocation_pct ?? 0) > ((riskCfg?.max_crypto_allocation_pct ?? 0.30) * 0.90) ? "down" : "neutral"}
-        />
       </div>
 
-      {/* Main content */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <div className="xl:col-span-2 glass rounded-2xl p-5">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold">Equity Curve</h2>
-              <LiveBadge live={equityLive} />
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="flex gap-1">
-                {(["1D", "1M", "1Y"] as EquityPeriod[]).map((p) => (
-                  <button
-                    key={p}
-                    onClick={() => setEquityPeriod(p)}
-                    className={`text-[11px] font-mono px-2 py-0.5 rounded transition-colors ${
-                      equityPeriod === p
-                        ? "bg-brand-500/20 text-brand-400 border border-brand-500/30"
-                        : "text-slate-500 hover:text-slate-300"
-                    }`}
-                  >
-                    {p}
-                  </button>
-                ))}
-              </div>
-              <span className="text-xs text-slate-500">
-                {isDemo ? "Demo snapshot" : equityLive ? "Live data" : isLive ? "Connecting…" : "Waiting for data"}
-              </span>
-            </div>
+      {/* ── Row 2: Equity Curve — full width ── */}
+      <div className="glass rounded-2xl p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold">Equity Curve</h2>
+            <LiveBadge live={equityLive} />
           </div>
-          <EquityChart data={series} period={equityPeriod} />
+          <div className="flex items-center gap-3">
+            <div className="flex gap-1">
+              {(["1D", "1M", "1Y"] as EquityPeriod[]).map((period) => (
+                <button
+                  key={period}
+                  onClick={() => setEquityPeriod(period)}
+                  className={`text-[11px] font-mono px-2 py-0.5 rounded transition-colors ${
+                    equityPeriod === period
+                      ? "bg-brand-500/20 text-brand-400 border border-brand-500/30"
+                      : "text-slate-500 hover:text-slate-300"
+                  }`}
+                >
+                  {period}
+                </button>
+              ))}
+            </div>
+            <span className="text-xs text-slate-500">
+              {isDemo ? "Demo snapshot" : equityLive ? "Live data" : isLive ? "Connecting…" : "Waiting for data"}
+            </span>
+          </div>
+        </div>
+        <EquityChart data={series} period={equityPeriod} />
+      </div>
+
+      {/* ── Row 3: Signal Performance · Benchmark · Allocation + Risk ── */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+
+        {/* Signal Performance */}
+        <div className="glass rounded-2xl p-5">
+          <h2 className="text-sm font-semibold mb-4 flex items-center gap-2">
+            <Trophy className="w-3.5 h-3.5 text-amber-400" />
+            Signal Performance
+          </h2>
+          <div className="space-y-4 text-xs font-mono">
+            {(["7d", "30d"] as const).map(w => {
+              const s = signalStats?.[w];
+              const wr = s?.win_rate;
+              return (
+                <div key={w}>
+                  <div className="flex justify-between text-slate-500 mb-1.5">
+                    <span className="uppercase tracking-wider">{w === "7d" ? "Last 7 days" : "Last 30 days"}</span>
+                    <span>{s ? `${s.total} signals` : "—"}</span>
+                  </div>
+                  {s && s.total > 0 ? (
+                    <>
+                      <div className="flex items-center gap-2 mb-1">
+                        <div className="flex h-1.5 flex-1 rounded-full overflow-hidden bg-slate-800">
+                          <div className="bg-emerald-500" style={{ width: `${((s.wins / s.total) * 100).toFixed(0)}%` }} />
+                          <div className="bg-red-500"     style={{ width: `${((s.losses / s.total) * 100).toFixed(0)}%` }} />
+                        </div>
+                        <span className={`w-8 text-right ${wr != null && wr >= 50 ? "text-emerald-400" : "text-red-400"}`}>
+                          {wr != null ? `${wr.toFixed(0)}%` : "—"}
+                        </span>
+                      </div>
+                      <div className="flex gap-3 text-[10px] text-slate-500">
+                        <span className="text-emerald-500">{s.wins}W</span>
+                        <span className="text-red-500">{s.losses}L</span>
+                        <span>{s.total - s.wins - s.losses} pending</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-slate-600 text-[11px]">
+                      Signals resolve after 24h — check back soon
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
 
-        <div className="space-y-4">
-          <div className="glass rounded-2xl p-5">
-            <h2 className="text-sm font-semibold mb-4">Allocation</h2>
+        {/* Benchmark comparison */}
+        <BenchmarkCard />
+
+        {/* Allocation + Risk Controls */}
+        <div className="glass rounded-2xl p-5 space-y-5">
+          <div>
+            <h2 className="text-sm font-semibold mb-3">Allocation</h2>
             <AllocationDonut positions={p?.positions ?? []} equity={p?.equity ?? 0} cash={p?.cash ?? 0} />
           </div>
-          <div className="glass rounded-2xl p-5">
-            <h2 className="text-sm font-semibold mb-3">Risk Controls</h2>
-            <div className="space-y-2 text-xs text-slate-400 font-mono">
+          <div>
+            <h2 className="text-sm font-semibold mb-2">Risk Controls</h2>
+            <div className="space-y-1.5 text-xs text-slate-400 font-mono">
               {(riskCfg ? [
                 ["Circuit breaker", `${(riskCfg.circuit_breaker_drawdown * 100).toFixed(0)}% drawdown`],
                 ["Max position",    `${(riskCfg.max_position_pct * 100).toFixed(0)}% NAV`],
@@ -250,11 +310,8 @@ export function Dashboard() {
                 ["Stop (default)",  `${(riskCfg.stop_loss_pct * 100).toFixed(1)}%`],
                 ["Target (default)",`${(riskCfg.take_profit_pct * 100).toFixed(1)}%`],
               ] : [
-                ["Circuit breaker", "—"],
-                ["Max position",    "—"],
-                ["Crypto cap",      "—"],
-                ["Stop (default)",  "—"],
-                ["Target (default)","—"],
+                ["Circuit breaker", "—"], ["Max position", "—"], ["Crypto cap", "—"],
+                ["Stop (default)", "—"],  ["Target (default)", "—"],
               ]).map(([k, v]) => (
                 <div key={k} className="flex justify-between">
                   <span>{k}</span>
@@ -263,46 +320,10 @@ export function Dashboard() {
               ))}
             </div>
           </div>
-
-          <div className="glass rounded-2xl p-5">
-            <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
-              <Trophy className="w-3.5 h-3.5 text-amber-400" />
-              Signal Performance
-            </h2>
-            <div className="space-y-3 text-xs font-mono">
-              {(["7d", "30d"] as const).map(w => {
-                const s = signalStats?.[w];
-                const wr = s?.win_rate;
-                return (
-                  <div key={w}>
-                    <div className="flex justify-between text-slate-500 mb-1">
-                      <span className="uppercase tracking-wider">{w}</span>
-                      <span>{s ? `${s.total} signals` : "—"}</span>
-                    </div>
-                    {s && s.total > 0 ? (
-                      <div className="flex items-center gap-2">
-                        <div className="flex h-1.5 flex-1 rounded-full overflow-hidden bg-surface-700">
-                          <div className="bg-emerald-500" style={{ width: `${((s.wins / s.total) * 100).toFixed(0)}%` }} />
-                          <div className="bg-red-500"     style={{ width: `${((s.losses / s.total) * 100).toFixed(0)}%` }} />
-                        </div>
-                        <span className={wr != null && wr >= 50 ? "text-emerald-400" : "text-red-400"}>
-                          {wr != null ? `${wr.toFixed(0)}%` : "pending"}
-                        </span>
-                      </div>
-                    ) : (
-                      <div className="text-slate-600">No resolved signals yet</div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
         </div>
-
-        <BenchmarkCard />
       </div>
 
-      {/* Positions */}
+      {/* ── Row 4: Open Positions — full width ── */}
       <div className="glass rounded-2xl p-5">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold">Open Positions</h2>
@@ -311,7 +332,7 @@ export function Dashboard() {
         <PositionsTable positions={p?.positions ?? []} />
       </div>
 
-      {/* Recent signals */}
+      {/* ── Row 5: Recent Signals ── */}
       <div>
         <div className="flex items-center gap-2 mb-3">
           <h2 className="text-sm font-semibold">Recent Signals</h2>

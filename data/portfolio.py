@@ -35,9 +35,11 @@ class PortfolioState:
     cash: float
     buying_power: float = 0.0             # broker buying power (may be 2× equity on margin)
     positions: list[Position] = field(default_factory=list)
-    daily_pnl: float = 0.0
+    daily_pnl: float = 0.0               # equity - last_equity (total NAV change vs yesterday's close)
     daily_pnl_pct: float = 0.0
-    crypto_allocation_pct: float = 0.0    # % of equity in crypto
+    open_pnl_today: float = 0.0          # sum of intraday unrealized P&L on open positions (vs yesterday's close)
+    realized_pnl_today: float = 0.0      # daily_pnl minus open_pnl_today = P&L from positions closed today
+    crypto_allocation_pct: float = 0.0   # % of equity in crypto
 
     @property
     def stock_allocation_pct(self) -> float:
@@ -53,7 +55,7 @@ class PortfolioFetcher:
 
     def snapshot(self) -> PortfolioState:
         all_positions: list[Position] = []
-        equity = cash = buying_power = daily_pnl = 0.0
+        equity = cash = buying_power = daily_pnl = open_pnl_today = 0.0
 
         try:
             acct         = self._broker.get_account()
@@ -64,8 +66,9 @@ class PortfolioFetcher:
             daily_pnl    = equity - last_equity
 
             for bp in self._broker.get_all_positions():
-                cost_basis  = abs(bp.qty * bp.avg_entry_price)
-                upnl_pct    = bp.unrealized_pnl / max(cost_basis, 1) * 100
+                cost_basis      = abs(bp.qty * bp.avg_entry_price)
+                upnl_pct        = bp.unrealized_pnl / max(cost_basis, 1) * 100
+                open_pnl_today += getattr(bp, "unrealized_intraday_pnl", 0.0)
                 all_positions.append(Position(
                     symbol=bp.symbol,
                     asset_class=bp.asset_class,
@@ -90,5 +93,7 @@ class PortfolioFetcher:
             positions=all_positions,
             daily_pnl=daily_pnl,
             daily_pnl_pct=daily_pnl / max(equity - daily_pnl, 1) * 100,
+            open_pnl_today=open_pnl_today,
+            realized_pnl_today=daily_pnl - open_pnl_today,
             crypto_allocation_pct=crypto_pct,
         )
