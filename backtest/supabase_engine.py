@@ -23,6 +23,7 @@ def run_backtest(
     end_date: str | None,
     symbols: str | list[str] = "all",
     initial_equity: float = 100_000.0,
+    engine_version: str = "v1",
 ) -> dict[str, Any]:
     """Run a rule-based backtest and persist results to Supabase.
 
@@ -42,6 +43,10 @@ def run_backtest(
     else:
         resolved = list(symbols)
 
+    # ── Resolve engine profile ───────────────────────────────────────────────
+    from backtest.engine_profiles import get_profile
+    profile = get_profile(engine_version)
+
     # ── Supabase client ──────────────────────────────────────────────────────
     sb = _get_supabase()
 
@@ -57,10 +62,18 @@ def run_backtest(
         "initial_nav":  initial_equity,
         "symbol_universe": resolved,
         "config": {
-            "symbols":       resolved,
+            "symbols":        resolved,
             "initial_equity": initial_equity,
+            "engine_version": engine_version,
+            "engine_config":  profile,
         },
     }
+    # engine_version / engine_config top-level columns (added by migration)
+    try:
+        run_row["engine_version"] = engine_version
+        run_row["engine_config"]  = profile
+    except Exception:
+        pass
     if sb:
         try:
             sb.table("backtest_runs").insert(run_row).execute()
@@ -75,6 +88,7 @@ def run_backtest(
             start_date=start_date,
             end_date=end_date or None,
             initial_equity=initial_equity,
+            profile=profile,
         )
     except Exception as exc:
         log.error("backtest run failed: %s", exc)

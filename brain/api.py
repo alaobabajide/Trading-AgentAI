@@ -2729,7 +2729,8 @@ def list_backtest_runs(request: Request, limit: int = 20):
                 sb.table("backtest_runs")
                 .select("id,name,engine,start_date,end_date,status,total_return,"
                         "annualized_return,sharpe_ratio,max_drawdown,win_rate,"
-                        "total_trades,symbol_universe,created_at,spy_return,btc_return,final_nav")
+                        "total_trades,symbol_universe,created_at,spy_return,btc_return,"
+                        "final_nav,profit_factor,engine_version")
                 .order("created_at", desc=True)
                 .limit(min(limit, 50))
                 .execute()
@@ -2795,27 +2796,34 @@ async def trigger_backtest(request: Request):
         body = await request.json()
     except Exception:
         body = {}
-    name       = body.get("name", "")
-    start_date = body.get("start_date", "2024-01-01")
-    end_date   = body.get("end_date", "")
-    symbols    = body.get("symbols", "all")
+    name           = body.get("name", "")
+    start_date     = body.get("start_date", "2024-01-01")
+    end_date       = body.get("end_date", "")
+    symbols        = body.get("symbols", "all")
+    engine_version = body.get("engine_version", "v1")
 
     if not name:
         raise HTTPException(400, "name is required")
+
+    # Validate engine version
+    from backtest.engine_profiles import ENGINE_PROFILES
+    if engine_version not in ENGINE_PROFILES:
+        engine_version = "v1"
 
     run_id = str(_uuid.uuid4())
     created_at = _dt.now(_tz.utc).isoformat()
 
     # Write optimistic "running" entry to cache immediately
     _BACKTEST_CACHE[name] = {
-        "id":         run_id,
-        "name":       name,
-        "status":     "running",
-        "engine":     "rule_based",
-        "start_date": start_date,
-        "end_date":   end_date or "",
-        "created_at": created_at,
-        "started_at": created_at,   # ISO timestamp so frontend can show elapsed time
+        "id":             run_id,
+        "name":           name,
+        "status":         "running",
+        "engine":         "rule_based",
+        "engine_version": engine_version,
+        "start_date":     start_date,
+        "end_date":       end_date or "",
+        "created_at":     created_at,
+        "started_at":     created_at,   # ISO timestamp so frontend can show elapsed time
         "symbol_universe": [],
     }
 
@@ -2833,7 +2841,8 @@ async def trigger_backtest(request: Request):
             # the timeout completely ineffective.
             _ex  = _cf.ThreadPoolExecutor(max_workers=1)
             _fut = _ex.submit(run_backtest, name=name, start_date=start_date,
-                              end_date=end_date or None, symbols=symbols)
+                              end_date=end_date or None, symbols=symbols,
+                              engine_version=engine_version)
             try:
                 result = _fut.result(timeout=BACKTEST_TIMEOUT_S)
             except _cf.TimeoutError:
@@ -2849,6 +2858,7 @@ async def trigger_backtest(request: Request):
                 "name":              name,
                 "status":            result.get("status", "completed"),
                 "engine":            "rule_based",
+                "engine_version":    engine_version,
                 "start_date":        start_date,
                 "end_date":          end_date or "",
                 "created_at":        created_at,
@@ -2859,6 +2869,7 @@ async def trigger_backtest(request: Request):
                 "max_drawdown":      result.get("max_drawdown_pct", 0) / 100,
                 "win_rate":          result.get("win_rate_pct"),
                 "total_trades":      result.get("total_trades"),
+                "profit_factor":     result.get("profit_factor"),
                 "symbol_universe":   [],
             }
             log.info("Backtest %s completed in %.0fs", name, _time.monotonic() - t0)

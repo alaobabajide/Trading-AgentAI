@@ -293,16 +293,32 @@ class PortfolioSimulator:
         self._price_peaks:   dict[str, float] = {}   # runner peak tracking
         self._stop_cooldown: dict[str, int]   = {}   # symbol → bar index when re-entry allowed
 
+        # Passive index position (V2 only); None when no passive allocation profile
+        self._passive_pos: dict | None = None  # {"qty": float, "avg_price": float, "current_price": float}
+        self._passive_symbol: str = ""
+
+    def init_passive(self, passive_symbol: str) -> None:
+        self._passive_symbol = passive_symbol
+
     @property
     def equity(self) -> float:
-        invested = sum(t.qty * t.entry_price for t in self._open.values())
-        return self._cash + invested
+        invested     = sum(t.qty * t.entry_price for t in self._open.values())
+        passive_val  = (
+            self._passive_pos["qty"] * self._passive_pos.get("current_price", self._passive_pos["avg_price"])
+            if self._passive_pos else 0.0
+        )
+        return self._cash + invested + passive_val
 
     def mark_equity(self, date_str: str, prices: dict[str, float]) -> None:
         open_val = sum(
             t.qty * prices.get(t.symbol, t.entry_price) for t in self._open.values()
         )
-        total = self._cash + open_val
+        passive_val = 0.0
+        if self._passive_pos and self._passive_symbol:
+            p = prices.get(self._passive_symbol, self._passive_pos.get("current_price", self._passive_pos["avg_price"]))
+            passive_val = self._passive_pos["qty"] * p
+            self._passive_pos["current_price"] = p
+        total = self._cash + open_val + passive_val
         self._equity_curve.append({"date": date_str, "equity": round(total, 2)})
         if total > self._peak:
             self._peak = total
@@ -481,10 +497,74 @@ class PortfolioSimulator:
             return None
         return self._close(symbol, price, date_str, "signal_sell")
 
+    def manage_passive_spy(self, profile: dict, spy_price: float, date_str: str) -> None:
+        """Rebalance the passive SPY position per the V2 profile rules."""
+        if not profile.get("passive_enabled") or spy_price <= 0:
+            return
+
+        invested    = sum(t.qty * t.entry_price for t in self._open.values())
+        passive_val = self._passive_pos["qty"] * spy_price if self._passive_pos else 0.0
+        nav         = self._cash + invested + passive_val
+        if nav <= 0:
+            return
+
+        passive_pct = passive_val / nav
+        excess_cash = max(0.0, self._cash - nav * profile["cash_threshold_pct"])
+        target_val  = min(excess_cash + passive_val, nav * profile["passive_max_pct"])
+        target_pct  = target_val / nav
+        drift       = abs(target_pct - passive_pct)
+        if drift < profile["rebalance_band_pct"]:
+            return
+
+        if target_pct > passive_pct:
+            buy_val = target_val - passive_val
+            buy_qty = buy_val / spy_price
+            cost    = buy_qty * spy_price
+            if buy_qty > 0.001 and self._cash >= cost:
+                self._cash -= cost
+                if self._passive_pos:
+                    old_qty   = self._passive_pos["qty"]
+                    new_qty   = old_qty + buy_qty
+                    new_avg   = (self._passive_pos["avg_price"] * old_qty + cost) / new_qty
+                    self._passive_pos = {"qty": new_qty, "avg_price": new_avg, "current_price": spy_price}
+                else:
+                    self._passive_pos = {"qty": buy_qty, "avg_price": spy_price, "current_price": spy_price}
+
+        elif target_pct < passive_pct and self._passive_pos:
+            sell_val = passive_val - target_val
+            sell_qty = min(sell_val / spy_price, self._passive_pos["qty"])
+            if sell_qty > 0.001:
+                self._cash += sell_qty * spy_price
+                remaining  = self._passive_pos["qty"] - sell_qty
+                if remaining < 0.001:
+                    self._passive_pos = None
+                else:
+                    self._passive_pos["qty"] = remaining
+                    self._passive_pos["current_price"] = spy_price
+
+    def liquidate_passive_for(self, shortfall: float, spy_price: float) -> None:
+        """Sell enough passive SPY to cover a cash shortfall for an active trade."""
+        if not self._passive_pos or spy_price <= 0:
+            return
+        sell_qty = min(shortfall / spy_price + 1, self._passive_pos["qty"])
+        if sell_qty > 0.001:
+            self._cash += sell_qty * spy_price
+            remaining  = self._passive_pos["qty"] - sell_qty
+            if remaining < 0.001:
+                self._passive_pos = None
+            else:
+                self._passive_pos["qty"] = remaining
+                self._passive_pos["current_price"] = spy_price
+
     def close_all(self, prices: dict[str, float], date_str: str) -> None:
         for sym in list(self._open.keys()):
             price = prices.get(sym, self._open[sym].entry_price)
             self._close(sym, price, date_str, "end_of_period")
+        # Liquidate passive position at period end so final equity is all cash
+        if self._passive_pos and self._passive_symbol:
+            p = prices.get(self._passive_symbol, self._passive_pos.get("current_price", self._passive_pos["avg_price"]))
+            self._cash        += self._passive_pos["qty"] * p
+            self._passive_pos  = None
 
     def max_drawdown(self) -> float:
         if not self._equity_curve:
@@ -517,7 +597,10 @@ def run_backtest(
     drawdown_scale_factor: float = 0.80,
     market_regime_filter: bool = True,
     min_bars: int = 60,
+    profile: dict | None = None,
 ) -> BacktestResult:
+    from backtest.engine_profiles import DEFAULT_PROFILE
+    _profile = profile if profile is not None else DEFAULT_PROFILE
     end_dt   = date.fromisoformat(end_date)   if end_date   else date.today()
     start_dt = date.fromisoformat(start_date) if start_date else date(end_dt.year - years, end_dt.month, end_dt.day)
     years    = max((end_dt - start_dt).days / 365.0, 1/12)  # actual years for annualization
@@ -634,6 +717,8 @@ def run_backtest(
         drawdown_scale_threshold=drawdown_scale_threshold,
         drawdown_scale_factor=drawdown_scale_factor,
     )
+    if _profile.get("passive_enabled") and _profile.get("passive_symbol"):
+        sim.init_passive(_profile["passive_symbol"])
 
     for i, bar_date in enumerate(dates):
         date_str     = str(bar_date.date() if hasattr(bar_date, "date") else bar_date)
@@ -687,6 +772,13 @@ def run_backtest(
                 else:
                     entry_price = close
 
+                # V2: liquidate passive SPY if we need cash for an active signal
+                if _profile.get("passive_enabled") and _profile.get("passive_symbol"):
+                    _notional = initial_equity * min(pos_pct, 0.05) * sim._size_scale()
+                    if _notional > sim._cash and sim._passive_pos:
+                        sim.liquidate_passive_for(_notional - sim._cash,
+                                                  bar_prices.get(_profile["passive_symbol"], 0.0))
+
                 sim.try_open(
                     sym, asset_class, entry_price, pos_pct, stop_pct, tp_pct,
                     date_str, tier,
@@ -697,6 +789,13 @@ def run_backtest(
 
             elif action == "SELL" and sym in sim._open:
                 sim.close_on_signal(sym, close, date_str)
+
+        # V2: rebalance passive SPY after all active signals
+        if _profile.get("passive_enabled") and _profile.get("passive_symbol"):
+            _spy_sym = _profile["passive_symbol"]
+            if _spy_sym in ohlcv and bar_date in ohlcv[_spy_sym].index:
+                _spy_close = float(ohlcv[_spy_sym].loc[bar_date, "Close"])
+                sim.manage_passive_spy(_profile, _spy_close, date_str)
 
         sim.mark_equity(date_str, bar_prices)
 

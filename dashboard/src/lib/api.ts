@@ -2366,6 +2366,8 @@ export interface BacktestRun {
   spy_return:        number | null;
   btc_return:        number | null;
   final_nav:         number | null;
+  engine_version?:   string | null;
+  profit_factor?:    number | null;
 }
 
 export interface TrackRecordLeaderboardRow {
@@ -2444,6 +2446,7 @@ export async function triggerBacktest(params: {
   start_date: string;
   end_date?: string;
   symbols?: string | string[];
+  engine_version?: string;
 }): Promise<{ status: string; name: string }> {
   const res = await fetch(`${BASE}/backtest/run`, {
     method:  "POST",

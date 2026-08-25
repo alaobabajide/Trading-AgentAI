@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   BarChart2, ChevronLeft, ChevronRight, RefreshCw, Trophy,
   TrendingUp, Database, Play, CheckCircle, Clock, XCircle,
@@ -501,6 +501,33 @@ function TrackRecordTab() {
             </div>
           )}
 
+          {/* Rule-engine backtest reference card */}
+          <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 px-4 py-3">
+            <div className="flex items-center gap-2 mb-1.5">
+              <Database className="w-3.5 h-3.5 text-slate-500" />
+              <span className="text-[11px] font-semibold text-slate-400">Rule-Based Backtest Benchmarks</span>
+              <span className="text-[9px] font-mono text-amber-400/70 border border-amber-500/20 rounded px-1 py-0.5">SIMULATION</span>
+            </div>
+            <p className="text-[10px] text-slate-600 mb-2 leading-relaxed">
+              Pre-computed V1 vs V2 results across the full 2024–2026 market cycle. Not the live LLM system — rule engine only.
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-[10px]">
+              {[
+                { label: "V1 Full Cycle", ret: "+61.7%", sharpe: "1.57", color: "text-slate-300" },
+                { label: "V2 Full Cycle", ret: "+75.3%", sharpe: "1.71", color: "text-emerald-400" },
+                { label: "V1 Bull 2024",  ret: "+33.4%", sharpe: "2.43", color: "text-slate-300" },
+                { label: "V2 Bull 2024",  ret: "+37.1%", sharpe: "2.61", color: "text-emerald-400" },
+              ].map(m => (
+                <div key={m.label} className="bg-slate-900/50 rounded px-2 py-1.5">
+                  <div className="text-slate-600 mb-0.5">{m.label}</div>
+                  <div className={clsx("font-semibold", m.color)}>{m.ret}</div>
+                  <div className="text-slate-600">Sharpe {m.sharpe}</div>
+                </div>
+              ))}
+            </div>
+            <p className="text-[10px] text-slate-700 mt-2">Run interactive simulations on the <strong className="text-slate-600">Backtests</strong> tab.</p>
+          </div>
+
           {/* Tier accuracy leaderboard */}
           <div className="glass rounded-2xl overflow-hidden">
             <div className="px-5 py-4 border-b border-white/5 flex items-center gap-3">
@@ -668,6 +695,35 @@ function ApproachCard({ a }: { a: typeof APPROACHES[number] }) {
   );
 }
 
+type EngineMode = "v1" | "v2" | "compare";
+
+const ENGINE_LABELS: Record<EngineMode, string> = {
+  v1:      "V1 · AEF",
+  v2:      "V2 · AEF + SPY",
+  compare: "Run Both",
+};
+
+const ENGINE_BADGE_STYLE: Record<string, string> = {
+  v1: "text-slate-400 bg-slate-500/10 border-slate-600",
+  v2: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30",
+};
+
+function EngineBadge({ version }: { version?: string | null }) {
+  const v = version ?? "v1";
+  return (
+    <span className={clsx(
+      "text-[9px] font-mono font-semibold px-1.5 py-0.5 rounded border uppercase",
+      ENGINE_BADGE_STYLE[v] ?? ENGINE_BADGE_STYLE.v1,
+    )}>
+      {v}
+    </span>
+  );
+}
+
+function getBaseName(name: string): string {
+  return name.replace(/_v[12]$/, "");
+}
+
 function BacktestResultsTab() {
   const [runs,            setRuns]           = useState<BacktestRun[]>([]);
   const [loading,         setLoading]        = useState(true);
@@ -676,6 +732,7 @@ function BacktestResultsTab() {
   const [expanded,        setExpanded]       = useState<string | null>(null);
   const [pending,         setPending]        = useState<{ name: string; start_date: string; end_date: string; startedAt: number }[]>([]);
   const [showApproaches,  setShowApproaches] = useState(false);
+  const [engineMode,      setEngineMode]     = useState<EngineMode>("v1");
 
   const hasRunning = runs.some(r => r.status === "running") || pending.length > 0;
 
@@ -692,10 +749,9 @@ function BacktestResultsTab() {
       .then(r => {
         setRuns(r);
         setLoading(false);
-        const now = Date.now();
+        const nowMs = Date.now();
         setPending(prev => prev.filter(p =>
-          // keep if backend doesn't have a row for it yet AND it hasn't timed out
-          !r.some(row => row.name === p.name) && (now - p.startedAt) < PENDING_TIMEOUT_MS
+          !r.some(row => row.name === p.name) && (nowMs - p.startedAt) < PENDING_TIMEOUT_MS
         ));
       })
       .catch(() => setLoading(false));
@@ -709,29 +765,70 @@ function BacktestResultsTab() {
     return () => clearInterval(id);
   }, [hasRunning, load]);
 
+  // Comparison pairs: completed runs grouped by base name that have both v1 and v2
+  const comparisonPairs = useMemo(() => {
+    const completed = runs.filter(r => r.status === "completed");
+    const byBase = new Map<string, BacktestRun[]>();
+    for (const r of completed) {
+      const base = getBaseName(r.name);
+      if (!byBase.has(base)) byBase.set(base, []);
+      byBase.get(base)!.push(r);
+    }
+    const pairs: { v1: BacktestRun; v2: BacktestRun; label: string }[] = [];
+    for (const [base, group] of byBase) {
+      const v1r = group.find(r => (r.engine_version ?? "v1") === "v1");
+      const v2r = group.find(r => r.engine_version === "v2");
+      if (v1r && v2r) {
+        const preset = PRESET_RUNS.find(p => getBaseName(p.name) === base || p.name === base);
+        pairs.push({ v1: v1r, v2: v2r, label: preset?.label ?? base });
+      }
+    }
+    return pairs;
+  }, [runs]);
+
   async function launch(preset: typeof PRESET_RUNS[0]) {
     setLaunching(preset.name);
     setMsg(null);
     try {
-      await triggerBacktest({
-        name:       preset.name,
-        start_date: preset.start_date,
-        end_date:   preset.end_date || undefined,
-        symbols:    "all",
-      });
-      setPending(prev => [...prev.filter(p => p.name !== preset.name), {
-        name:       preset.name,
-        start_date: preset.start_date,
-        end_date:   preset.end_date || new Date().toISOString().slice(0, 10),
-        startedAt:  Date.now(),
-      }]);
-      setMsg(`Simulation "${preset.label}" queued — downloads ~80 symbols then runs the rule engine (~3–10 min). Auto-refreshes every 15 s.`);
+      if (engineMode === "compare") {
+        const nameV1 = `${preset.name}_v1`;
+        const nameV2 = `${preset.name}_v2`;
+        await triggerBacktest({ name: nameV1, start_date: preset.start_date, end_date: preset.end_date || undefined, symbols: "all", engine_version: "v1" });
+        await triggerBacktest({ name: nameV2, start_date: preset.start_date, end_date: preset.end_date || undefined, symbols: "all", engine_version: "v2" });
+        const today = new Date().toISOString().slice(0, 10);
+        setPending(prev => [
+          ...prev.filter(p => p.name !== nameV1 && p.name !== nameV2),
+          { name: nameV1, start_date: preset.start_date, end_date: preset.end_date || today, startedAt: Date.now() },
+          { name: nameV2, start_date: preset.start_date, end_date: preset.end_date || today, startedAt: Date.now() },
+        ]);
+        setMsg(`V1 + V2 simulations for "${preset.label}" queued — each runs the full backtest independently (~3–10 min each). Auto-refreshes every 15 s.`);
+      } else {
+        const isV2 = engineMode === "v2";
+        const name = isV2 ? `${preset.name}_v2` : preset.name;
+        await triggerBacktest({ name, start_date: preset.start_date, end_date: preset.end_date || undefined, symbols: "all", engine_version: isV2 ? "v2" : "v1" });
+        setPending(prev => [...prev.filter(p => p.name !== name), {
+          name,
+          start_date: preset.start_date,
+          end_date: preset.end_date || new Date().toISOString().slice(0, 10),
+          startedAt: Date.now(),
+        }]);
+        const label = isV2 ? `${preset.label} [V2]` : preset.label;
+        setMsg(`Simulation "${label}" queued — downloads ~80 symbols then runs the rule engine (~3–10 min). Auto-refreshes every 15 s.`);
+      }
       setTimeout(() => load(true), 5000);
     } catch (e) {
       setMsg(`Error: ${(e as Error).message}`);
     } finally {
       setLaunching(null);
     }
+  }
+
+  function alreadyRun(p: typeof PRESET_RUNS[0]): boolean {
+    if (engineMode === "compare") {
+      return runs.some(r => r.name === `${p.name}_v1`) && runs.some(r => r.name === `${p.name}_v2`);
+    }
+    if (engineMode === "v2") return runs.some(r => r.name === `${p.name}_v2`);
+    return runs.some(r => r.name === p.name);
   }
 
   return (
@@ -754,9 +851,40 @@ function BacktestResultsTab() {
           </p>
         </div>
 
+        {/* Engine version selector */}
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-slate-500 uppercase tracking-wider">Engine:</span>
+          <div className="flex gap-1">
+            {(["v1", "v2", "compare"] as EngineMode[]).map(mode => (
+              <button
+                key={mode}
+                onClick={() => setEngineMode(mode)}
+                className={clsx(
+                  "px-3 py-1 rounded-lg text-[11px] font-mono font-medium border transition-all",
+                  engineMode === mode
+                    ? mode === "v2"
+                      ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-300"
+                      : mode === "compare"
+                      ? "bg-brand-500/20 border-brand-500/40 text-brand-300"
+                      : "bg-slate-500/20 border-slate-500/40 text-slate-200"
+                    : "border-white/10 text-slate-500 hover:text-slate-300 hover:border-white/20",
+                )}
+              >
+                {ENGINE_LABELS[mode]}
+              </button>
+            ))}
+          </div>
+          {engineMode === "v2" && (
+            <span className="text-[10px] text-emerald-400/70 italic">Adds passive SPY allocation when cash &gt; 25% NAV</span>
+          )}
+          {engineMode === "compare" && (
+            <span className="text-[10px] text-brand-400/70 italic">Launches both V1 and V2 — comparison card appears when both complete</span>
+          )}
+        </div>
+
         <div className="flex flex-wrap gap-2">
           {PRESET_RUNS.map(p => {
-            const alreadyRun = runs.some(r => r.name === p.name);
+            const done = alreadyRun(p);
             return (
               <button
                 key={p.name}
@@ -764,7 +892,7 @@ function BacktestResultsTab() {
                 disabled={!!launching}
                 className={clsx(
                   "flex items-center gap-2 px-4 py-2 text-sm rounded-lg border transition-colors",
-                  alreadyRun
+                  done
                     ? "border-emerald-500/30 text-emerald-400 bg-emerald-500/5"
                     : "border-slate-600 text-slate-300 hover:border-amber-500/50 hover:text-amber-400",
                   launching === p.name && "opacity-60 cursor-not-allowed"
@@ -772,7 +900,7 @@ function BacktestResultsTab() {
               >
                 {launching === p.name
                   ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  : alreadyRun
+                  : done
                   ? <CheckCircle className="w-3.5 h-3.5" />
                   : <Play className="w-3.5 h-3.5" />}
                 {p.label}
@@ -790,6 +918,49 @@ function BacktestResultsTab() {
           </div>
         )}
       </div>
+
+      {/* ── Comparison cards — shown when both V1 and V2 complete for a period ── */}
+      {comparisonPairs.length > 0 && (
+        <div className="space-y-3">
+          {comparisonPairs.map(({ v1: v1r, v2: v2r, label }) => {
+            const retDiff = v2r.total_return != null && v1r.total_return != null
+              ? (v2r.total_return - v1r.total_return) * 100
+              : null;
+            const sharpeV1 = v1r.sharpe_ratio;
+            const sharpeV2 = v2r.sharpe_ratio;
+            return (
+              <div key={`cmp-${label}`} className="glass rounded-2xl p-4 border border-brand-500/20">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-[10px] font-mono text-brand-400 bg-brand-500/10 border border-brand-500/20 rounded px-1.5 py-0.5">V1 vs V2</span>
+                  <span className="text-sm font-semibold text-slate-200">{label} — Engine Comparison</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
+                  {[
+                    { label: "Return V1", val: pct(v1r.total_return ? v1r.total_return * 100 : null), pos: (v1r.total_return ?? 0) >= 0 },
+                    { label: "Return V2", val: pct(v2r.total_return ? v2r.total_return * 100 : null), pos: (v2r.total_return ?? 0) >= 0 },
+                    { label: "Sharpe V1", val: sharpeV1 != null ? sharpeV1.toFixed(2) : "—", pos: (sharpeV1 ?? 0) >= 1 },
+                    { label: "Sharpe V2", val: sharpeV2 != null ? sharpeV2.toFixed(2) : "—", pos: (sharpeV2 ?? 0) >= 1 },
+                  ].map(m => (
+                    <div key={m.label} className="bg-slate-800/50 rounded-lg p-2.5">
+                      <div className="text-[9px] text-slate-500 uppercase tracking-wider mb-1">{m.label}</div>
+                      <div className={clsx("text-base font-bold", m.pos ? "text-emerald-400" : "text-red-400")}>{m.val}</div>
+                    </div>
+                  ))}
+                </div>
+                {retDiff != null && (
+                  <div className="mt-2 text-[11px] text-slate-400">
+                    V2 passive SPY allocation contributed{" "}
+                    <span className={retDiff >= 0 ? "text-emerald-400 font-semibold" : "text-red-400 font-semibold"}>
+                      {retDiff >= 0 ? "+" : ""}{retDiff.toFixed(2)}%
+                    </span>{" "}
+                    additional return vs V1 over this period.
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* ── Results table ── */}
       <div className="glass rounded-2xl overflow-hidden">
@@ -833,7 +1004,7 @@ function BacktestResultsTab() {
             <table className="w-full text-xs font-mono">
               <thead>
                 <tr className="border-b border-white/5 text-slate-500 text-[10px] uppercase tracking-wider">
-                  {["", "Name", "Period", "Return", "Ann.", "Sharpe", "Max DD", "Win Rate", "Trades", "vs SPY"].map(h => (
+                  {["", "Name", "Engine", "Period", "Return", "Ann.", "Sharpe", "Max DD", "Win Rate", "Trades", "vs SPY"].map(h => (
                     <th key={h} className="px-3 py-2.5 text-left font-medium whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -847,6 +1018,7 @@ function BacktestResultsTab() {
                     <tr key={`pending-${p.name}`} className="opacity-60">
                       <td className="px-3 py-2.5"><Clock className="w-3.5 h-3.5 text-amber-400 animate-pulse" /></td>
                       <td className="px-3 py-2.5 font-semibold text-slate-200">{p.name}</td>
+                      <td className="px-3 py-2.5">—</td>
                       <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap">{p.start_date} → {p.end_date}</td>
                       <td colSpan={7} className="px-3 py-2.5 text-slate-500 italic">
                         Running… {elapsedMin}m {elapsedSec}s
@@ -862,6 +1034,7 @@ function BacktestResultsTab() {
                     >
                       <td className="px-3 py-2.5">{RUN_STATUS_ICON[r.status] ?? null}</td>
                       <td className="px-3 py-2.5 font-semibold text-slate-200">{r.name}</td>
+                      <td className="px-3 py-2.5"><EngineBadge version={r.engine_version} /></td>
                       <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap">{r.start_date} → {r.end_date}</td>
                       <td className={clsx("px-3 py-2.5", (r.total_return ?? 0) >= 0 ? "text-emerald-400" : "text-red-400")}>
                         {pct(r.total_return ? r.total_return * 100 : null)}
@@ -887,11 +1060,15 @@ function BacktestResultsTab() {
                     </tr>
                     {expanded === r.id && (
                       <tr key={`${r.id}-detail`}>
-                        <td colSpan={10} className="px-5 py-3 bg-slate-800/40 text-xs text-slate-400 space-y-1">
+                        <td colSpan={11} className="px-5 py-3 bg-slate-800/40 text-xs text-slate-400 space-y-1">
                           <div className="text-amber-400/80 text-[11px] font-medium mb-1">
                             ⚠ Simulation result — rule-based engine only, not the live LLM debate system
                           </div>
+                          <div><strong className="text-slate-300">Engine:</strong> {r.engine_version === "v2" ? "V2 — AEF + Passive SPY" : "V1 — Asymmetric Exit Framework"}</div>
                           <div><strong className="text-slate-300">Final NAV:</strong> ${r.final_nav?.toLocaleString() ?? "—"}</div>
+                          {r.profit_factor != null && (
+                            <div><strong className="text-slate-300">Profit Factor:</strong> {r.profit_factor.toFixed(2)}</div>
+                          )}
                           <div><strong className="text-slate-300">Symbols:</strong> {r.symbol_universe?.slice(0, 12).join(", ")}{(r.symbol_universe?.length ?? 0) > 12 ? ` +${(r.symbol_universe?.length ?? 0) - 12} more` : ""}</div>
                           <div className="text-[10px] text-slate-600">Run ID: {r.id} · {new Date(r.created_at).toLocaleDateString()}</div>
                         </td>
