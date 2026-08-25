@@ -5,12 +5,13 @@ interface StatCardProps {
   label: string;
   value: string;
   sub?: string;
+  sub2?: string;
   trend?: "up" | "down" | "neutral";
   icon?: ReactNode;
   accent?: boolean;
 }
 
-export function StatCard({ label, value, sub, trend, icon, accent }: StatCardProps) {
+export function StatCard({ label, value, sub, sub2, trend, icon, accent }: StatCardProps) {
   return (
     <div className={clsx(
       "glass rounded-2xl p-5 flex flex-col gap-1",
@@ -30,6 +31,11 @@ export function StatCard({ label, value, sub, trend, icon, accent }: StatCardPro
           !trend             && "text-slate-400",
         )}>
           {sub}
+        </span>
+      )}
+      {sub2 && (
+        <span className="text-xs font-mono text-slate-500">
+          {sub2}
         </span>
       )}
     </div>

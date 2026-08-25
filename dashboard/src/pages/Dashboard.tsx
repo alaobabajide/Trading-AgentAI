@@ -161,6 +161,13 @@ export function Dashboard() {
 
   const pnlUp = (p?.daily_pnl ?? 0) >= 0;
 
+  // Sum of unrealized P&L across all currently-open positions (vs entry price).
+  // This will not match daily_pnl because daily_pnl also includes realized P&L
+  // from positions that closed today (stop-losses, take-profits) which no longer
+  // appear in the positions table.
+  const openPnl = (p?.positions ?? []).reduce((sum, pos) => sum + (pos.unrealized_pnl ?? 0), 0);
+  const openPnlUp = openPnl >= 0;
+
   return (
     <div className="space-y-6">
       {/* Stat row */}
@@ -176,7 +183,8 @@ export function Dashboard() {
         <StatCard
           label="Daily P&L"
           value={`${pnlUp ? "+" : ""}$${(p?.daily_pnl ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
-          sub={`${pnlUp ? "+" : ""}${(p?.daily_pnl_pct ?? 0).toFixed(2)}% today`}
+          sub={`${pnlUp ? "+" : ""}${(p?.daily_pnl_pct ?? 0).toFixed(2)}% vs yesterday's close`}
+          sub2={`Open positions: ${openPnlUp ? "+" : ""}$${openPnl.toLocaleString("en-US", { minimumFractionDigits: 2 })} vs entry`}
           trend={pnlUp ? "up" : "down"}
           icon={pnlUp ? <TrendingUp className="w-4 h-4 text-emerald-500" /> : <TrendingDown className="w-4 h-4 text-red-500" />}
         />

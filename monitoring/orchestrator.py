@@ -950,7 +950,7 @@ class Orchestrator:
             nav      = float(acct.equity or 0)
             cash     = float(acct.cash or 0)
             invested = max(nav - cash, 0.0)
-            daily_pnl = float(acct.equity_previous_close or nav) - nav
+            daily_pnl = nav - float(acct.equity_previous_close or nav)
             positions = self._alpaca_client.get_all_positions()
 
             from brain import portfolio_snapshots as _ps
