@@ -4312,22 +4312,30 @@ def get_portfolio_history(period: str = "1D", request: Request = None):
             # Bracket stop-losses often fire at or before the open, so the full
             # daily loss is invisible. Prepend yesterday's close as the first
             # point so the chart always shows the complete day-over-day move.
+            #
+            # We source yesterday's equity from the 1M daily history (a completed
+            # historical bar) rather than acct.last_equity — Alpaca updates
+            # last_equity to the current session's close after market hours, so
+            # it no longer equals the prior day's close by the time users view
+            # the chart.
             if period == "1D":
                 try:
-                    from datetime import timezone, timedelta
-                    acct = hist_broker.get_account()
-                    last_eq = float(acct.last_equity or 0)
-                    if last_eq > 0:
-                        first_dt = datetime.fromisoformat(pts[0]["time"])
-                        prev_day = (first_dt - timedelta(days=1)).date()
+                    from datetime import timezone
+                    today_str = datetime.now(timezone.utc).date().isoformat()
+                    daily_pts = _alpaca_portfolio_history(hist_broker, "1M", "1D")
+                    prev_bars = [p for p in daily_pts if p["time"][:10] < today_str]
+                    if prev_bars:
+                        yesterday_eq = prev_bars[-1]["equity"]
+                        yesterday_date = prev_bars[-1]["time"][:10]
+                        y = datetime.fromisoformat(yesterday_date)
+                        # 20:00 UTC = 4pm ET = NYSE market close
                         prev_close_dt = datetime(
-                            prev_day.year, prev_day.month, prev_day.day,
-                            20, 0, 0, tzinfo=timezone.utc
+                            y.year, y.month, y.day, 20, 0, 0, tzinfo=timezone.utc
                         )
-                        pts = [{"time": prev_close_dt.isoformat(), "equity": last_eq, "pnl": 0.0}] + pts
+                        pts = [{"time": prev_close_dt.isoformat(), "equity": yesterday_eq, "pnl": 0.0}] + pts
                         log.info(
-                            "portfolio/history(1D): prepended yesterday's close %.2f at %s",
-                            last_eq, prev_close_dt.isoformat(),
+                            "portfolio/history(1D): prepended yesterday's close %.2f (1M bar %s)",
+                            yesterday_eq, yesterday_date,
                         )
                 except Exception as _exc:
                     log.warning("portfolio/history(1D): could not prepend yesterday close: %s", _exc)
