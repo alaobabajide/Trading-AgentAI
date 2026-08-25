@@ -233,6 +233,17 @@ class AlpacaBrokerAdapter(BrokerAdapter):
             if last_equity is None:
                 continue
             dt = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+
+            # Daily bars only: Alpaca places some bars at midnight UTC (00:00Z),
+            # which is still the *previous* ET calendar day (ET = UTC-4/5).
+            # Normalize every daily bar to noon UTC of the correct trading date so
+            # the date label is always unambiguous in any viewer timezone.
+            if timeframe == "1D":
+                from datetime import timedelta
+                if dt.hour < 6:          # midnight-to-6am UTC → previous ET day
+                    dt = dt - timedelta(days=1)
+                dt = dt.replace(hour=12, minute=0, second=0, microsecond=0)
+
             pts.append({"time": dt.isoformat(), "equity": last_equity, "pnl": 0.0})
         return pts
 
