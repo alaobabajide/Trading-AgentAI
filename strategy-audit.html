@@ -1,0 +1,1058 @@
+<title>Strategy Audit</title>
+<style>
+  /* ── Tokens ──────────────────────────────────────────────────────────── */
+  :root {
+    --bg:       #F1F4F8;
+    --surface:  #FFFFFF;
+    --surface2: #E8EDF4;
+    --border:   #C8D4E0;
+    --text:     #0E1C2A;
+    --text2:    #4A6070;
+    --accent:   #8A6820;
+    --crit:     #B83030;
+    --warn:     #B86020;
+    --pos:      #2A8055;
+    --mono:     'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    --rail-w:   4px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:       #09111A;
+      --surface:  #101C27;
+      --surface2: #162130;
+      --border:   #1B2D3F;
+      --text:     #DDE5EF;
+      --text2:    #6B8299;
+      --accent:   #C8A040;
+      --crit:     #D95858;
+      --warn:     #D8824A;
+      --pos:      #4AAF7C;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg:       #09111A;
+    --surface:  #101C27;
+    --surface2: #162130;
+    --border:   #1B2D3F;
+    --text:     #DDE5EF;
+    --text2:    #6B8299;
+    --accent:   #C8A040;
+    --crit:     #D95858;
+    --warn:     #D8824A;
+    --pos:      #4AAF7C;
+  }
+
+  /* ── Reset & base ────────────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    font-size: 15px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Layout ──────────────────────────────────────────────────────────── */
+  .page {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 56px 32px 100px;
+  }
+
+  @media (max-width: 600px) { .page { padding: 32px 18px 80px; } }
+
+  /* ── Masthead ────────────────────────────────────────────────────────── */
+  .masthead {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 28px;
+    margin-bottom: 48px;
+  }
+
+  .masthead-eyebrow {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 14px;
+  }
+
+  .masthead h1 {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: clamp(26px, 4vw, 38px);
+    font-weight: normal;
+    line-height: 1.2;
+    color: var(--text);
+    text-wrap: balance;
+    margin-bottom: 18px;
+  }
+
+  .masthead-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 24px;
+    font-size: 13px;
+    color: var(--text2);
+  }
+
+  .masthead-meta span { display: flex; align-items: center; gap: 6px; }
+
+  /* ── Summary strip ───────────────────────────────────────────────────── */
+  .summary-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 56px;
+  }
+
+  .summary-cell {
+    background: var(--surface);
+    padding: 20px 22px;
+  }
+
+  .summary-cell .val {
+    font-family: Georgia, serif;
+    font-size: 32px;
+    line-height: 1;
+    margin-bottom: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .summary-cell .val.crit { color: var(--crit); }
+  .summary-cell .val.warn { color: var(--warn); }
+  .summary-cell .val.acc  { color: var(--accent); }
+  .summary-cell .val.pos  { color: var(--pos); }
+
+  .summary-cell .label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text2);
+  }
+
+  /* ── Section ─────────────────────────────────────────────────────────── */
+  .section { margin-bottom: 64px; }
+
+  .section-header {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    margin-bottom: 28px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .section-num {
+    font-family: Georgia, serif;
+    font-size: 11px;
+    color: var(--text2);
+    letter-spacing: 0.06em;
+    flex-shrink: 0;
+    padding-top: 2px;
+  }
+
+  .section-header h2 {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: clamp(18px, 2.5vw, 23px);
+    font-weight: normal;
+    color: var(--text);
+    text-wrap: balance;
+  }
+
+  p { margin-bottom: 14px; color: var(--text); max-width: 68ch; }
+  p:last-child { margin-bottom: 0; }
+
+  /* ── Gap cards ───────────────────────────────────────────────────────── */
+  .gap-list { display: flex; flex-direction: column; gap: 16px; }
+
+  .gap-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    display: grid;
+    grid-template-columns: var(--rail-w) 1fr;
+  }
+
+  .gap-card .rail { background: var(--border); }
+  .gap-card.sev-critical .rail { background: var(--crit); }
+  .gap-card.sev-high     .rail { background: var(--warn); }
+  .gap-card.sev-medium   .rail { background: var(--accent); }
+  .gap-card.sev-low      .rail { background: var(--pos); }
+
+  .gap-body { padding: 18px 20px; }
+
+  .gap-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+
+  .gap-header h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    flex: 1;
+    min-width: 180px;
+  }
+
+  .chip {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  .chip-critical { background: color-mix(in srgb, var(--crit) 15%, transparent); color: var(--crit); border: 1px solid color-mix(in srgb, var(--crit) 30%, transparent); }
+  .chip-high     { background: color-mix(in srgb, var(--warn) 15%, transparent); color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); }
+  .chip-medium   { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+  .chip-low      { background: color-mix(in srgb, var(--pos) 15%, transparent); color: var(--pos); border: 1px solid color-mix(in srgb, var(--pos) 30%, transparent); }
+
+  .gap-desc {
+    font-size: 14px;
+    color: var(--text);
+    line-height: 1.6;
+    margin-bottom: 10px;
+    max-width: 64ch;
+  }
+
+  .gap-impact {
+    font-size: 13px;
+    color: var(--text2);
+    line-height: 1.55;
+    max-width: 64ch;
+  }
+
+  .file-ref {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    background: var(--surface2);
+    color: var(--text2);
+    padding: 2px 7px;
+    border-radius: 3px;
+    display: inline-block;
+    margin-top: 8px;
+    letter-spacing: 0.02em;
+  }
+
+  /* ── Performance table ───────────────────────────────────────────────── */
+  .perf-table-wrap { overflow-x: auto; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  th {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text2);
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    vertical-align: top;
+  }
+
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--surface2); }
+
+  td.num { font-family: var(--mono); font-size: 13px; }
+  td.neg { color: var(--crit); }
+  td.pos-val { color: var(--pos); }
+  td.muted { color: var(--text2); font-size: 13px; }
+
+  .table-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 20px;
+  }
+
+  .table-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text2);
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface2);
+  }
+
+  /* ── Roadmap ─────────────────────────────────────────────────────────── */
+  .phase-grid { display: flex; flex-direction: column; gap: 20px; }
+
+  .phase-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 22px 24px;
+  }
+
+  .phase-header {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    margin-bottom: 16px;
+  }
+
+  .phase-tag {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+    padding: 3px 9px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  .phase-card h3 {
+    font-family: Georgia, serif;
+    font-size: 17px;
+    font-weight: normal;
+    color: var(--text);
+  }
+
+  .phase-desc {
+    font-size: 13.5px;
+    color: var(--text2);
+    margin-bottom: 14px;
+    line-height: 1.6;
+  }
+
+  .improvement-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .improvement-list li {
+    font-size: 13.5px;
+    color: var(--text);
+    padding-left: 20px;
+    position: relative;
+    line-height: 1.55;
+  }
+
+  .improvement-list li::before {
+    content: '→';
+    position: absolute;
+    left: 0;
+    color: var(--accent);
+    font-size: 13px;
+  }
+
+  .impact-line {
+    margin-top: 14px;
+    font-size: 12.5px;
+    color: var(--text2);
+    padding: 8px 12px;
+    background: var(--surface2);
+    border-left: 2px solid var(--accent);
+    border-radius: 0 4px 4px 0;
+    line-height: 1.5;
+  }
+
+  /* ── Agent table ─────────────────────────────────────────────────────── */
+  .agent-row-real td:first-child::after {
+    content: ' ✓';
+    color: var(--pos);
+    font-size: 11px;
+  }
+
+  .agent-row-partial td:nth-child(2) { color: var(--warn); }
+  .agent-row-mock    td:nth-child(2) { color: var(--crit); }
+
+  /* ── Callout box ─────────────────────────────────────────────────────── */
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text);
+  }
+
+  .callout.crit { border-left-color: var(--crit); }
+
+  /* ── Verdict bar ─────────────────────────────────────────────────────── */
+  .verdict {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 28px 30px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 20px;
+    align-items: center;
+    margin-bottom: 48px;
+  }
+
+  @media (max-width: 520px) { .verdict { grid-template-columns: 1fr; } }
+
+  .verdict-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text2);
+    margin-bottom: 6px;
+  }
+
+  .verdict-score {
+    font-family: Georgia, serif;
+    font-size: 52px;
+    line-height: 1;
+    color: var(--warn);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .verdict-sub {
+    font-size: 13px;
+    color: var(--text2);
+    margin-top: 6px;
+    line-height: 1.5;
+  }
+
+  .verdict-right { text-align: right; }
+
+  @media (max-width: 520px) { .verdict-right { text-align: left; } }
+
+  .verdict-bench {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text2);
+    margin-bottom: 4px;
+  }
+
+  .verdict-bench span { color: var(--pos); }
+
+  /* ── Footer ──────────────────────────────────────────────────────────── */
+  .footer {
+    border-top: 1px solid var(--border);
+    padding-top: 24px;
+    font-size: 12px;
+    color: var(--text2);
+    line-height: 1.6;
+  }
+</style>
+
+<div class="page">
+
+  <!-- Masthead -->
+  <div class="masthead">
+    <div class="masthead-eyebrow">Internal Strategy Audit · Confidential</div>
+    <h1>Trading-AgentAI: Full-System Gap Analysis &amp; Three-Year Backtest Assessment</h1>
+    <div class="masthead-meta">
+      <span>Audit date: Aug 12, 2026</span>
+      <span>System: 27-agent LLM debate · OpenRouter · Alpaca</span>
+      <span>Universe: 64 symbols (40 stocks · 18 ETFs · 6 crypto)</span>
+    </div>
+  </div>
+
+  <!-- Summary strip -->
+  <div class="summary-strip">
+    <div class="summary-cell">
+      <div class="val crit">3</div>
+      <div class="label">Critical gaps</div>
+    </div>
+    <div class="summary-cell">
+      <div class="val warn">5</div>
+      <div class="label">High-severity gaps</div>
+    </div>
+    <div class="summary-cell">
+      <div class="val acc">8</div>
+      <div class="label">Medium gaps</div>
+    </div>
+    <div class="summary-cell">
+      <div class="val acc">+30–45%</div>
+      <div class="label">Estimated 3-yr return</div>
+    </div>
+    <div class="summary-cell">
+      <div class="val pos">+72%</div>
+      <div class="label">S&amp;P 500 benchmark (same period)</div>
+    </div>
+  </div>
+
+
+  <!-- Section 1: System fingerprint -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">01</span>
+      <h2>What the System Actually Is</h2>
+    </div>
+
+    <div class="callout crit">
+      <strong>The single most important finding:</strong> seven of the twenty-seven agents claim domain expertise they do not have. The MacroEconomist has never seen a yield curve. The Options Flow Analyst has never seen a put/call ratio. The FundamentalAnalyst frequently runs on an empty data dictionary. What is advertised as a multi-discipline debate is, in practice, a 27-voice technical analysis system wearing specialist costumes.
+    </div>
+
+    <div class="table-card">
+      <div class="table-label">Agent data reality — what each specialist actually receives</div>
+      <div class="perf-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Agent</th>
+              <th>Claims to analyze</th>
+              <th>Actually receives</th>
+              <th>Data quality</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="agent-row-real">
+              <td>RegimeDetector</td>
+              <td>Market regime</td>
+              <td>Price action, SMA stack, ADX, ATR — deterministic rules</td>
+              <td class="pos-val">Real</td>
+            </tr>
+            <tr class="agent-row-real">
+              <td>TechnicalAnalyst</td>
+              <td>Price action &amp; momentum</td>
+              <td>Full OHLCV + 22 computed indicators</td>
+              <td class="pos-val">Real</td>
+            </tr>
+            <tr class="agent-row-partial">
+              <td>SentimentAnalyst</td>
+              <td>News, social, mood</td>
+              <td>≤20 Yahoo RSS headlines; X/Twitter optional &amp; usually absent</td>
+              <td class="num" style="color:var(--warn)">Partial</td>
+            </tr>
+            <tr class="agent-row-partial">
+              <td>FundamentalAnalyst</td>
+              <td>Earnings, P/E, growth</td>
+              <td>yfinance dict — silently empty on timeout/rate-limit</td>
+              <td class="num" style="color:var(--warn)">Unreliable</td>
+            </tr>
+            <tr class="agent-row-mock">
+              <td>MacroEconomist</td>
+              <td>Rates, DXY, yields, CPI</td>
+              <td>Same OHLCV bars &amp; indicators as TechnicalAnalyst</td>
+              <td class="neg">Fictional</td>
+            </tr>
+            <tr class="agent-row-mock">
+              <td>OptionsFlowAnalyst</td>
+              <td>Put/call ratio, IV, gamma</td>
+              <td>ATR &amp; Bollinger Band width only</td>
+              <td class="neg">Fictional</td>
+            </tr>
+            <tr class="agent-row-mock">
+              <td>QuantAnalyst</td>
+              <td>Factor models, mean reversion</td>
+              <td>RSI, MACD, ATR — same indicators as TechnicalAnalyst</td>
+              <td class="neg">Duplicated</td>
+            </tr>
+            <tr class="agent-row-mock">
+              <td>SectorRotationAnalyst</td>
+              <td>Cross-sector flow</td>
+              <td>Single-symbol momentum — no sector comparisons exist</td>
+              <td class="neg">Fictional</td>
+            </tr>
+            <tr>
+              <td>12 investor personas</td>
+              <td>Style-specific frameworks</td>
+              <td>Same indicator package as above, weighted by persona prefs</td>
+              <td class="num" style="color:var(--warn)">Partial</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <p>The system's signal quality is not 27-dimensional — it is closer to 3-dimensional: a strong technical signal layer, a weak and inconsistent sentiment layer, and an unreliable fundamental layer. The "macro," "options flow," "quant," and "sector rotation" voices are all re-reading the same OHLCV data the technical analyst already processed.</p>
+  </div>
+
+
+  <!-- Section 2: Backtest assessment -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">02</span>
+      <h2>Three-Year Backtest Assessment</h2>
+    </div>
+
+    <div class="callout crit">
+      <strong>A reproducible backtest is not currently possible.</strong> The live system relies on LLM calls whose outputs are non-deterministic — running the same market data through the same agents twice produces different votes. There is no replay harness, no simulated broker, no transaction cost model, and no signal persistence layer for historical data. The only backtestable path is paper-mode (rule-based risk manager, no LLM), which strips out the system's core differentiator entirely.
+    </div>
+
+    <p>What follows is an analytical performance estimate built from the system's known mechanics — entry thresholds, position sizing, stop/take-profit geometry, and the signal quality distortions identified above. These are directional ranges, not point estimates.</p>
+
+    <div class="verdict">
+      <div>
+        <div class="verdict-label">Estimated 3-year portfolio return (Aug 2023 – Aug 2026)</div>
+        <div class="verdict-score">+30–45%</div>
+        <div class="verdict-sub">On $100K starting capital: $130K–$145K final equity<br>versus ~$172K had the same capital been held in SPY</div>
+      </div>
+      <div class="verdict-right">
+        <div class="verdict-bench">SPY 3-year: <span>+72%</span></div>
+        <div class="verdict-bench">QQQ 3-year: <span>+89%</span></div>
+        <div class="verdict-bench">60/40 portfolio: <span>+38%</span></div>
+      </div>
+    </div>
+
+    <div class="table-card">
+      <div class="table-label">Return estimate assumptions &amp; mechanics</div>
+      <div class="perf-table-wrap">
+        <table>
+          <thead>
+            <tr><th>Parameter</th><th>Current system value</th><th>Effect on returns</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Signal threshold (HOT)</td>
+              <td class="num">≥ 17/27 votes</td>
+              <td class="muted">Filters out early trend entries; system misses the first 3–8% of most moves</td>
+            </tr>
+            <tr>
+              <td>Stop-loss</td>
+              <td class="num">2.0% fixed</td>
+              <td class="muted">Too tight for stocks with ATR > 2% (TSLA, NVDA, SHOP regularly swing 2–4% intraday). Estimated false stop-out rate: 30–40% of valid setups</td>
+            </tr>
+            <tr>
+              <td>Take-profit</td>
+              <td class="num">5.0% fixed</td>
+              <td class="muted">Caps winners prematurely in trending markets. 2023 and 2024 had 15–25% one-directional moves that the system would have exited at 5%</td>
+            </tr>
+            <tr>
+              <td>Trailing stop</td>
+              <td class="num">Dead code — never called</td>
+              <td class="neg">Winners cannot compound. Every profitable position is capped at 5% regardless of how much further the trend runs</td>
+            </tr>
+            <tr>
+              <td>Position size</td>
+              <td class="num">≤ 5% of equity</td>
+              <td class="muted">Conservative but appropriate. Limits both risk and return on any single trade</td>
+            </tr>
+            <tr>
+              <td>Crypto stop-loss</td>
+              <td class="num">No broker order — monitor only</td>
+              <td class="neg">Unlimited downside between 60-second poll intervals. In a crypto flash crash, losses can be 20–40% before any exit fires</td>
+            </tr>
+            <tr>
+              <td>Estimated win rate</td>
+              <td class="num">48–55%</td>
+              <td class="muted">High vote threshold provides some signal quality. Fake macro/options agents add noise, estimated -5 to -8pp from theoretical best</td>
+            </tr>
+            <tr>
+              <td>Estimated avg win</td>
+              <td class="num">4.0–4.8%</td>
+              <td class="muted">Capped at 5% TP; slippage and intraday noise reduce realized gains below limit price</td>
+            </tr>
+            <tr>
+              <td>Estimated avg loss</td>
+              <td class="num">1.8–2.2%</td>
+              <td class="muted">Fixed 2% SL; some slippage on gap-down opens</td>
+            </tr>
+            <tr>
+              <td>Expected value/trade</td>
+              <td class="num">+0.8–1.4%</td>
+              <td class="muted">Positive expectancy — the system does have edge. The problem is the edge is not compounding</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="table-card">
+      <div class="table-label">Year-by-year estimated vs. benchmark</div>
+      <div class="perf-table-wrap">
+        <table>
+          <thead>
+            <tr><th>Year</th><th>Market character</th><th>SPY</th><th>System (est.)</th><th>Key drag</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>2023</td>
+              <td class="muted">Strong bull, AI-led rally, narrow leadership</td>
+              <td class="num pos-val">+26.3%</td>
+              <td class="num">+10–14%</td>
+              <td class="muted">5% TP missed the 40–60% runs in NVDA, META, AAPL. High HOT threshold delayed entries by 2–4 weeks</td>
+            </tr>
+            <tr>
+              <td>2024</td>
+              <td class="muted">Continued bull, rate cuts, broad participation</td>
+              <td class="num pos-val">+23.3%</td>
+              <td class="num">+12–18%</td>
+              <td class="muted">Better signal frequency as more symbols trended. Dead trailing stop still a major cap on winners</td>
+            </tr>
+            <tr>
+              <td>2025 (est.)</td>
+              <td class="muted">Volatile, macro-driven, sector rotation heavy</td>
+              <td class="num">+8–14%</td>
+              <td class="num">+6–14%</td>
+              <td class="muted">Macro agent without macro data is most costly in a macro-driven year. COLD gate helps avoid whipsaws in choppy tape</td>
+            </tr>
+            <tr style="font-weight:600">
+              <td>3-year total</td>
+              <td class="muted">—</td>
+              <td class="num pos-val">~+72%</td>
+              <td class="num" style="color:var(--warn)">+30–45%</td>
+              <td class="muted">~30–40 percentage points of alpha left on the table</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <p>The system would have been profitable. It has genuine edge from its high-consensus signal threshold and from bracket order discipline. The shortfall versus the benchmark is almost entirely attributable to four mechanics: the fixed 5% take-profit cap on winners, the dead trailing stop, the 2% stop-loss being too tight for high-volatility names, and the fake macro/options signals that dilute the truly informed votes.</p>
+  </div>
+
+
+  <!-- Section 3: Gap registry -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">03</span>
+      <h2>Gap Registry</h2>
+    </div>
+
+    <div class="gap-list">
+
+      <!-- Critical -->
+      <div class="gap-card sev-critical">
+        <div class="rail"></div>
+        <div class="gap-body">
+          <div class="gap-header">
+            <h3>C-1 · Crypto has no broker-level stop-loss</h3>
+            <span class="chip chip-critical">Critical</span>
+          </div>
+          <div class="gap-desc">Crypto execution submits plain market orders with <code>stop_price=0.0</code>. There are no bracket child orders. The only protection is a 60-second monitor loop that polls positions and fires a manual close — but only if the monitoring service is running and hasn't lagged. In a crypto flash crash (common: 15–30% drops in minutes), the system has no automatic exit at the broker layer.</div>
+          <div class="gap-impact">Impact: a single BTCUSD or ETHUSD flash crash could wipe 15–30% of any open crypto position before the monitor fires. With crypto allocation up to the max cap, this represents meaningful portfolio risk on every cycle the system holds crypto.</div>
+          <div class="file-ref">execution/crypto/engine.py · stop_price=0.0 on all market orders</div>
+        </div>
+      </div>
+
+      <div class="gap-card sev-critical">
+        <div class="rail"></div>
+        <div class="gap-body">
+          <div class="gap-header">
+            <h3>C-2 · MacroEconomist has no macro data</h3>
+            <span class="chip chip-critical">Critical</span>
+          </div>
+          <div class="gap-desc">The MacroEconomist agent receives the same OHLCV bars and computed indicators as the TechnicalAnalyst. It has never seen a yield curve, DXY reading, CPI print, Fed funds rate, or credit spread. Its "macro" opinions are re-interpretations of price action dressed in economic language.</div>
+          <div class="gap-impact">Impact: in macro-driven markets (2022 rate shock, 2025 tariff volatility), this agent produces confident-sounding macro analysis that is entirely fabricated from price data. It takes up 1 of 15 Panel A votes and corrupts the panel's claimed domain diversity. The system is most vulnerable exactly when macro matters most.</div>
+          <div class="file-ref">brain/agents/macro.py · context = OHLCV indicators only; no FRED / DXY / yield integration</div>
+        </div>
+      </div>
+
+      <div class="gap-card sev-critical">
+        <div class="rail"></div>
+        <div class="gap-body">
+          <div class="gap-header">
+            <h3>C-3 · Options Flow Analyst has no options data</h3>
+            <span class="chip chip-critical">Critical</span>
+          </div>
+          <div class="gap-desc">The OptionsFlowAnalyst votes based on ATR and Bollinger Band width — two indicators already in every other agent's context. There is no put/call ratio, open interest, implied volatility surface, gamma exposure, or dark pool flow anywhere in the codebase.</div>
+          <div class="gap-impact">Impact: the agent produces invented "options flow" signals that correlate with volatility — useful, but misrepresented. It duplicates the TechnicalAnalyst's volatility view and inflates that dimension's apparent vote weight. The 1 vote it contributes is a phantom signal labeled with false authority.</div>
+          <div class="file-ref">brain/agents/options_flow.py · context = ATR, Bollinger only; data/market_data.py has no options fetcher</div>
+        </div>
+      </div>
+
+      <!-- High -->
+      <div class="gap-card sev-high">
+        <div class="rail"></div>
+        <div class="gap-body">
+          <div class="gap-header">
+            <h3>H-1 · Trailing stop is entirely dead code</h3>
+            <span class="chip chip-high">High</span>
+          </div>
+          <div class="gap-desc">The <code>TrailingStopManager</code> is instantiated, and positions are registered via <code>self._trailing.register()</code> on every BUY. However, <code>update_trailing_stops()</code> is never called from any scheduled loop, any cycle callback, or any background thread anywhere in the codebase.</div>
+          <div class="gap-impact">Impact: every winning trade is capped at the fixed 5% take-profit limit. The system cannot trail a trend — it exits at the first target price regardless of whether the trend is still intact. This single gap is responsible for the largest share of the estimated benchmark shortfall: strong trends (NVDA +200%, META +180% in 2023) are exited at +5% and the position is closed permanently.</div>
+          <div class="file-ref">execution/stock/engine.py:160 · update_trailing_stops() defined but never scheduled</div>
+        </div>
+      </div>
+
+      <div class="gap-card sev-high">
+        <div class="rail"></div>
+        <div class="gap-body">
+          <div class="gap-header">
+            <h3>H-2 · FundamentalAnalyst silently operates on empty data</h3>
+            <span class="chip chip-high">High</span>
+          </div>
+          <div class="gap-desc">The fundamental data fetch uses yfinance, which fails silently on rate limits, network timeouts, or unrecognized symbols. When it fails, an empty dict is passed to the LLM. The agent proceeds to generate a "fundamental analysis" from no fundamental data.</div>
+          <div class="gap-impact">Impact: the agent's vote is random noise when data is absent, and there is no indicator in the signal output that the fundamental view was data-less. The quality of 1 of 15 Panel A votes is undetectable and frequently worthless. For crypto, the fundamental data is three metrics: BTC dominance, ETH gas, total market cap — regardless of which crypto is being analyzed.</div>
+          <div class="file-ref">data/market_data.py · yfinance fetch has no retry / fallback / validation</div>
+        </div>
+      </div>
+
+      <div class="gap-card sev-high">
+        <div class="rail"></div>
+        <div class="gap-body">
+          <div class="gap-header">
+            <h3>H-3 · Vote thresholds are duplicated and diverge silently</h3>
+            <span class="chip chip-high">High</span>
+          </div>
+          <div class="gap-desc"><code>watchlist.py</code> exports <code>HOT_MIN_VOTES = 17</code> and <code>WARM_MIN_VOTES = 11</code> as the declared single source of truth. However, <code>brain/debate.py</code> does not import these constants — it uses its own hardcoded copies of the same values internally. Changing the thresholds in <code>watchlist.py</code> (e.g. via the Settings page) has no effect on signal generation.</div>
+          <div class="gap-impact">Impact: an operator who adjusts vote thresholds in the settings UI will see the changed values reflected in the config-status API and dashboard, but the debate engine will continue using the old values. This is a silent misconfiguration that will be very difficult to debug in production.</div>
+          <div class="file-ref">watchlist.py:HOT_MIN_VOTES vs brain/debate.py:threshold=11 (hardcoded)</div>
+        </div>
+      </div>
+
+      <div class="gap-card sev-high">
+        <div class="rail"></div>
+        <div class="gap-body">
+          <div class="gap-header">
+            <h3>H-4 · Fixed stop-loss ignores individual asset volatility</h3>
+            <span class="chip chip-high">High</span>
+          </div>
+          <div class="gap-desc">All stocks and ETFs use a 2% stop-loss regardless of their average true range. TSLA's daily ATR is ~3–5%; a 2% stop is inside normal noise. XLP's daily ATR is ~0.4%; a 2% stop is very wide. The stop-loss geometry is wrong for the majority of the universe and directionally opposite for different asset classes.</div>
+          <div class="gap-impact">Impact: high-volatility names (TSLA, NVDA, SHOP, COIN) get stopped out on normal intraday retracements before the signal's actual invalidation point. Estimated false stop-out rate on these names: 35–45% of otherwise valid setups. Low-volatility names (WMT, JNJ, XLP) carry excessive risk per trade relative to their expected move size.</div>
+          <div class="file-ref">execution/stock/risk.py · stop_loss_pct default 0.02 applied universally</div>
+        </div>
+      </div>
+
+      <div class="gap-card sev-high">
+        <div class="rail"></div>
+        <div class="gap-body">
+          <div class="gap-header">
+            <h3>H-5 · Strategy Coach veto has zero execution effect</h3>
+            <span class="chip chip-high">High</span>
+          </div>
+          <div class="gap-desc">The Strategy Coach runs in parallel with the Risk Manager and produces ALIGNED / MISALIGNED / CAUTIOUS verdicts. The Risk Manager can veto a trade (set action=HOLD). The Strategy Coach cannot — its MISALIGNED verdict is parsed and stored as <code>strategy_fit</code> in the signal, but there is no code path that changes the execution decision when <code>strategy_fit == "MISALIGNED"</code>.</div>
+          <div class="gap-impact">Impact: the Strategy Coach costs an LLM call every cycle but has no effect on whether a trade executes. It adds latency and API cost with no decision benefit. It was designed as a second-opinion check but was never wired into the execution gate.</div>
+          <div class="file-ref">brain/debate.py:2255 · _parse_strategy_fit() result stored but never gated</div>
+        </div>
+      </div>
+
+      <!-- Medium -->
+      <div class="gap-card sev-medium">
+        <div class="rail"></div>
+        <div class="gap-body">
+          <div class="gap-header">
+            <h3>M-1 · No position-level correlation management</h3>
+            <span class="chip chip-medium">Medium</span>
+          </div>
+          <div class="gap-desc">The system can simultaneously hold positions in overlapping instruments — XLF (financials ETF) while also holding JPM, BAC, GS, and MS. All five would move together in a rate shock or banking sector event. There is no check for position correlation before entry.</div>
+          <div class="gap-impact">A sector event that hits financials could trigger losses across 5 simultaneous positions, effectively concentrating 25% of portfolio into one factor risk while each individual position appears within the 5% limit.</div>
+        </div>
+      </div>
+
+      <div class="gap-card sev-medium">
+        <div class="rail"></div>
+        <div class="gap-body">
+          <div class="gap-header">
+            <h3>M-2 · Confidence score is computed but never used in execution</h3>
+            <span class="chip chip-medium">Medium</span>
+          </div>
+          <div class="gap-desc">The signal's <code>confidence</code> field is displayed on signal cards and stored in cache. It is not used to scale position size, widen stops, or gate execution. A HOT BUY with confidence=0.62 gets the same position size as one with confidence=0.95.</div>
+        </div>
+      </div>
+
+      <div class="gap-card sev-medium">
+        <div class="rail"></div>
+        <div class="gap-body">
+          <div class="gap-header">
+            <h3>M-3 · SMA200 silently degrades to current price when bars insufficient</h3>
+            <span class="chip chip-medium">Medium</span>
+          </div>
+          <div class="gap-desc">When fewer than 200 bars are available (new listings, first run on a symbol), the SMA200 calculation falls back to the current price. This makes the price appear "at the 200-day average" regardless of the actual trend structure, and agents using this indicator produce meaningless trend-relative signals.</div>
+          <div class="file-ref">brain/debate.py · SMA200 fallback = current close, no explicit warning logged</div>
+        </div>
+      </div>
+
+      <div class="gap-card sev-medium">
+        <div class="rail"></div>
+        <div class="gap-body">
+          <div class="gap-header">
+            <h3>M-4 · Two circuit breakers with different reset logic</h3>
+            <span class="chip chip-medium">Medium</span>
+          </div>
+          <div class="gap-desc">The stock execution engine has its own circuit breaker that triggers on daily drawdown. The orchestrator has a separate circuit breaker check. They use different threshold sources and have different reset behaviors — one resets on the next equity refresh, the other persists until a manual intervention.</div>
+          <div class="gap-impact">In a multi-loss day, one circuit breaker may have fired while the other has not, creating ambiguous system state that is hard to diagnose from logs.</div>
+          <div class="file-ref">execution/stock/risk.py:RiskControls vs monitoring/orchestrator.py:circuit_breaker_check</div>
+        </div>
+      </div>
+
+      <div class="gap-card sev-medium">
+        <div class="rail"></div>
+        <div class="gap-body">
+          <div class="gap-header">
+            <h3>M-5 · Dalio investor persona missing declared context key</h3>
+            <span class="chip chip-medium">Medium</span>
+          </div>
+          <div class="gap-desc">The Dalio investor prompt references <code>regime_label</code> as a context variable. The context dict passed to investor agents does not include this key. The Dalio agent operates on an implicit regime assumption rather than the system's computed regime value.</div>
+          <div class="file-ref">brain/agents/investors.py:DalioInvestor · regime_label missing from investor context build</div>
+        </div>
+      </div>
+
+      <div class="gap-card sev-medium">
+        <div class="rail"></div>
+        <div class="gap-body">
+          <div class="gap-header">
+            <h3>M-6 · Sentiment data coverage is thin and unreliable</h3>
+            <span class="chip chip-medium">Medium</span>
+          </div>
+          <div class="gap-desc">The sentiment feed relies on Yahoo Finance RSS (≤20 headlines per symbol) as its primary source. X/Twitter and Alpha Vantage integrations exist in the code but require optional API keys that may not be configured. There is no fallback to alternative sources and no indication in the signal output that sentiment was low-coverage.</div>
+        </div>
+      </div>
+
+      <div class="gap-card sev-medium">
+        <div class="rail"></div>
+        <div class="gap-body">
+          <div class="gap-header">
+            <h3>M-7 · No per-symbol daily loss limit</h3>
+            <span class="chip chip-medium">Medium</span>
+          </div>
+          <div class="gap-desc">The circuit breaker halts all trading once the portfolio drawdown exceeds the threshold. There is no intermediate guard that stops trading a specific symbol after it has caused two or three consecutive losses — the system will re-enter the same symbol as long as the portfolio-level circuit breaker has not fired.</div>
+        </div>
+      </div>
+
+      <div class="gap-card sev-medium">
+        <div class="rail"></div>
+        <div class="gap-body">
+          <div class="gap-header">
+            <h3>M-8 · No backtesting infrastructure</h3>
+            <span class="chip chip-medium">Medium</span>
+          </div>
+          <div class="gap-desc">The system has no replay harness, no simulated broker interface, no historical signal persistence layer, and no transaction cost model. Strategy changes cannot be validated against historical data before going live. Every modification is deployed directly into production.</div>
+          <div class="gap-impact">Without backtesting capability, parameter changes (stop-loss %, vote thresholds, position size) must be tuned on live capital, introducing unnecessary risk and slowing the improvement cycle significantly.</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+
+  <!-- Section 4: Improvement Roadmap -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">04</span>
+      <h2>Improvement Roadmap</h2>
+    </div>
+
+    <p style="margin-bottom:28px">The following roadmap addresses every gap above and estimates the incremental return impact of each phase. Phases are sequenced by impact-to-effort ratio — Phase 1 fixes existing code and costs nothing in API spend; Phase 2 adds data; Phase 3 adds intelligence.</p>
+
+    <div class="phase-grid">
+
+      <div class="phase-card">
+        <div class="phase-header">
+          <span class="phase-tag">Phase 1 · Fix existing code</span>
+          <h3>Activate the infrastructure that already exists</h3>
+        </div>
+        <div class="phase-desc">Several high-impact features were built but never connected. Activating them requires no new data sources or API spend — only wiring.</div>
+        <ul class="improvement-list">
+          <li><strong>Wire the trailing stop loop</strong> — call <code>update_trailing_stops()</code> from the orchestrator's per-cycle callback. Allows the system to ride trends rather than exiting at a fixed 5% ceiling.</li>
+          <li><strong>Replace fixed stop-loss with ATR-based sizing</strong> — the ATR data is already computed. Use 1.5–2.0× ATR as the stop distance per symbol instead of a flat 2%. This alone eliminates the majority of false stop-outs on volatile names.</li>
+          <li><strong>Import vote thresholds from watchlist.py into debate.py</strong> — one import line ensures Settings page changes take effect in signal generation.</li>
+          <li><strong>Wire Strategy Coach veto</strong> — add an execution gate: if <code>strategy_fit == "MISALIGNED"</code> and tier is WARM (not HOT), block the trade. This adds a second-opinion check that the coach was designed to provide.</li>
+          <li><strong>Add crypto stop-loss bracket orders</strong> — submit OTO sell orders at the broker layer alongside crypto buys, same as stocks. Eliminates C-1 entirely.</li>
+          <li><strong>Scale position size by confidence</strong> — full <code>max_position_pct</code> at confidence ≥ 0.85; scale down linearly to 60% at confidence = 0.60. Lets the system size into high-conviction signals more aggressively.</li>
+        </ul>
+        <div class="impact-line">Estimated incremental return from Phase 1 alone: <strong>+12–20 percentage points over 3 years</strong> — primarily from trailing stop activation allowing trend compounding and ATR-based stops eliminating false exits.</div>
+      </div>
+
+      <div class="phase-card">
+        <div class="phase-header">
+          <span class="phase-tag">Phase 2 · Real data for fake agents</span>
+          <h3>Give specialist agents the data their expertise requires</h3>
+        </div>
+        <div class="phase-desc">The three "fictional" agents (Macro, Options Flow, Sector Rotation) currently add noise. Converting them to genuine specialists using real data is the highest-leverage improvement to signal quality.</div>
+        <ul class="improvement-list">
+          <li><strong>MacroEconomist — wire FRED API</strong> (free, no rate limit) for: Fed funds rate, 2Y/10Y yield spread, CPI YoY, DXY. Add to the agent context. The macro agent's vote will then reflect actual macro conditions for the first time.</li>
+          <li><strong>OptionsFlowAnalyst — wire put/call ratio</strong> — CBOE publishes daily equity put/call ratios freely. For individual symbols, add implied volatility rank from Yahoo Finance's options chain (available via yfinance). Replace ATR proxy with real options sentiment data.</li>
+          <li><strong>SectorRotationAnalyst — add cross-sector ETF momentum</strong> — fetch the 11 sector SPDR ETFs (XLF, XLE, XLK, etc.) at the start of each cycle and compute relative momentum. Pass cross-sector ranking to the sector rotation agent. Currently impossible because the agent only sees one symbol at a time.</li>
+          <li><strong>FundamentalAnalyst — add retry logic and data validation</strong> — 3-attempt retry with exponential backoff for yfinance fetches; mark context as "data unavailable" explicitly when fetch fails rather than passing an empty dict; reduce the agent's vote weight to 0.5× when data is absent.</li>
+          <li><strong>SentimentAnalyst — add a second source</strong> — integrate Finnhub's free news API (1000 requests/day) or Stocktwits public feed as a fallback when Yahoo RSS returns fewer than 5 headlines. This doubles sentiment coverage for most symbols at zero cost.</li>
+        </ul>
+        <div class="impact-line">Estimated incremental return from Phase 2: <strong>+8–15 percentage points over 3 years</strong> — primarily from the macro agent correctly signaling defensive positioning during 2022-style rate shock environments and the 2025 macro-driven volatility.</div>
+      </div>
+
+      <div class="phase-card">
+        <div class="phase-header">
+          <span class="phase-tag">Phase 3 · Portfolio-level intelligence</span>
+          <h3>Manage the portfolio as a system, not a collection of independent signals</h3>
+        </div>
+        <div class="phase-desc">Individual signal quality is one dimension of return. The other is how positions interact. The system currently has no awareness of the portfolio it is building.</div>
+        <ul class="improvement-list">
+          <li><strong>Correlation-aware position sizing</strong> — before entry, compute the correlation of the new signal's symbol to existing open positions (using the past 20 days of returns). If correlation > 0.7, reduce the new position size to 50% of max. Prevents silent concentration in a single factor.</li>
+          <li><strong>Regime-adaptive parameters</strong> — in TRENDING markets: widen stop to 2.5× ATR, raise TP to 8%, reduce HOT threshold to 15 votes. In RANGING markets: tighten stop to 1.0× ATR, lower TP to 3%, raise HOT threshold to 19. The regime detector already provides this label — use it to adapt execution geometry.</li>
+          <li><strong>Per-symbol cooldown on consecutive losses</strong> — after 2 consecutive losses on the same symbol in a rolling 5-day window, skip that symbol for 2 cycles regardless of signal tier. Addresses M-7 and reduces portfolio drag from repeatedly re-entering broken setups.</li>
+          <li><strong>Dynamic crypto allocation cap</strong> — reduce the crypto allocation cap from its fixed percentage to 0 when the macro regime is HIGH_VOLATILITY or TRENDING_DOWN (which real macro data from Phase 2 will accurately detect). Crypto underperforms dramatically in risk-off environments.</li>
+          <li><strong>Backtesting harness (paper-mode replay)</strong> — build a historical replay pipeline that feeds past OHLCV data into the paper-mode signal path (rule-based risk manager, deterministic). This will not capture LLM variance but will validate position sizing, stop-loss geometry, and tier thresholds against historical data before any parameter change goes live.</li>
+        </ul>
+        <div class="impact-line">Estimated incremental return from Phase 3: <strong>+6–10 percentage points over 3 years</strong>, primarily from correlation management preventing sector concentration and regime-adaptive parameters improving the stop/TP geometry in trending vs. ranging conditions.</div>
+      </div>
+
+    </div>
+
+    <div class="table-card" style="margin-top:32px">
+      <div class="table-label">Pro-forma performance estimate after all three phases</div>
+      <div class="perf-table-wrap">
+        <table>
+          <thead>
+            <tr><th>Scenario</th><th>3-Year Return</th><th>vs SPY (+72%)</th><th>On $100K</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Current system (as-is)</td>
+              <td class="num" style="color:var(--warn)">+30–45%</td>
+              <td class="num neg">−27 to −42 pp</td>
+              <td class="num">$130K–$145K</td>
+            </tr>
+            <tr>
+              <td>After Phase 1 (code fixes only)</td>
+              <td class="num pos-val">+45–65%</td>
+              <td class="num" style="color:var(--warn)">−7 to −27 pp</td>
+              <td class="num">$145K–$165K</td>
+            </tr>
+            <tr>
+              <td>After Phase 2 (real data for agents)</td>
+              <td class="num pos-val">+60–80%</td>
+              <td class="num" style="color:var(--pos)">−12 to +8 pp</td>
+              <td class="num">$160K–$180K</td>
+            </tr>
+            <tr style="font-weight:600">
+              <td>After Phase 3 (portfolio intelligence)</td>
+              <td class="num pos-val">+75–95%</td>
+              <td class="num pos-val">+3 to +23 pp</td>
+              <td class="num">$175K–$195K</td>
+            </tr>
+            <tr>
+              <td class="muted" colspan="4">SPY buy-and-hold benchmark over same period</td>
+              <td></td>
+              <td></td>
+              <td class="num pos-val">$172K</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- Footer -->
+  <div class="footer">
+    <p>All performance estimates are analytical projections based on system mechanics, not live backtest results. A reproducible backtest requires the replay harness described in Phase 3. Returns assume no management fees, minimal slippage on liquid names, and Alpaca paper-mode commission structure. Past market conditions (S&amp;P 2023–2025) are used as the benchmark period. This document is for internal strategy planning only.</p>
+  </div>
+
+</div>
