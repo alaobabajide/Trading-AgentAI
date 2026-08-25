@@ -4308,6 +4308,49 @@ def get_portfolio_history(period: str = "1D", request: Request = None):
         hist_broker = AlpacaBrokerAdapter(_hist_ak, _hist_sk, _hist_base_url)
         pts = _alpaca_portfolio_history(hist_broker, alpaca_period, alpaca_tf)
         if len(pts) >= 2:
+            # 1D: Alpaca only returns today's market session (9:30am ET onward).
+            # Bracket stop-losses often fire at or before the open, so the full
+            # daily loss is invisible. Prepend yesterday's close as the first
+            # point so the chart always shows the complete day-over-day move.
+            if period == "1D":
+                try:
+                    from datetime import timezone, timedelta
+                    acct = hist_broker.get_account()
+                    last_eq = float(acct.last_equity or 0)
+                    if last_eq > 0:
+                        first_dt = datetime.fromisoformat(pts[0]["time"])
+                        prev_day = (first_dt - timedelta(days=1)).date()
+                        prev_close_dt = datetime(
+                            prev_day.year, prev_day.month, prev_day.day,
+                            20, 0, 0, tzinfo=timezone.utc
+                        )
+                        pts = [{"time": prev_close_dt.isoformat(), "equity": last_eq, "pnl": 0.0}] + pts
+                        log.info(
+                            "portfolio/history(1D): prepended yesterday's close %.2f at %s",
+                            last_eq, prev_close_dt.isoformat(),
+                        )
+                except Exception as _exc:
+                    log.warning("portfolio/history(1D): could not prepend yesterday close: %s", _exc)
+
+            # 1M/1Y: Alpaca's last daily bar for today shows yesterday's close
+            # value (the bar is only finalised at EOD). Replace it with the
+            # current live equity so the chart ends at the real current NAV.
+            elif period in ("1M", "1Y"):
+                try:
+                    from datetime import timezone
+                    acct = hist_broker.get_account()
+                    live_eq = float(acct.equity or 0)
+                    if live_eq > 0:
+                        today_str = datetime.now(timezone.utc).date().isoformat()
+                        if pts[-1]["time"][:10] == today_str:
+                            pts[-1] = {**pts[-1], "equity": live_eq}
+                            log.info(
+                                "portfolio/history(%s): updated today's daily bar to live equity %.2f",
+                                period, live_eq,
+                            )
+                except Exception as _exc:
+                    log.warning("portfolio/history(%s): could not update today's bar: %s", period, _exc)
+
             log.info("portfolio/history(%s): %d pts from broker native API", period, len(pts))
             return pts
         log.warning(
