@@ -11,34 +11,33 @@ import { format } from "date-fns";
 import { EquityPoint } from "../lib/types";
 
 /**
- * Parse an ISO timestamp and format its label without timezone shifting.
+ * Format an ISO timestamp as a chart label, always in US Eastern Time (ET).
  *
- * date-fns `format(new Date(isoStr), ...)` uses the *browser* local timezone,
- * which causes Alpaca's end-of-day UTC bars (e.g. "2026-08-26T00:00:00Z" for
- * the Aug 25 ET session) to appear as "Aug 26" in timezones east of UTC.
+ * Rules:
+ *  - 1D (intraday 5-min bars): show HH:mm in ET so the axis reads 09:30–16:00,
+ *    matching what US traders expect. ET = UTC-4 (EDT, Mar–Nov) / UTC-5 (EST).
+ *  - 1M / 1Y (daily bars): show "MMM d" (e.g. "Aug 25") derived from the
+ *    date portion of the ISO string — never let the browser's local timezone
+ *    shift the label into the wrong calendar day.
  *
- * Fix:
- *  - Daily charts (1M/1Y): extract only the YYYY-MM-DD portion and construct
- *    a local-noon Date so the label is always the UTC calendar date, not the
- *    browser-local date of the underlying timestamp.
- *  - Intraday chart (1D): read UTC hours/minutes directly from the Date object
- *    so the time label matches the UTC clock (= market hours in ET + 4/5h, but
- *    consistent regardless of viewer timezone).
+ * Why not date-fns-tz: not installed. Manual UTC-to-ET offset is sufficient
+ * because US market hours never straddle the DST boundary mid-session.
  */
 function formatLabel(isoStr: string, period: "1D" | "1M" | "1Y"): string {
+  const d = new Date(isoStr);
   if (period === "1D") {
-    const d = new Date(isoStr);
-    // Build HH:mm from UTC components so every viewer sees the same clock.
-    const hh = String(d.getUTCHours()).padStart(2, "0");
-    const mm = String(d.getUTCMinutes()).padStart(2, "0");
+    // EDT = UTC-4 (approx Mar–Nov, months 2–10), EST = UTC-5 otherwise.
+    const offsetHours = d.getUTCMonth() >= 2 && d.getUTCMonth() <= 10 ? 4 : 5;
+    const etMs = d.getTime() - offsetHours * 3_600_000;
+    const et = new Date(etMs);
+    const hh = String(et.getUTCHours()).padStart(2, "0");
+    const mm = String(et.getUTCMinutes()).padStart(2, "0");
     return `${hh}:${mm}`;
   }
-  // Daily bars: use only the date string (first 10 chars) to avoid tz shifts.
-  const datePart = isoStr.substring(0, 10); // "YYYY-MM-DD"
-  const [year, month, day] = datePart.split("-").map(Number);
-  // Construct at local noon so DST can't push it into the previous/next day.
-  const d = new Date(year, month - 1, day, 12, 0, 0);
-  return format(d, period === "1M" ? "MMM d" : "MMM yy");
+  // Daily bars: pull YYYY-MM-DD directly from the string so the calendar date
+  // is never shifted by the browser's local timezone offset.
+  const [year, month, day] = isoStr.substring(0, 10).split("-").map(Number);
+  return format(new Date(year, month - 1, day, 12, 0, 0), "MMM d");
 }
 
 interface Props {
@@ -72,11 +71,10 @@ export function EquityChart({ data, period = "1D" }: Props) {
     label: formatLabel(d.time, period),
   }));
 
-  // Limit x-axis ticks so labels never overlap regardless of data density.
-  // 1D: ~78 pts (5-min market bars) → show every 12th = ~6 labels (1 per hour)
-  // 1M: ~30 pts (daily)             → show every 5th  = ~6 labels
-  // 1Y: ~365 pts (daily)            → show every 60th = ~6 labels
-  const tickInterval = period === "1D" ? 12 : period === "1M" ? 4 : 60;
+  // Show ~6 tick labels regardless of data density.
+  // 1D: fixed 12 (every 1h of 5-min bars). 1M/1Y: dynamic based on point count.
+  const tickInterval =
+    period === "1D" ? 12 : Math.max(1, Math.floor(data.length / 6));
 
   // Zoom Y-axis into the actual data range (same as Alpaca's own chart).
   // For 1D: a $1k move on a $100k account would look flat if axis started at $0.
