@@ -10,6 +10,37 @@ import {
 import { format } from "date-fns";
 import { EquityPoint } from "../lib/types";
 
+/**
+ * Parse an ISO timestamp and format its label without timezone shifting.
+ *
+ * date-fns `format(new Date(isoStr), ...)` uses the *browser* local timezone,
+ * which causes Alpaca's end-of-day UTC bars (e.g. "2026-08-26T00:00:00Z" for
+ * the Aug 25 ET session) to appear as "Aug 26" in timezones east of UTC.
+ *
+ * Fix:
+ *  - Daily charts (1M/1Y): extract only the YYYY-MM-DD portion and construct
+ *    a local-noon Date so the label is always the UTC calendar date, not the
+ *    browser-local date of the underlying timestamp.
+ *  - Intraday chart (1D): read UTC hours/minutes directly from the Date object
+ *    so the time label matches the UTC clock (= market hours in ET + 4/5h, but
+ *    consistent regardless of viewer timezone).
+ */
+function formatLabel(isoStr: string, period: "1D" | "1M" | "1Y"): string {
+  if (period === "1D") {
+    const d = new Date(isoStr);
+    // Build HH:mm from UTC components so every viewer sees the same clock.
+    const hh = String(d.getUTCHours()).padStart(2, "0");
+    const mm = String(d.getUTCMinutes()).padStart(2, "0");
+    return `${hh}:${mm}`;
+  }
+  // Daily bars: use only the date string (first 10 chars) to avoid tz shifts.
+  const datePart = isoStr.substring(0, 10); // "YYYY-MM-DD"
+  const [year, month, day] = datePart.split("-").map(Number);
+  // Construct at local noon so DST can't push it into the previous/next day.
+  const d = new Date(year, month - 1, day, 12, 0, 0);
+  return format(d, period === "1M" ? "MMM d" : "MMM yy");
+}
+
 interface Props {
   data: EquityPoint[];
   period?: "1D" | "1M" | "1Y";
@@ -36,12 +67,9 @@ export function EquityChart({ data, period = "1D" }: Props) {
     );
   }
 
-  // X-axis label format depends on the selected period
-  const labelFmt = period === "1D" ? "HH:mm" : period === "1M" ? "MMM d" : "MMM yy";
-
   const formatted = data.map((d) => ({
     ...d,
-    label: format(new Date(d.time), labelFmt),
+    label: formatLabel(d.time, period),
   }));
 
   // Limit x-axis ticks so labels never overlap regardless of data density.
