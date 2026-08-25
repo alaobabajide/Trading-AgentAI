@@ -4309,52 +4309,98 @@ def get_portfolio_history(period: str = "1D", request: Request = None):
         pts = _alpaca_portfolio_history(hist_broker, alpaca_period, alpaca_tf)
         if len(pts) >= 2:
             # 1D: Alpaca only returns today's market session (9:30am ET onward).
-            # Bracket stop-losses often fire at or before the open, so the full
-            # daily loss is invisible. Prepend yesterday's close as the first
-            # point so the chart always shows the complete day-over-day move.
+            # Bracket stop-losses that fire at the open are invisible because the
+            # chart starts at 9:30am ET. Prepend yesterday's closing NAV so the
+            # full day-over-day move is visible.
             #
-            # We source yesterday's equity from the 1M daily history (a completed
-            # historical bar) rather than acct.last_equity — Alpaca updates
-            # last_equity to the current session's close after market hours, so
-            # it no longer equals the prior day's close by the time users view
-            # the chart.
+            # Source priority for yesterday's close:
+            #   1. Supabase portfolio_snapshots (recorded at EOD, immutable) — best
+            #   2. acct.last_equity as fallback (sometimes stale after session end)
             if period == "1D":
                 try:
-                    from datetime import timezone
+                    from datetime import timezone, timedelta
                     today_str = datetime.now(timezone.utc).date().isoformat()
-                    daily_pts = _alpaca_portfolio_history(hist_broker, "1M", "1D")
-                    prev_bars = [p for p in daily_pts if p["time"][:10] < today_str]
-                    if prev_bars:
-                        yesterday_eq = prev_bars[-1]["equity"]
-                        yesterday_date = prev_bars[-1]["time"][:10]
-                        y = datetime.fromisoformat(yesterday_date)
-                        # 20:00 UTC = 4pm ET = NYSE market close
+                    anchor_eq: float | None = None
+
+                    # Primary: Supabase EOD snapshot (immutable, recorded after market close)
+                    try:
+                        from brain.portfolio_snapshots import get_equity_curve
+                        snaps = get_equity_curve(days=3)
+                        prev_snaps = [s for s in snaps if s.get("snapshot_date", "") < today_str]
+                        if prev_snaps:
+                            anchor_eq = float(prev_snaps[-1]["nav"])
+                            log.info(
+                                "portfolio/history(1D): anchor %.2f from Supabase snap %s",
+                                anchor_eq, prev_snaps[-1]["snapshot_date"],
+                            )
+                    except Exception as _se:
+                        log.debug("portfolio/history(1D): Supabase anchor lookup failed: %s", _se)
+
+                    # Fallback: acct.last_equity — use only when it meaningfully
+                    # differs from the first 1D bar (i.e. there was a pre-open gap)
+                    if anchor_eq is None:
+                        acct = hist_broker.get_account()
+                        last_eq = float(acct.last_equity or 0)
+                        first_bar_eq = pts[0]["equity"] if pts else 0.0
+                        gap_pct = abs(last_eq - first_bar_eq) / max(first_bar_eq, 1)
+                        if last_eq > 0 and gap_pct > 0.005:
+                            anchor_eq = last_eq
+                            log.info(
+                                "portfolio/history(1D): anchor %.2f from last_equity (gap %.1f%%)",
+                                anchor_eq, gap_pct * 100,
+                            )
+
+                    if anchor_eq:
+                        first_dt = datetime.fromisoformat(pts[0]["time"])
+                        prev_day = (first_dt - timedelta(days=1)).date()
+                        # 20:00 UTC = 4pm ET = NYSE regular-hours close
                         prev_close_dt = datetime(
-                            y.year, y.month, y.day, 20, 0, 0, tzinfo=timezone.utc
+                            prev_day.year, prev_day.month, prev_day.day,
+                            20, 0, 0, tzinfo=timezone.utc,
                         )
-                        pts = [{"time": prev_close_dt.isoformat(), "equity": yesterday_eq, "pnl": 0.0}] + pts
-                        log.info(
-                            "portfolio/history(1D): prepended yesterday's close %.2f (1M bar %s)",
-                            yesterday_eq, yesterday_date,
-                        )
+                        pts = [{"time": prev_close_dt.isoformat(), "equity": anchor_eq, "pnl": 0.0}] + pts
                 except Exception as _exc:
                     log.warning("portfolio/history(1D): could not prepend yesterday close: %s", _exc)
 
-            # 1M/1Y: Alpaca's last daily bar for today shows yesterday's close
-            # value (the bar is only finalised at EOD). Replace it with the
-            # current live equity so the chart ends at the real current NAV.
+            # 1M/1Y: problems with Alpaca's native daily bars:
+            #   • Today's bar may not exist yet (market still open) → append live equity
+            #   • Today's bar may be timestamped as "tomorrow" in UTC+x zones
+            #     (Alpaca uses end-of-day ET timestamps = early UTC next calendar day)
+            #   • 1Y chart shows $0 for all periods before the account was opened
+            # Fix: use datetime-aware comparison; always end the series at live equity;
+            # strip leading zero-equity bars from 1Y.
             elif period in ("1M", "1Y"):
                 try:
-                    from datetime import timezone
+                    from datetime import timezone, timedelta
                     acct = hist_broker.get_account()
                     live_eq = float(acct.equity or 0)
                     if live_eq > 0:
-                        today_str = datetime.now(timezone.utc).date().isoformat()
-                        if pts[-1]["time"][:10] == today_str:
-                            pts[-1] = {**pts[-1], "equity": live_eq}
+                        now_iso = datetime.now(timezone.utc).isoformat()
+                        today_utc = datetime.now(timezone.utc).date()
+                        # Parse the last bar's date properly (handles tz-aware strings)
+                        last_bar_dt = datetime.fromisoformat(pts[-1]["time"])
+                        last_bar_date = last_bar_dt.astimezone(timezone.utc).date()
+                        if last_bar_date >= today_utc:
+                            # Replace stale/future-labelled Alpaca bar with live data
+                            pts[-1] = {"time": now_iso, "equity": live_eq, "pnl": 0.0}
+                        else:
+                            # No today bar yet — append one
+                            pts.append({"time": now_iso, "equity": live_eq, "pnl": 0.0})
+                        log.info(
+                            "portfolio/history(%s): appended/replaced live equity %.2f",
+                            period, live_eq,
+                        )
+
+                    # 1Y: strip leading bars where equity == 0 (account not open yet)
+                    if period == "1Y":
+                        first_nonzero = next(
+                            (i for i, p in enumerate(pts) if p["equity"] > 0), 0
+                        )
+                        if first_nonzero > 0:
+                            pts = pts[first_nonzero:]
                             log.info(
-                                "portfolio/history(%s): updated today's daily bar to live equity %.2f",
-                                period, live_eq,
+                                "portfolio/history(1Y): clipped %d leading zero-equity bars",
+                                first_nonzero,
                             )
                 except Exception as _exc:
                     log.warning("portfolio/history(%s): could not update today's bar: %s", period, _exc)
