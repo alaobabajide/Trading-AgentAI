@@ -326,9 +326,12 @@ class PortfolioSimulator:
     # ── Position sizing scale factor (drawdown protection) ────────────────────
     def _size_scale(self) -> float:
         """Reduce position sizes when equity has drawn down beyond the configured threshold."""
-        current = self._cash + sum(
-            t.qty * t.entry_price for t in self._open.values()
-        )
+        # Use the last mark-to-market equity snapshot so drawdown tracks current prices,
+        # not fixed entry prices (which would understate losses on open losing positions).
+        if self._equity_curve:
+            current = self._equity_curve[-1]["equity"]
+        else:
+            current = self._cash + sum(t.qty * t.entry_price for t in self._open.values())
         dd = (self._peak - current) / max(self._peak, 1)
         return self._dd_factor if dd > self._dd_threshold else 1.0
 
@@ -354,9 +357,11 @@ class PortfolioSimulator:
         if len(self._open) >= self._max_concurrent:
             return False
 
-        # Portfolio exposure gate
+        # Portfolio exposure gate — denominator is current equity (cash + invested) so the
+        # cap scales with the portfolio as it compounds, not fixed to the starting equity.
         invested = sum(t.qty * t.entry_price for t in self._open.values())
-        if invested / max(self._initial, 1) >= self._max_exposure:
+        current_equity = self._cash + invested
+        if invested / max(current_equity, 1) >= self._max_exposure:
             return False
 
         # Fix 2: all tiers use the same max position cap (5%)
@@ -816,7 +821,9 @@ def run_backtest(
 
     final_equity   = sim._cash
     total_ret_pct  = (final_equity / initial_equity - 1) * 100
-    ann_ret_pct    = ((final_equity / initial_equity) ** (1 / max(years, 1)) - 1) * 100
+    # years is already bounded to ≥ 1/12 (line above), so no additional clamp needed.
+    # Using max(years, 1) here would always produce total_return for sub-1-year runs.
+    ann_ret_pct    = ((final_equity / initial_equity) ** (1 / years) - 1) * 100
 
     avg_win   = sum(t.pnl_pct for t in wins)   / max(len(wins),   1)
     avg_loss  = sum(t.pnl_pct for t in losses) / max(len(losses), 1)

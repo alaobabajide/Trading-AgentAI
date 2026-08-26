@@ -122,6 +122,50 @@ def _save_recent_entries(entries: dict[str, float]) -> None:
         log.debug("Could not persist recent entries: %s", exc)
 
 
+# ── Loss cooldown persistence ──────────────────────────────────────────────────
+# _loss_history and _loss_cooldown_end are wall-clock (time.time()) so they can
+# be serialised to disk and correctly compared after a restart.
+_LOSS_COOLDOWN_FILE = os.path.join(_DATA_DIR, "ta_loss_cooldown.json")
+
+
+def _load_loss_cooldown() -> tuple[dict[str, list[float]], dict[str, float]]:
+    """Load loss history and cooldown-end timestamps from disk; prune expired entries."""
+    try:
+        with open(_LOSS_COOLDOWN_FILE) as _f:
+            data = _json.load(_f)
+        now = time.time()
+        raw_history: dict[str, list[float]] = data.get("history", {})
+        raw_ends:    dict[str, float]        = data.get("ends", {})
+        # Prune history entries older than 30 days (max window)
+        history = {
+            sym: [ts for ts in timestamps if now - ts < 30 * 86400]
+            for sym, timestamps in raw_history.items()
+            if any(now - ts < 30 * 86400 for ts in timestamps)
+        }
+        # Prune already-expired cooldown ends
+        ends = {sym: end_ts for sym, end_ts in raw_ends.items() if end_ts > now}
+        log.info(
+            "Loaded loss cooldown state: %d symbol(s) in history, %d in active cooldown",
+            len(history), len(ends),
+        )
+        return history, ends
+    except FileNotFoundError:
+        return {}, {}
+    except Exception as exc:
+        log.warning("Could not load loss cooldown state: %s", exc)
+        return {}, {}
+
+
+def _save_loss_cooldown(
+    history: dict[str, list[float]], ends: dict[str, float]
+) -> None:
+    try:
+        with open(_LOSS_COOLDOWN_FILE, "w") as _f:
+            _json.dump({"history": history, "ends": ends}, _f)
+    except Exception as exc:
+        log.debug("Could not persist loss cooldown state: %s", exc)
+
+
 def _wait_for_brain(url: str, timeout_secs: int = 60) -> bool:
     """Poll /health until uvicorn is ready, up to timeout_secs."""
     deadline = time.monotonic() + timeout_secs
@@ -179,9 +223,11 @@ class Orchestrator:
         # Trailing stop: tracks highest observed price per open symbol (ratchets upward)
         self._trailing_peaks: dict[str, float] = {}
         self._trailing_pct: float = cfg.trailing_stop_pct
-        # Per-symbol loss cooldown — parameters are refreshed from brain API
-        self._loss_history: dict[str, list[float]] = {}   # symbol → list of monotonic timestamps
-        self._loss_cooldown_end: dict[str, float] = {}    # symbol → monotonic time when cooldown expires
+        # Per-symbol loss cooldown — wall-clock (time.time()) timestamps so state
+        # can be persisted to disk and remains valid after a restart.
+        _lc_history, _lc_ends = _load_loss_cooldown()
+        self._loss_history: dict[str, list[float]] = _lc_history
+        self._loss_cooldown_end: dict[str, float] = _lc_ends
         self._loss_lock = threading.Lock()
         self._loss_cooldown_hits: int = cfg.loss_cooldown_hits
         self._loss_cooldown_window_days: int = cfg.loss_cooldown_window_days
@@ -358,7 +404,7 @@ class Orchestrator:
         # ── Gate 3.6: Loss cooldown — 2 stop-loss hits in 5 days → skip 2 cycles ──
         with self._loss_lock:
             cooldown_end = self._loss_cooldown_end.get(symbol, 0)
-        if time.monotonic() < cooldown_end:
+        if time.time() < cooldown_end:
             log.info("SKIP %s — loss cooldown active (too many stop-loss hits recently)", symbol)
             return
 
@@ -505,6 +551,10 @@ class Orchestrator:
                                 "Loss cooldown activated (bracket stop-out): %s → skip %d cycles",
                                 symbol, self._loss_cooldown_skip_cycles,
                             )
+                        _save_loss_cooldown(
+                            dict(self._loss_history),
+                            dict(self._loss_cooldown_end),
+                        )
                 with self._entry_lock:
                     self._recent_entries.pop(symbol, None)
                     _save_recent_entries(dict(self._recent_entries))
@@ -772,7 +822,7 @@ class Orchestrator:
                         self._trailing_peaks.pop(symbol, None)
                         # Record stop-loss hit for loss-cooldown gate (Phase 3-C)
                         if "STOP LOSS" in reason:
-                            now = time.monotonic()
+                            now = time.time()  # wall-clock so state persists across restarts
                             with self._loss_lock:
                                 history = self._loss_history.get(symbol, [])
                                 history.append(now)
@@ -789,6 +839,10 @@ class Orchestrator:
                                         self._loss_cooldown_window_days,
                                         self._loss_cooldown_skip_cycles,
                                     )
+                                _save_loss_cooldown(
+                                    dict(self._loss_history),
+                                    dict(self._loss_cooldown_end),
+                                )
                     except Exception as exc:
                         log.error("  ✗ Failed to close %s: %s", symbol, exc)
             else:
@@ -913,6 +967,45 @@ class Orchestrator:
                 log.info("Trade rejection alert sent to Telegram chat %s", chat_id)
             except Exception as exc:
                 log.warning("Telegram trade rejection alert failed for %s: %s", chat_id, exc)
+
+    def _send_heartbeat(self) -> None:
+        """Send a periodic Telegram status message so operators know the system is alive."""
+        cfg = self._cfg
+        token       = getattr(cfg, "telegram_bot_token", "") or ""
+        allowed_ids = getattr(cfg, "telegram_allowed_ids", []) or []
+        if not token or not allowed_ids:
+            return
+        try:
+            portfolio = self._portfolio_fetcher.snapshot()
+            equity    = portfolio.equity
+            daily_pnl = portfolio.daily_pnl
+            n_pos     = len(portfolio.positions)
+            mode      = "paper/rule-based" if self._paper_mode else "live/LLM"
+            pnl_sign  = "🟢" if daily_pnl >= 0 else "🔴"
+            msg = (
+                "💓 <b>Trading Agent — Heartbeat</b>\n\n"
+                f"Status: <b>Running</b>  ({mode})\n"
+                f"Equity: <b>${equity:,.2f}</b>\n"
+                f"Daily P&L: {pnl_sign} <b>${daily_pnl:+,.2f}</b>\n"
+                f"Open positions: <b>{n_pos}</b>"
+            )
+        except Exception as exc:
+            log.warning("Heartbeat: could not fetch portfolio — %s", exc)
+            mode = "paper/rule-based" if self._paper_mode else "live/LLM"
+            msg = (
+                "💓 <b>Trading Agent — Heartbeat</b>\n\n"
+                f"Status: <b>Running</b>  ({mode})\n"
+                "(Portfolio data unavailable this cycle)"
+            )
+        for chat_id in allowed_ids:
+            try:
+                httpx.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"},
+                    timeout=10,
+                )
+            except Exception as exc:
+                log.warning("Heartbeat Telegram send failed for %s: %s", chat_id, exc)
 
     # ── Signal outcome resolution ─────────────────────────────────────────────
 
@@ -1098,6 +1191,7 @@ class Orchestrator:
         schedule.every(1).hours.do(self._resolve_signal_outcomes)
         schedule.every(1).hours.do(self._resolve_snapshot_outcomes)
         schedule.every(6).hours.do(self._refresh_congress_disclosures)
+        schedule.every(6).hours.do(self._send_heartbeat)
         schedule.every(1).days.do(self._refresh_13f_holdings)
         schedule.every(1).days.at("21:00").do(self._record_daily_portfolio_snapshot)
 
@@ -1111,6 +1205,7 @@ class Orchestrator:
         )
         self._monitor_positions()  # check existing positions before first cycle
         self._run_cycle()          # run immediately on start
+        self._send_heartbeat()     # notify operators the system has started
 
         while True:
             try:
