@@ -604,45 +604,63 @@ class Orchestrator:
 
         log.info("  → Submitting %s %s order (tier=%s) via /execute …", action, symbol, tier)
 
-        try:
-            exec_resp = httpx.post(
-                f"{self._brain_url}/execute",
-                json={
-                    "symbol":                 symbol,
-                    "asset_class":            asset_class,
-                    "action":                 action,
-                    "suggested_position_pct": exec_pos_pct,
-                    "stop_loss_pct":          exec_sl_pct,
-                    "take_profit_pct":        exec_tp_pct,
-                },
-                timeout=30,
-                headers=self._brain_headers(),
-            )
-            exec_resp.raise_for_status()
-            result = exec_resp.json()
-            log.info(
-                "  ✓ ORDER PLACED — %s %s  id=%s  status=%s  stop=%.2f%%  tp=%.2f%%",
-                action, symbol,
-                result.get("order_id", "?"),
-                result.get("status", "?"),
-                result.get("stop_pct", 0) * 100,
-                result.get("target_pct", 0) * 100,
-            )
-            status = "submitted"
-            # Track BUY entries for Gate 5e bracket stop-out detection (wall clock, persisted)
-            if action == "BUY":
-                with self._entry_lock:
-                    self._recent_entries[symbol] = time.time()
-                    _save_recent_entries(dict(self._recent_entries))
-        except httpx.HTTPStatusError as exc:
-            log.error(
-                "  ✗ Execute rejected for %s: HTTP %d — %s",
-                symbol, exc.response.status_code, exc.response.text[:300],
-            )
-            status = "skipped"
-        except Exception as exc:
-            log.error("  ✗ Execute call failed for %s: %s", symbol, exc)
-            status = "skipped"
+        status = "skipped"
+        _max_attempts = 3
+        for _attempt in range(1, _max_attempts + 1):
+            try:
+                exec_resp = httpx.post(
+                    f"{self._brain_url}/execute",
+                    json={
+                        "symbol":                 symbol,
+                        "asset_class":            asset_class,
+                        "action":                 action,
+                        "suggested_position_pct": exec_pos_pct,
+                        "stop_loss_pct":          exec_sl_pct,
+                        "take_profit_pct":        exec_tp_pct,
+                    },
+                    timeout=30,
+                    headers=self._brain_headers(),
+                )
+                exec_resp.raise_for_status()
+                result = exec_resp.json()
+                log.info(
+                    "  ✓ ORDER PLACED — %s %s  id=%s  status=%s  stop=%.2f%%  tp=%.2f%%",
+                    action, symbol,
+                    result.get("order_id", "?"),
+                    result.get("status", "?"),
+                    result.get("stop_pct", 0) * 100,
+                    result.get("target_pct", 0) * 100,
+                )
+                status = "submitted"
+                # Track BUY entries for Gate 5e bracket stop-out detection (wall clock, persisted)
+                if action == "BUY":
+                    with self._entry_lock:
+                        self._recent_entries[symbol] = time.time()
+                        _save_recent_entries(dict(self._recent_entries))
+                break  # success — exit retry loop
+            except httpx.HTTPStatusError as exc:
+                _http_code = exc.response.status_code
+                _http_body = exc.response.text[:300]
+                if _http_code >= 500 and _attempt < _max_attempts:
+                    _wait = 2 ** _attempt  # 2s, 4s
+                    log.warning(
+                        "  ✗ Execute attempt %d/%d for %s: HTTP %d — retrying in %ds",
+                        _attempt, _max_attempts, symbol, _http_code, _wait,
+                    )
+                    time.sleep(_wait)
+                    continue
+                # 4xx rejection or final 5xx — permanent failure for this cycle
+                log.error(
+                    "  ✗ Execute rejected for %s after %d attempt(s): HTTP %d — %s",
+                    symbol, _attempt, _http_code, _http_body,
+                )
+                self._send_trade_rejection_alert(symbol, action, _http_code, _http_body)
+                status = "skipped"
+                break
+            except Exception as exc:
+                log.error("  ✗ Execute call failed for %s: %s", symbol, exc)
+                status = "skipped"
+                break
         finally:
             # Always release the Gate 5 pending-buy reservation so the slot
             # is freed whether the order succeeded, was rejected, or crashed.
@@ -867,6 +885,34 @@ class Orchestrator:
                 log.info("Credit alert sent to Telegram chat %s (balance $%.2f)", chat_id, balance)
             except Exception as exc:
                 log.warning("Telegram credit alert failed for %s: %s", chat_id, exc)
+
+    def _send_trade_rejection_alert(
+        self, symbol: str, action: str, http_code: int, body: str
+    ) -> None:
+        """Send Telegram alert when an order is permanently rejected by the broker."""
+        cfg = self._cfg
+        token       = getattr(cfg, "telegram_bot_token", "") or ""
+        allowed_ids = getattr(cfg, "telegram_allowed_ids", []) or []
+        if not token or not allowed_ids:
+            log.warning("Trade rejection alert: Telegram not configured")
+            return
+        msg = (
+            "🚨 <b>Order Rejected</b>\n\n"
+            f"Symbol: <b>{symbol}</b>\n"
+            f"Action: <b>{action}</b>\n"
+            f"HTTP {http_code}: {body[:200]}\n\n"
+            "Check the orchestrator logs for full details."
+        )
+        for chat_id in allowed_ids:
+            try:
+                httpx.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"},
+                    timeout=10,
+                )
+                log.info("Trade rejection alert sent to Telegram chat %s", chat_id)
+            except Exception as exc:
+                log.warning("Telegram trade rejection alert failed for %s: %s", chat_id, exc)
 
     # ── Signal outcome resolution ─────────────────────────────────────────────
 

@@ -3322,15 +3322,27 @@ def _execute_order(
         if signal.asset_class == "stock":
             from execution.stock.engine import StockExecutionEngine
 
-            # Pre-flight: block BUY if already at max_exposure_pct.
+            # Pre-flight: block BUY if already at max_exposure_pct or if an open
+            # order already exists for this symbol (idempotency guard against restarts).
             if signal.action == "BUY":
                 _acct      = broker.get_account()
                 _equity_pf = _acct.equity
                 if _equity_pf <= 0:
                     raise HTTPException(status_code=409, detail="Account has no equity.")
                 try:
+                    # Idempotency: reject if a same-symbol BUY order is already pending at Alpaca.
+                    _open_orders = broker.get_orders(status="open", limit=100)
+                    for _ord in _open_orders:
+                        if _ord.symbol == signal.symbol and _ord.side.upper() == "BUY":
+                            raise HTTPException(
+                                status_code=409,
+                                detail=f"Duplicate order blocked: a BUY order for {signal.symbol} is already open (id={_ord.order_id}). Restart-safe deduplication.",
+                            )
                     _positions_pf = broker.get_all_positions()
                     _deployed_pf  = sum(abs(p.market_value) for p in _positions_pf)
+                    # Use buying_power (reflects pending orders and margin correctly) for the
+                    # exposure check. Fall back to equity-minus-deployed if unavailable.
+                    _buying_power = _acct.buying_power if _acct.buying_power > 0 else max(0.0, _equity_pf - _deployed_pf)
                     if _deployed_pf / _equity_pf >= exec_eff["max_exposure_pct"]:
                         raise HTTPException(
                             status_code=409,

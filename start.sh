@@ -23,11 +23,35 @@ printf 'window.__TA_CONFIG__ = { supabaseUrl: "%s", supabaseAnonKey: "%s", owner
     "$SUPABASE_URL" "$SUPABASE_ANON_KEY" "$OWNER_USER_ID" "$DEMO_USER_ID" \
     > /usr/share/nginx/html/runtime-config.js
 
-# ── 1. Start brain API (uvicorn) on 127.0.0.1:8000 in the background ─────────
-echo "[start] Launching uvicorn on 127.0.0.1:8000…"
+# ── 1. Start brain API (uvicorn) with automatic restart supervisor ────────────
+echo "[start] Launching uvicorn supervisor on 127.0.0.1:8000…"
 cd /app
-uvicorn brain.api:app --host 127.0.0.1 --port 8000 --workers 1 &
-echo "[start] Uvicorn PID=$! (nginx will proxy to it; returns 502 until ready)"
+(
+    while true; do
+        echo "[uvicorn] Starting…"
+        uvicorn brain.api:app --host 127.0.0.1 --port 8000 --workers 1
+        EXIT=$?
+        echo "[uvicorn] Exited with code $EXIT — restarting in 5s…"
+        sleep 5
+    done
+) &
+UVICORN_SUPERVISOR_PID=$!
+echo "[start] Uvicorn supervisor PID=$UVICORN_SUPERVISOR_PID"
+
+# Wait for uvicorn to be ready before continuing (nginx will 502 until it is)
+echo "[start] Waiting for uvicorn to be ready…"
+_uvicorn_ready=0
+for _i in $(seq 1 30); do
+    if wget -q -O /dev/null http://127.0.0.1:8000/health 2>/dev/null; then
+        _uvicorn_ready=1
+        echo "[start] Uvicorn ready after ${_i}s"
+        break
+    fi
+    sleep 1
+done
+if [ "$_uvicorn_ready" = "0" ]; then
+    echo "[start] WARNING: Uvicorn did not respond within 30s — nginx may 502 initially"
+fi
 
 # ── 2. Start Telegram bot (if token is set) ───────────────────────────────────
 if [ -n "$TELEGRAM_BOT_TOKEN" ]; then

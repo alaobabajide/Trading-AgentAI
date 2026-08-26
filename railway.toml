@@ -3,9 +3,13 @@ builder = "dockerfile"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# Check nginx root (always up) — brain API health is shown inside the dashboard
-healthcheckPath = "/"
+# /api/health proxies to uvicorn /health — Railway won't mark the deploy healthy
+# until the brain API is up and responding, preventing premature traffic routing.
+healthcheckPath = "/api/health"
 healthcheckTimeout = 120
 startCommand = "/start.sh"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 5
+
+[[volumes]]
+mountPath = "/data"

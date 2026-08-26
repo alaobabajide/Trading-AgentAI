@@ -46,18 +46,26 @@ class StockExecutionEngine:
 
     def _get_risk(self) -> RiskControls:
         """Lazily refresh equity-based risk controls."""
-        acct       = self._broker.get_account()
-        equity     = acct.equity
-        last_eq    = acct.last_equity if acct.last_equity else equity or 1.0
+        acct      = self._broker.get_account()
+        equity    = acct.equity
+        last_eq   = acct.last_equity if acct.last_equity else equity or 1.0
         if last_eq == 0:
             last_eq = equity or 1.0
         daily_pnl_pct = (equity - last_eq) / last_eq * 100
+
+        # Use buying_power from the broker — it already accounts for pending unfilled
+        # orders and margin, giving the true available capital for new positions.
+        # Fallback to equity-minus-deployed if buying_power is unavailable.
         try:
-            positions = self._broker.get_all_positions()
-            deployed  = sum(abs(p.market_value) for p in positions)
-            available = max(0.0, equity - deployed)
+            if acct.buying_power > 0:
+                available = acct.buying_power
+            else:
+                positions = self._broker.get_all_positions()
+                deployed  = sum(abs(p.market_value) for p in positions)
+                available = max(0.0, equity - deployed)
         except Exception:
-            available = equity
+            available = acct.buying_power if acct.buying_power > 0 else equity
+
         rc = RiskControls(available, self._max_pos, self._cb_drawdown)
         rc.check_circuit_breaker(daily_pnl_pct)
         return rc

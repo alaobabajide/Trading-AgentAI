@@ -93,8 +93,17 @@ class AlpacaBrokerAdapter(BrokerAdapter):
     ) -> BrokerOrderResult:
         from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
+        import hashlib
 
         alpaca_side = OrderSide.BUY if side == "BUY" else OrderSide.SELL
+
+        # Deterministic client_order_id scoped to symbol+side+UTC-hour.
+        # Alpaca deduplicates submissions with the same client_order_id within ~24h,
+        # preventing duplicate orders if the orchestrator restarts mid-cycle.
+        utc_hour = datetime.now(timezone.utc).strftime("%Y%m%d%H")
+        raw_id = f"ta_{symbol}_{side}_{utc_hour}"
+        client_order_id = hashlib.md5(raw_id.encode()).hexdigest()[:24]
+
         order_req = MarketOrderRequest(
             symbol=symbol,
             qty=qty,
@@ -103,6 +112,7 @@ class AlpacaBrokerAdapter(BrokerAdapter):
             order_class="bracket",
             stop_loss=StopLossRequest(stop_price=stop_price),
             take_profit=TakeProfitRequest(limit_price=take_profit_price),
+            client_order_id=client_order_id,
         )
         order = self._trading.submit_order(order_req)
         exchange = "alpaca_paper" if self._paper else "alpaca_live"
