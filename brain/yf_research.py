@@ -14,7 +14,28 @@ log = logging.getLogger(__name__)
 
 def _info(symbol: str) -> dict:
     import yfinance as yf
-    return yf.Ticker(symbol).info or {}
+    ticker = yf.Ticker(symbol)
+    try:
+        info = ticker.info or {}
+        if info:
+            return info
+    except Exception as exc:
+        log.debug("yf .info failed for %s (%s), trying fast_info", symbol, exc)
+    # fast_info uses a different Yahoo endpoint — more stable under rate-limiting
+    try:
+        fi = ticker.fast_info
+        return {
+            "currentPrice":       getattr(fi, "last_price", None),
+            "regularMarketPrice": getattr(fi, "last_price", None),
+            "marketCap":          getattr(fi, "market_cap", None),
+            "fiftyTwoWeekHigh":   getattr(fi, "year_high", None),
+            "fiftyTwoWeekLow":    getattr(fi, "year_low", None),
+            "trailingPE":         getattr(fi, "p_e_ratio", None),
+            "priceToBook":        getattr(fi, "price_to_book", None),
+        }
+    except Exception as exc2:
+        log.warning("yf fast_info also failed for %s: %s", symbol, exc2)
+        return {}
 
 
 def yf_profile(symbol: str) -> list[dict]:

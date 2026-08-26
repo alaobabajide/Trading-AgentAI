@@ -4823,9 +4823,23 @@ def get_fundamentals(symbol: str, asset_class: str = "stock"):
         import yfinance as yf
         import pandas as pd
 
-        yf_sym = sym.replace("USDT", "-USD") if asset_class == "crypto" else sym
+        yf_sym = sym.replace("USDT", "-USD").replace("USD", "-USD") if asset_class == "crypto" else sym
         ticker = yf.Ticker(yf_sym)
-        info = ticker.info or {}
+        try:
+            info = ticker.info or {}
+        except Exception as _info_exc:
+            log.warning("ticker.info failed for %s, falling back to fast_info: %s", yf_sym, _info_exc)
+            try:
+                fi = ticker.fast_info
+                info = {
+                    "currentPrice":      getattr(fi, "last_price", None),
+                    "regularMarketPrice": getattr(fi, "last_price", None),
+                    "marketCap":         getattr(fi, "market_cap", None),
+                    "fiftyTwoWeekHigh":  getattr(fi, "year_high", None),
+                    "fiftyTwoWeekLow":   getattr(fi, "year_low", None),
+                }
+            except Exception:
+                info = {}
 
         def _sf(v, scale=1.0, decimals=2):
             try:
@@ -4976,6 +4990,11 @@ def get_fundamentals(symbol: str, asset_class: str = "stock"):
         raise
     except Exception as exc:
         log.error("fundamentals error for %s: %s", sym, exc)
+        # Serve stale cache rather than hard-erroring — yfinance is intermittently flaky
+        stale = _FUND_CACHE.get(cache_key)
+        if stale:
+            log.info("fundamentals: serving stale cache for %s", sym)
+            return stale[1]
         raise HTTPException(503, "Fundamental data temporarily unavailable")
 
 

@@ -273,9 +273,13 @@ class AlpacaCryptoMarketData:
 
     @staticmethod
     def _to_alpaca_symbol(symbol: str) -> str:
-        """Convert trading-API format BTCUSD → data-API format BTC/USD."""
+        """Convert trading-API format BTCUSD/BTCUSDT → data-API format BTC/USD."""
         if "/" in symbol:
             return symbol
+        # Binance-style USDT suffix (e.g. BTCUSDT) — strip the T, treat as USD pair
+        if symbol.endswith("USDT"):
+            base = symbol[:-4]
+            return f"{base}/USD"
         if symbol.endswith("USD"):
             base = symbol[:-3]
             return f"{base}/USD"
