@@ -37,20 +37,26 @@ def _usage_file(day: str) -> str | None:
 
 
 def _load_persisted_usage() -> None:
-    """Load today's usage from disk at startup (best-effort, never raises)."""
-    try:
-        today = date.today().isoformat()
-        path = _usage_file(today)
-        if not path or not os.path.exists(path):
-            return
-        with open(path) as f:
-            data = json.load(f)
-        if isinstance(data, dict) and data.get("date") == today:
-            with _usage_lock:
-                _daily_usage[today] = data
-            log.info("usage: restored %d calls from %s", data.get("calls", 0), path)
-    except Exception as exc:
-        log.debug("usage: could not load persisted data: %s", exc)
+    """Load the last 30 days of usage files from disk at startup (best-effort)."""
+    from datetime import timedelta
+    today = date.today()
+    loaded = 0
+    for offset in range(30):
+        day = (today - timedelta(days=offset)).isoformat()
+        try:
+            path = _usage_file(day)
+            if not path or not os.path.exists(path):
+                continue
+            with open(path) as f:
+                data = json.load(f)
+            if isinstance(data, dict) and data.get("date") == day:
+                with _usage_lock:
+                    _daily_usage[day] = data
+                loaded += 1
+        except Exception as exc:
+            log.debug("usage: could not load %s: %s", day, exc)
+    if loaded:
+        log.info("usage: restored %d day(s) of history from disk", loaded)
 
 
 def _persist_usage(day: str) -> None:
