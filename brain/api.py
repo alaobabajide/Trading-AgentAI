@@ -1146,7 +1146,8 @@ def kill_status():
 
 @app.get("/health")
 def health():
-    cfg = get_settings()
+    from config import get_settings as _gs
+    cfg = _gs()
     checks: dict[str, bool] = {
         "auth":    bool(cfg.brain_api_key or cfg.supabase_service_role_key),
         "broker":  bool(cfg.alpaca_api_key and cfg.alpaca_secret_key),
