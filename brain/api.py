@@ -508,6 +508,9 @@ app = FastAPI(
     description="Multi-agent reasoning layer — Fundamental · Technical · Sentiment · Risk",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 # ── CORS: restrict to configured origins (no wildcard by default) ─────────────
@@ -578,7 +581,7 @@ async def body_size_limit(request: Request, call_next):
 
 
 # ── API key authentication (all routes except /health and /) ─────────────────
-_PUBLIC_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc", "/schwab-auth/callback", "/tradestation-auth/callback"}
+_PUBLIC_PATHS = {"/health", "/", "/schwab-auth/callback", "/tradestation-auth/callback"}
 
 # ── Supabase JWT validation (lazy init, cached results) ───────────────────────
 _supabase_admin = None
@@ -631,11 +634,17 @@ async def api_key_middleware(request: Request, call_next):
     from config import get_settings
     cfg = get_settings()
 
-    # No auth configured: warn loudly but allow through so the app remains usable
-    # during initial setup. Set BRAIN_API_KEY in Railway to lock this down.
+    # Fail-closed: if no auth credentials are configured, reject every request.
+    # A misconfigured deployment must not silently become an open API.
     if not cfg.brain_api_key and not cfg.supabase_service_role_key:
-        log.warning("BRAIN_API_KEY and SUPABASE_SERVICE_ROLE_KEY both unset — API is UNAUTHENTICATED. Set BRAIN_API_KEY in Railway env vars.")
-        return await call_next(request)
+        log.critical(
+            "AUTH MISCONFIGURATION: BRAIN_API_KEY and SUPABASE_SERVICE_ROLE_KEY are both unset. "
+            "All non-public requests are blocked. Set BRAIN_API_KEY in Railway env vars."
+        )
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Service misconfigured — authentication credentials not set. Contact the administrator."},
+        )
 
     # Path 1: X-Api-Key — machine-to-machine (orchestrator, Telegram bot)
     if cfg.brain_api_key and request.headers.get("X-Api-Key", "") == cfg.brain_api_key:
@@ -1106,20 +1115,26 @@ def root():
     }
 
 @app.post("/kill")
-def kill_switch():
-    """Emergency halt — stops all new trade execution immediately."""
+def kill_switch(request: Request):
+    """Emergency halt — stops all new trade execution immediately. Owner or M2M (X-Api-Key) only."""
+    uid = getattr(request.state, "user_id", None)
+    if _OWNER_USER_ID and uid and uid != _OWNER_USER_ID:
+        raise HTTPException(403, "Owner access required to activate kill switch")
     global _TRADING_PAUSED
     _TRADING_PAUSED = True
-    log.critical("KILL SWITCH ACTIVATED — auto-trading paused")
+    log.critical("KILL SWITCH ACTIVATED — auto-trading paused by uid=%s", uid or "M2M")
     return {"status": "paused", "message": "Auto-trading halted. POST /resume to restart."}
 
 
 @app.post("/resume")
-def resume_trading():
-    """Resume trading after a kill switch."""
+def resume_trading(request: Request):
+    """Resume trading after a kill switch. Owner or M2M (X-Api-Key) only."""
+    uid = getattr(request.state, "user_id", None)
+    if _OWNER_USER_ID and uid and uid != _OWNER_USER_ID:
+        raise HTTPException(403, "Owner access required to resume trading")
     global _TRADING_PAUSED
     _TRADING_PAUSED = False
-    log.info("Auto-trading resumed via /resume")
+    log.info("Auto-trading resumed via /resume by uid=%s", uid or "M2M")
     return {"status": "active", "message": "Auto-trading resumed."}
 
 
@@ -3216,9 +3231,12 @@ def evaluate_watch_rules_endpoint(request: Request, symbol: str, price: float):
     """Orchestrator-facing endpoint: evaluate watch rules for symbol at price.
 
     Called after each signal cycle with the symbol's current price.
-    Returns the list of newly triggered alert IDs.
-    Auth: X-Api-Key (machine-to-machine).
+    Auth: X-Api-Key (machine-to-machine) only — browser JWT callers are rejected
+    to prevent forged prices from firing other users' alerts.
     """
+    uid = getattr(request.state, "user_id", None)
+    if uid is not None:
+        raise HTTPException(403, "This endpoint is reserved for internal orchestrator use (X-Api-Key required)")
     from brain.watch_rules import evaluate_rules as _evaluate
     triggered = _evaluate(symbol=symbol, price=price)
     return {"evaluated": symbol, "price": price, "triggered": len(triggered)}
@@ -5287,6 +5305,9 @@ def get_disclosure_settings(request: Request):
 
 @app.post("/disclosure-settings")
 def save_disclosure_settings(payload: DisclosureSettingsPayload, request: Request):
+    uid = getattr(request.state, "user_id", None)
+    if _OWNER_USER_ID and uid and uid != _OWNER_USER_ID:
+        raise HTTPException(403, "Owner access required to modify disclosure settings")
     from brain.disclosure_settings import save
     updates = {k: v for k, v in payload.model_dump().items() if v is not None}
     cfg = save(updates)
@@ -5379,7 +5400,10 @@ def get_congress_members_list(request: Request = None):
 
 @app.post("/disclosures/refresh")
 def trigger_disclosure_refresh(request: Request):
-    """Manually trigger a disclosure data refresh. M2M auth required."""
+    """Manually trigger a disclosure data refresh. M2M (X-Api-Key) only."""
+    uid = getattr(request.state, "user_id", None)
+    if uid is not None:
+        raise HTTPException(403, "This endpoint requires machine-to-machine authentication (X-Api-Key) — not accessible to browser users")
     import threading
     def _run():
         try:

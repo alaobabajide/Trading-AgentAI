@@ -10,7 +10,7 @@ const BASE = "/api";
 
 // ── Auth token management ─────────────────────────────────────────────────────
 // AuthContext calls setActiveToken() + setActiveUserId() whenever the Supabase
-// session changes. Browser requests use Bearer <jwt>; M2M falls back to X-Api-Key.
+// session changes. Browser requests use Bearer <jwt> only; X-Api-Key is server-side M2M only.
 let _activeToken: string | null = null;
 let _activeUserId: string | null = null;
 
@@ -37,20 +37,13 @@ export function setActiveUserId(userId: string | null): void {
   try { window.dispatchEvent(new Event("ta:userChanged")); } catch {}
 }
 
-function _apiKey(): string {
-  return (
-    (window as unknown as { __TA_CONFIG__?: { apiKey?: string } }).__TA_CONFIG__
-      ?.apiKey ?? ""
-  );
-}
-
 export function apiHeaders(extra?: Record<string, string>): Record<string, string> {
   if (_activeToken) {
     return { Authorization: `Bearer ${_activeToken}`, ...extra };
   }
-  // Fallback: legacy X-Api-Key (dev mode / orchestrator)
-  const key = _apiKey();
-  return key ? { "X-Api-Key": key, ...extra } : { ...extra };
+  // No token available yet (auth resolving) — return headers without credentials.
+  // The browser never sends X-Api-Key; that path is for server-side M2M callers only.
+  return { ...extra };
 }
 
 async function safeJson<T>(res: Response): Promise<T> {

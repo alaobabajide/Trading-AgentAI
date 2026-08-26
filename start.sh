@@ -5,14 +5,22 @@
 envsubst '${PORT}' < /tmp/nginx.conf.template > /etc/nginx/conf.d/default.conf
 rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 
-# Warn loudly if BRAIN_API_KEY is not set — API will be unauthenticated
+# Guard: BRAIN_API_KEY is required — the API is fail-closed without it.
 if [ -z "$BRAIN_API_KEY" ]; then
-    echo "[start] WARNING: BRAIN_API_KEY is not set. All /api/* routes are UNAUTHENTICATED. Set it in Railway env vars."
+    echo "[start] FATAL: BRAIN_API_KEY is not set. The brain API will reject all requests until this is configured in Railway env vars."
+fi
+
+# Guard: GRAFANA_ADMIN_PASSWORD must be changed from the placeholder default.
+if [ "${GRAFANA_ADMIN_PASSWORD:-}" = "CHANGE_ME_REQUIRED" ]; then
+    echo "[start] FATAL: GRAFANA_ADMIN_PASSWORD is still set to the default value. Change it in Railway env vars before deploying."
+    exit 1
 fi
 
 # ── 0b. Inject runtime config for the dashboard ──────────────────────────────
-printf 'window.__TA_CONFIG__ = { apiKey: "%s", supabaseUrl: "%s", supabaseAnonKey: "%s", ownerUserId: "%s", demoUserId: "%s" };\n' \
-    "$BRAIN_API_KEY" "$SUPABASE_URL" "$SUPABASE_ANON_KEY" "$OWNER_USER_ID" "$DEMO_USER_ID" \
+# BRAIN_API_KEY is intentionally excluded — browser clients authenticate via
+# Supabase JWT (Bearer token). The master API key must never be served to browsers.
+printf 'window.__TA_CONFIG__ = { supabaseUrl: "%s", supabaseAnonKey: "%s", ownerUserId: "%s", demoUserId: "%s" };\n' \
+    "$SUPABASE_URL" "$SUPABASE_ANON_KEY" "$OWNER_USER_ID" "$DEMO_USER_ID" \
     > /usr/share/nginx/html/runtime-config.js
 
 # ── 1. Start brain API (uvicorn) on 127.0.0.1:8000 in the background ─────────
