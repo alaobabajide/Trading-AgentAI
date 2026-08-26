@@ -1146,7 +1146,20 @@ def kill_status():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+    cfg = get_settings()
+    checks: dict[str, bool] = {
+        "auth":    bool(cfg.brain_api_key or cfg.supabase_service_role_key),
+        "broker":  bool(cfg.alpaca_api_key and cfg.alpaca_secret_key),
+        "supabase": bool(cfg.supabase_url and cfg.supabase_service_role_key),
+    }
+    degraded = [k for k, v in checks.items() if not v]
+    status = "degraded" if degraded else "ok"
+    return {
+        "status":    status,
+        "checks":    checks,
+        "degraded":  degraded,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
 
 
 # ── Dynamic risk config endpoints ─────────────────────────────────────────────

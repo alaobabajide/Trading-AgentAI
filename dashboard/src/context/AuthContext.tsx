@@ -44,7 +44,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setActiveToken(session?.access_token ?? null);
     });
 
-    return () => subscription.unsubscribe();
+    // Central 401 interceptor — api.ts dispatches "ta:auth401" when any API
+    // call receives a 401, meaning the token was rejected by the backend.
+    // Sign out immediately so the login screen appears rather than silent failures.
+    const handle401 = () => { supabase.auth.signOut(); };
+    window.addEventListener("ta:auth401", handle401);
+
+    return () => {
+      subscription.unsubscribe();
+      window.removeEventListener("ta:auth401", handle401);
+    };
   }, []);
 
   return (

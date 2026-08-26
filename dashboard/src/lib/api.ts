@@ -46,7 +46,16 @@ export function apiHeaders(extra?: Record<string, string>): Record<string, strin
   return { ...extra };
 }
 
+// ── Central 401 interceptor ───────────────────────────────────────────────────
+// When any API call receives a 401, the Supabase token has expired or been
+// revoked. We dispatch a custom event so AuthContext can sign the user out
+// cleanly — api.ts never imports Supabase directly to avoid circular deps.
+function _handle401(): void {
+  try { window.dispatchEvent(new Event("ta:auth401")); } catch {}
+}
+
 async function safeJson<T>(res: Response): Promise<T> {
+  if (res.status === 401) { _handle401(); throw new Error("Session expired — please log in again"); }
   const text = await res.text();
   if (!text) throw new Error(`Empty response (HTTP ${res.status})`);
   return JSON.parse(text) as T;
@@ -54,7 +63,7 @@ async function safeJson<T>(res: Response): Promise<T> {
 
 // ── Raw fetchers ──────────────────────────────────────────────────────────────
 
-export async function fetchHealth(): Promise<{ status: string }> {
+export async function fetchHealth(): Promise<{ status: string; degraded?: string[] }> {
   const res = await fetch(`${BASE}/health`, {
     signal: AbortSignal.timeout(5000),
     headers: apiHeaders(),
@@ -914,21 +923,27 @@ export function useApiUsage() {
   return usage;
 }
 
+export type BrainHealthState = "online" | "degraded" | "offline" | null;
+
 /**
  * Polls /api/health every 30s to drive the "Brain live" indicator.
+ * Returns "online" (all checks pass), "degraded" (up but missing config),
+ * "offline" (unreachable), or null (not yet checked).
  */
 export function useBrainHealth() {
-  const [online, setOnline] = useState<boolean | null>(null);
+  const [state, setState] = useState<BrainHealthState>(null);
 
   useEffect(() => {
     let cancelled = false;
 
     async function check() {
       try {
-        await fetchHealth();
-        if (!cancelled) setOnline(true);
+        const health = await fetchHealth();
+        if (cancelled) return;
+        if (health.status === "ok") setState("online");
+        else setState("degraded");
       } catch {
-        if (!cancelled) setOnline(false);
+        if (!cancelled) setState("offline");
       }
     }
 
@@ -937,7 +952,7 @@ export function useBrainHealth() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  return online;
+  return state;
 }
 
 // ── LLM provider / model settings ────────────────────────────────────────────
@@ -1842,7 +1857,7 @@ export async function fetchKrakenSettings(): Promise<KrakenSettings> {
 
 export async function saveKrakenSettings(api_key: string, api_secret: string): Promise<void> {
   const res = await fetch(`${BASE}/kraken-settings`, {
-    method: "POST", headers: apiHeaders(),
+    method: "POST", headers: apiHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ api_key, api_secret }),
   });
   if (!res.ok) throw new Error(`Save failed: ${res.status}`);
@@ -1903,7 +1918,7 @@ export async function fetchCoinbaseSettings(): Promise<CoinbaseSettings> {
 
 export async function saveCoinbaseSettings(api_key_name: string, private_key: string): Promise<void> {
   const res = await fetch(`${BASE}/coinbase-settings`, {
-    method: "POST", headers: apiHeaders(),
+    method: "POST", headers: apiHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ api_key_name, private_key }),
   });
   if (!res.ok) throw new Error(`Save failed: ${res.status}`);
@@ -1973,7 +1988,7 @@ export async function fetchTradeStationAuthUrl(): Promise<string> {
 
 export async function setTradeStationAccount(account_number: string): Promise<void> {
   const res = await fetch(`${BASE}/tradestation-settings/account`, {
-    method: "POST", headers: apiHeaders(),
+    method: "POST", headers: apiHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ account_number }),
   });
   if (!res.ok) throw new Error(`Account save failed: ${res.status}`);

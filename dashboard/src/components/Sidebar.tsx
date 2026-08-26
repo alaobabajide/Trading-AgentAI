@@ -26,19 +26,21 @@ const NAV: { id: Page; label: string; icon: typeof LayoutDashboard; group?: stri
 ];
 
 export function Sidebar({ active, onNav }: Props) {
-  const brainOnline = useBrainHealth();
+  const brainHealth = useBrainHealth();
 
-  // null = still checking, true = online, false = offline
   const dotColor =
-    brainOnline === null  ? "bg-slate-400" :
-    brainOnline           ? "bg-emerald-500" :
-                            "bg-red-500";
+    brainHealth === null       ? "bg-slate-400" :
+    brainHealth === "online"   ? "bg-emerald-500" :
+    brainHealth === "degraded" ? "bg-amber-500" :
+                                 "bg-red-500";
   const pingColor =
-    brainOnline === true ? "bg-emerald-400" : "bg-red-400";
+    brainHealth === "online"   ? "bg-emerald-400" :
+    brainHealth === "degraded" ? "bg-amber-400" : "bg-red-400";
   const label =
-    brainOnline === null  ? "Checking…" :
-    brainOnline           ? "Brain live" :
-                            "Brain offline";
+    brainHealth === null       ? "Checking…" :
+    brainHealth === "online"   ? "Brain live" :
+    brainHealth === "degraded" ? "Brain degraded" :
+                                 "Brain offline";
 
   return (
     <aside className="w-56 shrink-0 glass border-r border-white/5 flex flex-col py-6 px-3">
@@ -88,7 +90,7 @@ export function Sidebar({ active, onNav }: Props) {
       <div className="px-3 mt-4">
         <div className="glass rounded-xl px-3 py-2.5 flex items-center gap-2">
           <span className="relative flex h-2 w-2">
-            {brainOnline && (
+            {(brainHealth === "online" || brainHealth === "degraded") && (
               <span className={clsx("animate-ping absolute inline-flex h-full w-full rounded-full opacity-75", pingColor)} />
             )}
             <span className={clsx("relative inline-flex rounded-full h-2 w-2", dotColor)} />
