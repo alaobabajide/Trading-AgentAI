@@ -315,8 +315,14 @@ def list_history(
     offset: int = 0,
 ) -> list[dict]:
     _init_db()
-    clauses = ["user_id = ?"]
-    params: list = [user_id]
+    # Orchestrator signals are stored as user_id="system". Include them for every
+    # authenticated user so the Signal History tab shows auto-generated signals.
+    if user_id and user_id != "system":
+        clauses = ["(user_id = ? OR user_id = 'system')"]
+        params: list = [user_id]
+    else:
+        clauses = ["user_id = ?"]
+        params: list = [user_id]
     if symbol:
         clauses.append("symbol = ?")
         params.append(symbol.upper())
@@ -366,6 +372,13 @@ def get_leaderboard(user_id: str, group_by: str = "tier") -> list[dict]:
     if group_by not in allowed:
         group_by = "tier"
 
+    if user_id and user_id != "system":
+        user_clause = "(user_id = ? OR user_id = 'system')"
+        uid_params = (user_id,)
+    else:
+        user_clause = "user_id = ?"
+        uid_params = (user_id,)
+
     with _conn() as con:
         rows = con.execute(
             f"""
@@ -380,12 +393,12 @@ def get_leaderboard(user_id: str, group_by: str = "tier") -> list[dict]:
                 ROUND(AVG(confidence), 4)                      AS avg_confidence,
                 ROUND(AVG(votes_for),  2)                      AS avg_votes
             FROM signal_history
-            WHERE user_id = ?
+            WHERE {user_clause}
               AND action != 'HOLD'
             GROUP BY {group_by}
             ORDER BY wins DESC
             """,
-            (user_id,),
+            uid_params,
         ).fetchall()
 
     result = []
@@ -404,10 +417,17 @@ def get_stats(user_id: str) -> dict:
     cutoff_7d  = (now - timedelta(days=7)).isoformat()
     cutoff_30d = (now - timedelta(days=30)).isoformat()
 
+    if user_id and user_id != "system":
+        user_clause = "(user_id = ? OR user_id = 'system')"
+        uid_param = user_id
+    else:
+        user_clause = "user_id = ?"
+        uid_param = user_id
+
     def _window(cutoff: str) -> dict:
         with _conn() as con:
             r = con.execute(
-                """
+                f"""
                 SELECT
                     COUNT(*)                                              AS total,
                     SUM(CASE WHEN action!='HOLD' THEN 1 ELSE 0 END)      AS actionable,
@@ -417,9 +437,9 @@ def get_stats(user_id: str) -> dict:
                     SUM(CASE WHEN tier='WARM' THEN 1 ELSE 0 END)          AS warm,
                     SUM(CASE WHEN tier='COLD' THEN 1 ELSE 0 END)          AS cold
                 FROM signal_history
-                WHERE user_id = ? AND generated_at >= ?
+                WHERE {user_clause} AND generated_at >= ?
                 """,
-                (user_id, cutoff),
+                (uid_param, cutoff),
             ).fetchone()
         d = dict(r)
         resolved = (d["wins"] or 0) + (d["losses"] or 0)
