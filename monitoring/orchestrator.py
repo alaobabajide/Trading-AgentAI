@@ -125,7 +125,8 @@ def _save_recent_entries(entries: dict[str, float]) -> None:
 # ── Loss cooldown persistence ──────────────────────────────────────────────────
 # _loss_history and _loss_cooldown_end are wall-clock (time.time()) so they can
 # be serialised to disk and correctly compared after a restart.
-_LOSS_COOLDOWN_FILE = os.path.join(_DATA_DIR, "ta_loss_cooldown.json")
+_LOSS_COOLDOWN_FILE  = os.path.join(_DATA_DIR, "ta_loss_cooldown.json")
+_COLD_HISTORY_FILE   = os.path.join(_DATA_DIR, "ta_cold_history.json")
 
 
 def _load_loss_cooldown() -> tuple[dict[str, list[float]], dict[str, float]]:
@@ -164,6 +165,32 @@ def _save_loss_cooldown(
             _json.dump({"history": history, "ends": ends}, _f)
     except Exception as exc:
         log.debug("Could not persist loss cooldown state: %s", exc)
+
+
+def _load_cold_history(maxlen: int) -> deque:
+    """Restore the cold-symbol deque from disk; prune any symbols whose cycles are stale."""
+    try:
+        with open(_COLD_HISTORY_FILE) as _f:
+            raw: list[list[str]] = _json.load(_f)
+        d: deque[set[str]] = deque(maxlen=maxlen)
+        for bucket in raw[-maxlen:]:
+            d.append(set(bucket))
+        log.info("Loaded cold history: %d cycle bucket(s), %d unique symbol(s)",
+                 len(d), len(set().union(*d) if d else set()))
+        return d
+    except FileNotFoundError:
+        return deque(maxlen=maxlen)
+    except Exception as exc:
+        log.warning("Could not load cold history: %s — starting fresh", exc)
+        return deque(maxlen=maxlen)
+
+
+def _save_cold_history(history: deque) -> None:
+    try:
+        with open(_COLD_HISTORY_FILE, "w") as _f:
+            _json.dump([list(bucket) for bucket in history], _f)
+    except Exception as exc:
+        log.debug("Could not persist cold history: %s", exc)
 
 
 def _wait_for_brain(url: str, timeout_secs: int = 60) -> bool:
@@ -217,7 +244,7 @@ class Orchestrator:
         # COLD cooldown: symbols that returned HOLD/COLD are skipped for cold_skip_cycles cycles.
         # _cold_history is a deque of the last k cold-symbol sets (one per completed cycle).
         # A symbol in any set in the deque is still within its cooldown window.
-        self._cold_history: deque[set[str]] = deque(maxlen=cfg.cold_skip_cycles)
+        self._cold_history: deque[set[str]] = _load_cold_history(cfg.cold_skip_cycles)
         self._curr_cold_symbols: set[str] = set()
         self._cold_lock = threading.Lock()
         # Trailing stop: tracks highest observed price per open symbol (ratchets upward)
@@ -1114,6 +1141,7 @@ class Orchestrator:
             self._cold_history.appendleft(self._curr_cold_symbols)
             self._curr_cold_symbols = set()
             cooled_count = len(set().union(*self._cold_history))
+            _save_cold_history(self._cold_history)
         if cooled_count:
             log.info("COLD cooldown: %d symbol(s) on cooldown (window = %d cycle(s))",
                      cooled_count, self._cfg.cold_skip_cycles)

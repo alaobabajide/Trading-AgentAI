@@ -2072,6 +2072,72 @@ class DebateOrchestrator:
         atr_pct = indicators.get("atr_14", 0.0) / price
         _regime_tracker.record_atr(atr_pct)
 
+        # ── Indicator pre-filter (live mode only) ─────────────────────────────
+        # Run the zero-cost paper-mode rules before firing 26 LLM agents.
+        # If every rule-based agent votes HOLD *and* there is no fresh news,
+        # the LLM debate is skipped — the LLM can't improve on a technically
+        # neutral symbol with no catalyst.  News present → always escalate,
+        # because the SentimentAnalyst reads real headlines the rules can't see.
+        if not paper_mode:
+            _pf_regime_ctx = {"symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators}
+            _pf_analyst: dict[str, str] = {
+                "regime":          self._regime.analyse(_pf_regime_ctx),
+                "technical":       _paper_technical(indicators),
+                "quant":           _paper_quant(indicators),
+                "fundamental":     _paper_fundamental(indicators),
+                "options_flow":    _paper_options_flow(indicators),
+                "macro":           _paper_macro(indicators),
+                "sentiment":       _paper_sentiment(indicators),
+                "breakout":        _paper_breakout(indicators),
+                "trend_strength":  _paper_trend_strength(indicators),
+                "sector_rotation": _paper_sector_rotation(indicators),
+                "earnings_event":  _paper_earnings_event(indicators),
+                "momentum_scorer": _paper_momentum_scorer(indicators),
+                "supply_demand":   _paper_supply_demand(indicators),
+                "volume_analyst":  _paper_volume_analyst(indicators),
+                "risk_reward":     _paper_risk_reward(indicators),
+            }
+            _pf_investor: dict[str, str] = {
+                "buffett":       _paper_investor_buffett(indicators),
+                "munger":        _paper_investor_munger(indicators),
+                "lynch":         _paper_investor_lynch(indicators),
+                "ackman":        _paper_investor_ackman(indicators),
+                "cohen":         _paper_investor_cohen(indicators),
+                "dalio":         _paper_investor_dalio(indicators),
+                "wood":          _paper_investor_wood(indicators),
+                "bogle":         _paper_investor_bogle(indicators),
+                "soros":         _paper_investor_soros(indicators),
+                "druckenmiller": _paper_investor_druckenmiller(indicators),
+                "simons":        _paper_investor_simons(indicators),
+                "templeton":     _paper_investor_templeton(indicators),
+            }
+            _pf_a, _pf_b, _pf_combined, _pf_conflict, _, _pf_b_abstaining = (
+                _aggregate_dual_panel(_pf_analyst, _pf_investor, asset_class)
+            )
+            _pf_action = _action_from_votes(
+                _pf_combined, panels_conflict=_pf_conflict, threshold=WARM_MIN_VOTES
+            )
+            _has_news = len(sentiment.items) > 0
+            if _pf_action == "HOLD" and not _has_news:
+                log.info(
+                    "Pre-filter: %s rule-based=HOLD no-news → 0 LLM calls (votes=%s)",
+                    symbol, _pf_combined,
+                )
+                return TradingSignal(
+                    symbol=symbol, asset_class=asset_class,
+                    action="HOLD", confidence=0.0,
+                    rationale=(
+                        "No directional signal across all technical and investor lenses "
+                        "and no news catalyst this cycle."
+                    ),
+                    tier="COLD",
+                    vote_tally=_pf_combined,
+                    votes_for_action=0,
+                    regime_label=_parse_regime_label(_pf_analyst.get("regime", "")),
+                    panel_a_votes=_pf_a,
+                    panel_b_votes=_pf_b,
+                )
+
         # Both panels share the same underlying indicator dict;
         # each agent reads only its declared keys (enforced by agent prompt / paper logic).
         analyst_views: dict[str, str] = {}   # Panel A
@@ -2126,6 +2192,11 @@ class DebateOrchestrator:
             cache_key        = f"{symbol}:strategic"
             cached_strategic = _cache.get(cache_key)
 
+            # Trimmed bar slices — indicators already capture the full history;
+            # raw bars are supplementary context only.
+            _bars_20 = bars_dicts[-20:]
+            _bars_30 = bars_dicts[-30:]
+
             regime_ctx = {"symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators}
 
             # Quick deterministic regime estimate for Dalio context (before agents fire)
@@ -2144,7 +2215,7 @@ class DebateOrchestrator:
 
             macro_ctx  = {
                 "symbol": symbol, "asset_class": asset_class,
-                "bars_last_60": bars_dicts, "indicators": indicators,
+                "bars_last_60": _bars_30, "indicators": indicators,
                 "portfolio_equity": portfolio.equity,
                 "daily_pnl_pct": portfolio.daily_pnl_pct,
                 # Real macro data from FRED
@@ -2197,13 +2268,13 @@ class DebateOrchestrator:
             panel_a_tasks: dict[str, tuple[Any, dict]] = {
                 "fundamental": (self._fundamental.analyse, {
                     "symbol": symbol, "asset_class": asset_class,
-                    "bars_last_60": bars_dicts,
+                    "bars_last_60": _bars_30,
                     "fundamentals": yf_fundamentals,    # real P/E, EPS, margins etc.
                     "onchain": onchain.__dict__ if onchain else {},
                     "portfolio_equity": portfolio.equity,
                 }),
                 "technical": (self._technical.analyse, {
-                    "symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators,
+                    "symbol": symbol, "bars_last_60": _bars_20, "indicators": indicators,
                 }),
                 "sentiment": (self._sentiment_agent.analyse, {
                     "symbol": symbol,
@@ -2213,10 +2284,10 @@ class DebateOrchestrator:
                     ],
                 }),
                 "quant": (self._quant.analyse, {
-                    "symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators,
+                    "symbol": symbol, "bars_last_60": _bars_20, "indicators": indicators,
                 }),
                 "options_flow": (self._options_flow.analyse, {
-                    "symbol": symbol, "bars_last_60": bars_dicts, "indicators": indicators,
+                    "symbol": symbol, "bars_last_60": _bars_20, "indicators": indicators,
                     # Real options chain data: put/call ratio + ATM IV (cached 30 min)
                     **_fetch_options_data(symbol),
                 }),
@@ -2364,70 +2435,83 @@ class DebateOrchestrator:
                 "position sizing. Trade aligns with technical indicators."
             )
         else:
-            # Key indicators passed to synthesis agents for richer, specific rationales
-            _key_ind = {k: indicators.get(k) for k in (
-                "price", "rsi_14", "macd", "macd_signal", "atr_14",
-                "sma_20", "sma_50", "sma_200", "volume_ratio",
-                "high_proximity", "roc_20",
-            )}
+            if action == "HOLD":
+                # Synthesis agents can only downgrade — they cannot improve a HOLD.
+                # Skip both LLM calls entirely and return deterministic defaults.
+                log.info("Synthesis skipped for %s: panel vote=HOLD (0 DeepSeek calls)", symbol)
+                risk_raw = json.dumps({
+                    "action": "HOLD", "confidence": 0.0,
+                    "rationale": "Panel vote consensus: HOLD — no directional signal.",
+                    "suggested_position_pct": 0.0,
+                    "stop_loss_pct": self._stop_loss_pct,
+                    "take_profit_pct": self._take_profit_pct,
+                    "devil_advocate_score": 0, "devil_advocate_case": "",
+                })
+                strategy_view = "ALIGNED"
+            else:
+                # Key indicators passed to synthesis agents — vote tally is sufficient;
+                # individual agent opinions are excluded to reduce input token cost.
+                _key_ind = {k: indicators.get(k) for k in (
+                    "price", "rsi_14", "macd", "macd_signal", "atr_14",
+                    "sma_20", "sma_50", "sma_200", "volume_ratio",
+                    "high_proximity", "roc_20",
+                )}
 
-            risk_ctx = {
-                "symbol": symbol, "asset_class": asset_class,
-                "action_from_votes": action,
-                "vote_tally":        combined_tally,
-                "panel_a_votes":     panel_a_tally,
-                "panel_b_votes":     panel_b_tally,
-                "panels_conflict":   panels_conflict,
-                "analyst_opinions":  {**analyst_views, **investor_views},
-                "key_indicators":    _key_ind,
-                "portfolio": {
-                    "equity":                portfolio.equity,
-                    "daily_pnl_pct":         portfolio.daily_pnl_pct,
-                    "crypto_allocation_pct": portfolio.crypto_allocation_pct,
-                },
-                "risk_limits": {
-                    "max_position_pct":         self._max_pos,
-                    "max_crypto_pct":           self._max_crypto,
-                    "circuit_breaker_drawdown": self._cb_drawdown,
-                },
-            }
-            strategy_ctx = {
-                "market_analysis": {
-                    "symbol":          symbol,
-                    "action":          action,
-                    "vote_tally":      combined_tally,
-                    "panel_a_votes":   panel_a_tally,
-                    "panel_b_votes":   panel_b_tally,
-                    "panels_conflict": panels_conflict,
-                    "analyst_opinions": {**analyst_views, **investor_views},
-                },
-                "key_indicators": _key_ind,
-                "trader_profile": profile,
-                "portfolio": {
-                    "equity": portfolio.equity, "daily_pnl_pct": portfolio.daily_pnl_pct,
-                },
-            }
+                risk_ctx = {
+                    "symbol": symbol, "asset_class": asset_class,
+                    "action_from_votes": action,
+                    "vote_tally":        combined_tally,
+                    "panel_a_votes":     panel_a_tally,
+                    "panel_b_votes":     panel_b_tally,
+                    "panels_conflict":   panels_conflict,
+                    "key_indicators":    _key_ind,
+                    "portfolio": {
+                        "equity":                portfolio.equity,
+                        "daily_pnl_pct":         portfolio.daily_pnl_pct,
+                        "crypto_allocation_pct": portfolio.crypto_allocation_pct,
+                    },
+                    "risk_limits": {
+                        "max_position_pct":         self._max_pos,
+                        "max_crypto_pct":           self._max_crypto,
+                        "circuit_breaker_drawdown": self._cb_drawdown,
+                    },
+                }
+                strategy_ctx = {
+                    "market_analysis": {
+                        "symbol":          symbol,
+                        "action":          action,
+                        "vote_tally":      combined_tally,
+                        "panel_a_votes":   panel_a_tally,
+                        "panel_b_votes":   panel_b_tally,
+                        "panels_conflict": panels_conflict,
+                    },
+                    "key_indicators": _key_ind,
+                    "trader_profile": profile,
+                    "portfolio": {
+                        "equity": portfolio.equity, "daily_pnl_pct": portfolio.daily_pnl_pct,
+                    },
+                }
 
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                risk_future     = pool.submit(self._risk.analyse, risk_ctx)
-                strategy_future = pool.submit(self._strategy.analyse, strategy_ctx)
-                try:
-                    risk_raw = risk_future.result()
-                except Exception as exc:
-                    log.error("Risk manager failed: %s", exc)
-                    risk_raw = json.dumps({
-                        "action": action, "confidence": 0.0,
-                        "rationale": f"Risk manager error: {exc}",
-                        "suggested_position_pct": self._max_pos,
-                        "stop_loss_pct": self._stop_loss_pct,
-                        "take_profit_pct": self._take_profit_pct,
-                        "devil_advocate_score": 0, "devil_advocate_case": "",
-                    })
-                try:
-                    strategy_view = strategy_future.result()
-                except Exception as exc:
-                    log.error("Strategy coach failed: %s", exc)
-                    strategy_view = "ALIGNED"
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    risk_future     = pool.submit(self._risk.analyse, risk_ctx)
+                    strategy_future = pool.submit(self._strategy.analyse, strategy_ctx)
+                    try:
+                        risk_raw = risk_future.result()
+                    except Exception as exc:
+                        log.error("Risk manager failed: %s", exc)
+                        risk_raw = json.dumps({
+                            "action": action, "confidence": 0.0,
+                            "rationale": f"Risk manager error: {exc}",
+                            "suggested_position_pct": self._max_pos,
+                            "stop_loss_pct": self._stop_loss_pct,
+                            "take_profit_pct": self._take_profit_pct,
+                            "devil_advocate_score": 0, "devil_advocate_case": "",
+                        })
+                    try:
+                        strategy_view = strategy_future.result()
+                    except Exception as exc:
+                        log.error("Strategy coach failed: %s", exc)
+                        strategy_view = "ALIGNED"
 
         try:
             parsed = json.loads(_strip_fences(risk_raw))
