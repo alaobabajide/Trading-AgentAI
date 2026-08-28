@@ -480,11 +480,14 @@ class Orchestrator:
             symbol, action, confidence, tier, votes_for, conflict,
         )
 
-        # Always cache latest thresholds from the signal (used by position monitor)
-        sl_pct = sig.get("stop_loss_pct",  self._cfg.stop_loss_pct)
-        tp_pct = sig.get("take_profit_pct", self._cfg.take_profit_pct)
-        with self._pos_thresholds_lock:
-            self._pos_thresholds[symbol] = (sl_pct, tp_pct)
+        # Only write thresholds on BUY — HOLD/SELL/COLD must never overwrite the
+        # ATR-calibrated stop that was set at entry, or positions get silently
+        # tightened to the 2% config default on the very next HOLD cycle.
+        if action == "BUY":
+            sl_pct = sig.get("stop_loss_pct",  self._cfg.stop_loss_pct)
+            tp_pct = sig.get("take_profit_pct", self._cfg.take_profit_pct)
+            with self._pos_thresholds_lock:
+                self._pos_thresholds[symbol] = (sl_pct, tp_pct)
 
         # ── Gate 4: only act on WARM or HOT signals ───────────────────────────
         if action == "HOLD" or tier == "COLD":
@@ -825,7 +828,10 @@ class Orchestrator:
                     _has_child_orders = any(
                         str(_o.symbol) == symbol
                         and str(_o.order_type) in ("stop", "stop_limit", "limit")
-                        and str(_o.status) in ("new", "held", "accepted")
+                        and str(_o.status) in (
+                            "new", "held", "accepted",
+                            "partially_filled", "pending_replace",
+                        )
                         for _o in _open_orders
                     )
                 except Exception as _oe:
@@ -887,7 +893,6 @@ class Orchestrator:
                 if current_price > 0:
                     peak = self._trailing_peaks.get(symbol, current_price)
                     if current_price > peak:
-                        self._trailing_peaks[symbol] = current_price
                         new_stop = round(current_price * (1 - self._trailing_pct), 2)
                         try:
                             orders = self._alpaca_client.get_orders()
@@ -900,6 +905,11 @@ class Orchestrator:
                                         order.id,
                                         ReplaceOrderRequest(stop_price=new_stop),
                                     )
+                                    # Only advance the peak after the order is confirmed —
+                                    # if replace_order_by_id throws, the old stop is still live
+                                    # and the peak must stay at its prior value so the next
+                                    # cycle retries the ratchet.
+                                    self._trailing_peaks[symbol] = current_price
                                     log.info(
                                         "Trailing stop updated: %s peak=%.2f new_stop=%.2f",
                                         symbol, current_price, new_stop,
