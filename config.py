@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     # ── ATR stop sizing ───────────────────────────────────────────────────────
     atr_multiplier: float = Field(1.5, env="ATR_MULTIPLIER")               # stop = atr_multiplier × ATR14
     atr_stop_floor: float = Field(0.005, env="ATR_STOP_FLOOR")             # minimum stop distance (0.5%)
-    atr_stop_cap: float = Field(0.025, env="ATR_STOP_CAP")                 # maximum stop distance (2.5%)
+    atr_stop_cap: float = Field(0.030, env="ATR_STOP_CAP")                 # maximum stop distance (3.0%)
 
     # ── Circuit breaker / drawdown ────────────────────────────────────────────
     circuit_breaker_drawdown: float = Field(0.10, env="CIRCUIT_BREAKER_DRAWDOWN")
@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     # ── Loss cooldown ─────────────────────────────────────────────────────────
     loss_cooldown_hits: int = Field(2, env="LOSS_COOLDOWN_HITS")           # stop-loss hits to trigger cooldown
     loss_cooldown_window_days: int = Field(5, env="LOSS_COOLDOWN_WINDOW_DAYS")
-    loss_cooldown_skip_cycles: int = Field(2, env="LOSS_COOLDOWN_SKIP_CYCLES")
+    loss_cooldown_skip_cycles: int = Field(6, env="LOSS_COOLDOWN_SKIP_CYCLES")
 
     # ── Security ──────────────────────────────────────────────────────────────
     brain_api_key: str = Field("", env="BRAIN_API_KEY")  # required — set in Railway

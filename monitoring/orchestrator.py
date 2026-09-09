@@ -420,8 +420,12 @@ class Orchestrator:
         _has_open_pos = any(p.symbol == symbol for p in portfolio.positions)
 
         # ── Gate 1: circuit breaker + intermediate drawdown defence ──────────
+        # Use the most-recent live equity (updated every 1 min by _refresh_portfolio_metrics)
+        # rather than portfolio.equity from the cycle-start snapshot (30 min stale).
+        # This catches intra-cycle stop-outs so Gate 1 responds to real-time losses.
+        _live_equity = self._last_portfolio_equity if self._last_portfolio_equity > 0 else portfolio.equity
         if self._peak_equity > 0:
-            drawdown = (self._peak_equity - portfolio.equity) / self._peak_equity
+            drawdown = (self._peak_equity - _live_equity) / self._peak_equity
             if drawdown >= self._cfg.circuit_breaker_drawdown:
                 if not _has_open_pos:
                     # No position to protect — skip signal entirely.
@@ -526,6 +530,16 @@ class Orchestrator:
             log.info("  → %s for %s (tier=%s) — no order submitted", action, symbol, tier)
             with self._cold_lock:
                 self._curr_cold_symbols.add(symbol)
+            return
+
+        # ── Gate 4b: confidence gate — BUY only ──────────────────────────────
+        # Low-confidence BUY signals deploy capital into weak-conviction setups.
+        # SELL is never gated on confidence — we always want to be able to exit.
+        if action == "BUY" and confidence < self._cfg.signal_confidence_threshold:
+            log.info(
+                "  → BUY skipped for %s — confidence %.2f < threshold %.2f",
+                symbol, confidence, self._cfg.signal_confidence_threshold,
+            )
             return
 
         # ── Gate 3 (order execution guard): market hours for stocks ──────────
