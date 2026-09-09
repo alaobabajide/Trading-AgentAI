@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     # ── ATR stop sizing ───────────────────────────────────────────────────────
     atr_multiplier: float = Field(1.5, env="ATR_MULTIPLIER")               # stop = atr_multiplier × ATR14
     atr_stop_floor: float = Field(0.005, env="ATR_STOP_FLOOR")             # minimum stop distance (0.5%)
-    atr_stop_cap: float = Field(0.04, env="ATR_STOP_CAP")                  # maximum stop distance (4.0%)
+    atr_stop_cap: float = Field(0.025, env="ATR_STOP_CAP")                 # maximum stop distance (2.5%)
 
     # ── Circuit breaker / drawdown ────────────────────────────────────────────
     circuit_breaker_drawdown: float = Field(0.10, env="CIRCUIT_BREAKER_DRAWDOWN")

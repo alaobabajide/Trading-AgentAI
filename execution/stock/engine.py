@@ -81,13 +81,15 @@ class StockExecutionEngine:
             log.info("HOLD signal for %s — no order submitted", signal.symbol)
             return None
 
-        risk = self._get_risk()
-        if risk.is_triggered:
-            log.warning("Circuit breaker active — refusing to execute %s", signal.symbol)
-            return None
-
+        # SELL closes an existing position — always allow it regardless of circuit
+        # breaker state.  The breaker must never prevent us from exiting losers.
         if signal.action == "SELL":
             return self._broker.close_position(signal.symbol)
+
+        risk = self._get_risk()
+        if risk.is_triggered:
+            log.warning("Circuit breaker active — refusing to execute BUY for %s", signal.symbol)
+            return None
 
         # BUY: size the position then submit a bracket order
         current_price = bars_closes[-1] if bars_closes else 0.0

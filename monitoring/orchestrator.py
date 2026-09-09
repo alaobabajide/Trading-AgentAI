@@ -414,11 +414,37 @@ class Orchestrator:
             return False  # assume no position if check fails
 
     def _process_symbol(self, symbol: str, asset_class: str, portfolio: PortfolioState) -> None:
-        # ── Gate 1: circuit breaker ───────────────────────────────────────────
+        # Compute open-position flag early — used in Gate 1 and later in the payload.
+        # Symbols we hold must be allowed to generate SELL signals even when drawdown
+        # gates would block new entries, so this needs to precede all drawdown checks.
+        _has_open_pos = any(p.symbol == symbol for p in portfolio.positions)
+
+        # ── Gate 1: circuit breaker + intermediate drawdown defence ──────────
         if self._peak_equity > 0:
             drawdown = (self._peak_equity - portfolio.equity) / self._peak_equity
             if drawdown >= self._cfg.circuit_breaker_drawdown:
-                log.info("SKIP %s — circuit breaker active (drawdown=%.1f%%)", symbol, drawdown * 100)
+                if not _has_open_pos:
+                    # No position to protect — skip signal entirely.
+                    log.info(
+                        "SKIP %s — circuit breaker active (drawdown=%.1f%%)",
+                        symbol, drawdown * 100,
+                    )
+                    return
+                # We hold this symbol: allow signal processing so a SELL can fire.
+                log.info(
+                    "CB active (drawdown=%.1f%%) — %s has open position, "
+                    "allowing SELL signal check",
+                    drawdown * 100, symbol,
+                )
+            elif drawdown >= self._cfg.drawdown_scale_threshold and not _has_open_pos:
+                # Intermediate drawdown tier: portfolio is under stress but below the
+                # full circuit-breaker threshold.  Block all NEW entries; existing
+                # positions still receive signal checks (SELL signals can still fire).
+                log.info(
+                    "SKIP %s — intermediate drawdown (%.1f%% >= %.0f%% threshold) "
+                    "— no new positions until equity recovers",
+                    symbol, drawdown * 100, self._cfg.drawdown_scale_threshold * 100,
+                )
                 return
 
         # ── Gate 2: kill switch ───────────────────────────────────────────────
@@ -439,11 +465,6 @@ class Orchestrator:
         if time.time() < cooldown_end:
             log.info("SKIP %s — loss cooldown active (too many stop-loss hits recently)", symbol)
             return
-
-        # Check whether we already hold this symbol — the brain uses this to bypass
-        # the indicator pre-filter so SELL signals can still reach the LLM even
-        # when the rule-based vote falls short of the 13-agent threshold.
-        _has_open_pos = any(p.symbol == symbol for p in portfolio.positions)
 
         payload = {
             "symbol":           symbol,
