@@ -2045,6 +2045,7 @@ class DebateOrchestrator:
         portfolio: PortfolioState,
         user_profile: dict | None = None,
         paper_mode: bool = False,
+        has_open_position: bool = False,
     ) -> TradingSignal:
         symbol      = market.symbol
         asset_class = market.asset_class
@@ -2118,7 +2119,10 @@ class DebateOrchestrator:
                 _pf_combined, panels_conflict=_pf_conflict, threshold=WARM_MIN_VOTES
             )
             _has_news = len(sentiment.items) > 0
-            if _pf_action == "HOLD" and not _has_news:
+            # Always run the full LLM when we hold an open position — even a
+            # rule-based HOLD may hide a moderately bearish setup (9–12 bearish
+            # votes, below the 13-vote threshold) that the LLM can call SELL on.
+            if _pf_action == "HOLD" and not _has_news and not has_open_position:
                 log.info(
                     "Pre-filter: %s rule-based=HOLD no-news → 0 LLM calls (votes=%s)",
                     symbol, _pf_combined,

@@ -376,6 +376,7 @@ class SignalRequest(BaseModel):
     asset_class: str = Field(..., description="'stock' or 'crypto'")
     lookback_days: int = Field(300, ge=61, le=400)
     paper_mode: bool = Field(True, description="True = rule-based analysis (no API credits); False = full LLM debate")
+    has_open_position: bool = Field(False, description="True when the orchestrator already holds this symbol — bypasses the pre-filter so SELL signals can still be generated")
 
 
 class SignalResponse(BaseModel):
@@ -2467,6 +2468,7 @@ def generate_signal(req: SignalRequest, request: Request):
         signal = orchestrator.run(
             market, sentiment_bundle, onchain_snap, portfolio_state,
             paper_mode=effective_paper_mode,
+            has_open_position=req.has_open_position,
         )
     except Exception as exc:
         log.error("Debate failed: %s", exc, exc_info=True)

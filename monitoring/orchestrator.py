@@ -226,6 +226,10 @@ class Orchestrator:
             AlpacaBrokerAdapter(cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url)
         )
 
+        # Most-recent portfolio equity — updated by _refresh_portfolio_metrics every minute.
+        # Used by _monitor_positions to compute live drawdown for circuit-breaker force-close.
+        self._last_portfolio_equity: float = 0.0
+
         # Singleton Alpaca client — reused across all market-hour checks and position checks
         self._alpaca_client = None
         if cfg.alpaca_api_key and cfg.alpaca_secret_key:
@@ -294,6 +298,7 @@ class Orchestrator:
         daily_pnl_pct_gauge.set(portfolio.daily_pnl_pct)
         crypto_allocation_gauge.set(portfolio.crypto_allocation_pct * 100)
 
+        self._last_portfolio_equity = portfolio.equity
         if portfolio.equity > self._peak_equity:
             self._peak_equity = portfolio.equity
             _save_peak_equity(self._peak_equity)
@@ -435,11 +440,17 @@ class Orchestrator:
             log.info("SKIP %s — loss cooldown active (too many stop-loss hits recently)", symbol)
             return
 
+        # Check whether we already hold this symbol — the brain uses this to bypass
+        # the indicator pre-filter so SELL signals can still reach the LLM even
+        # when the rule-based vote falls short of the 13-agent threshold.
+        _has_open_pos = any(p.symbol == symbol for p in portfolio.positions)
+
         payload = {
-            "symbol":        symbol,
-            "asset_class":   asset_class,
-            "lookback_days": self._lookback_days,
-            "paper_mode":    self._paper_mode,
+            "symbol":           symbol,
+            "asset_class":      asset_class,
+            "lookback_days":    self._lookback_days,
+            "paper_mode":       self._paper_mode,
+            "has_open_position": _has_open_pos,
         }
         start = time.monotonic()
         try:
@@ -817,25 +828,64 @@ class Orchestrator:
             elif plpc <= -sl_pct:
                 reason = f"STOP LOSS (down {plpc*100:.2f}% <= -{sl_pct*100:.1f}%)"
 
+            # Circuit-breaker escalation: when the portfolio is in deep drawdown, force-close
+            # every losing position regardless of its individual stop-loss threshold.
+            # This stops the portfolio from continuing to bleed after the circuit breaker fires.
+            _portfolio_drawdown = (
+                (self._peak_equity - self._last_portfolio_equity) / self._peak_equity
+                if self._peak_equity > 0 and self._last_portfolio_equity > 0
+                else 0.0
+            )
+            _cb_force_close = (
+                _portfolio_drawdown >= self._cfg.circuit_breaker_drawdown
+                and plpc < 0
+                and not reason   # not already being closed by its own stop/TP
+            )
+            if _cb_force_close:
+                reason = (
+                    f"CIRCUIT BREAKER FORCE-CLOSE "
+                    f"(portfolio drawdown {_portfolio_drawdown*100:.1f}% >= "
+                    f"{self._cfg.circuit_breaker_drawdown*100:.0f}% limit, "
+                    f"position down {plpc*100:.2f}%)"
+                )
+                log.warning("  %s: %s", symbol, reason)
+
             if reason:
-                # Guard: skip manual close when Alpaca bracket child orders are still active.
-                # Active stop/limit child orders already handle exit via OCO; a duplicate
-                # close_position() call creates conflicting market orders and may cause
-                # a rejected or partial fill.
+                # Circuit-breaker path: cancel bracket child orders first so the market
+                # close does not conflict with Alpaca's OCO.  Normal stop/TP path uses
+                # the guard below instead.
                 _has_child_orders = False
-                try:
-                    _open_orders = self._alpaca_client.get_orders()
-                    _has_child_orders = any(
-                        str(_o.symbol) == symbol
-                        and str(_o.order_type) in ("stop", "stop_limit", "limit")
-                        and str(_o.status) in (
-                            "new", "held", "accepted",
-                            "partially_filled", "pending_replace",
+                if _cb_force_close:
+                    try:
+                        _open_orders = self._alpaca_client.get_orders()
+                        for _cb_ord in _open_orders:
+                            if (str(_cb_ord.symbol) == symbol
+                                    and str(_cb_ord.order_type) in ("stop", "stop_limit", "limit")
+                                    and str(_cb_ord.status) in (
+                                        "new", "held", "accepted",
+                                        "partially_filled", "pending_replace",
+                                    )):
+                                self._alpaca_client.cancel_order_by_id(_cb_ord.id)
+                                log.info("  CB: cancelled child order %s for %s", _cb_ord.id, symbol)
+                    except Exception as _ce:
+                        log.debug("CB: could not cancel child orders for %s: %s", symbol, _ce)
+                    # _has_child_orders stays False — proceed straight to close
+                else:
+                    # Normal path: skip manual close when Alpaca bracket child orders are still
+                    # active (OCO will handle the exit; a duplicate close creates a conflict).
+                    try:
+                        _open_orders = self._alpaca_client.get_orders()
+                        _has_child_orders = any(
+                            str(_o.symbol) == symbol
+                            and str(_o.order_type) in ("stop", "stop_limit", "limit")
+                            and str(_o.status) in (
+                                "new", "held", "accepted",
+                                "partially_filled", "pending_replace",
+                            )
+                            for _o in _open_orders
                         )
-                        for _o in _open_orders
-                    )
-                except Exception as _oe:
-                    log.debug("Could not check bracket child orders for %s: %s", symbol, _oe)
+                    except Exception as _oe:
+                        log.debug("Could not check bracket child orders for %s: %s", symbol, _oe)
 
                 if _has_child_orders:
                     log.debug(
