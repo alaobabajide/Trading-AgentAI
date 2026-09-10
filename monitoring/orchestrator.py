@@ -93,6 +93,36 @@ def _save_peak_equity(value: float) -> None:
         log.debug("Could not persist peak equity: %s", exc)
 
 
+# ── Position-threshold persistence ────────────────────────────────────────────
+# _pos_thresholds maps symbol → (stop_loss_pct, take_profit_pct) as set at entry.
+# Without persistence, every Railway redeploy empties this dict and _monitor_positions
+# fires immediately on startup using the config fallback (2% stop), force-closing any
+# position that is currently down more than 2% — regardless of its real ATR stop.
+_POS_THRESHOLDS_FILE = os.path.join(_DATA_DIR, "ta_pos_thresholds.json")
+
+
+def _load_pos_thresholds() -> dict[str, tuple[float, float]]:
+    try:
+        with open(_POS_THRESHOLDS_FILE) as _f:
+            raw: dict[str, list[float]] = _json.load(_f)
+        result = {sym: (float(v[0]), float(v[1])) for sym, v in raw.items() if len(v) == 2}
+        log.info("Loaded %d position threshold(s) from %s", len(result), _POS_THRESHOLDS_FILE)
+        return result
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        log.warning("Could not load position thresholds: %s — using config defaults on monitor", exc)
+        return {}
+
+
+def _save_pos_thresholds(thresholds: dict[str, tuple[float, float]]) -> None:
+    try:
+        with open(_POS_THRESHOLDS_FILE, "w") as _f:
+            _json.dump({sym: list(v) for sym, v in thresholds.items()}, _f)
+    except Exception as exc:
+        log.debug("Could not persist position thresholds: %s", exc)
+
+
 # ── Recent-entry persistence (for Gate 5e bracket stop-out detection) ─────────
 _RECENT_ENTRIES_FILE = os.path.join(_DATA_DIR, "ta_recent_entries.json")
 _RECENT_ENTRIES_TTL  = 4 * 30 * 60  # 4 cycles × 30 min = 120 min max age
@@ -243,7 +273,7 @@ class Orchestrator:
         self._peak_equity: float = _load_peak_equity()
         # Per-symbol thresholds stored from last signal (keyed by symbol)
         # Lock guards concurrent writes from ThreadPoolExecutor workers.
-        self._pos_thresholds: dict[str, tuple[float, float]] = {}  # symbol → (sl_pct, tp_pct)
+        self._pos_thresholds: dict[str, tuple[float, float]] = _load_pos_thresholds()
         self._pos_thresholds_lock = threading.Lock()
         # COLD cooldown: symbols that returned HOLD/COLD are skipped for cold_skip_cycles cycles.
         # _cold_history is a deque of the last k cold-symbol sets (one per completed cycle).
@@ -555,6 +585,7 @@ class Orchestrator:
             tp_pct = sig.get("take_profit_pct", self._cfg.take_profit_pct)
             with self._pos_thresholds_lock:
                 self._pos_thresholds[symbol] = (sl_pct, tp_pct)
+                _save_pos_thresholds(self._pos_thresholds)
 
         # ── Gate 4: asymmetric entry/exit thresholds ─────────────────────────
         #
@@ -1016,6 +1047,7 @@ class Orchestrator:
                         log.info("  ✓ Position closed: %s id=%s", symbol, order.id)
                         with self._pos_thresholds_lock:
                             self._pos_thresholds.pop(symbol, None)
+                            _save_pos_thresholds(self._pos_thresholds)
                         self._trailing_peaks.pop(symbol, None)
                         # Record stop-loss hit for loss-cooldown gate (Phase 3-C)
                         if "STOP LOSS" in reason:
