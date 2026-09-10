@@ -116,6 +116,12 @@ class Settings(BaseSettings):
     # ── COLD cooldown ─────────────────────────────────────────────────────────
     cold_skip_cycles: int = Field(2, env="COLD_SKIP_CYCLES")  # cycles a COLD symbol sits out
 
+    # ── Passive SPY core (core-satellite strategy) ────────────────────────────
+    passive_spy_enabled: bool = Field(False, env="PASSIVE_SPY_ENABLED")      # set True to activate
+    passive_spy_cash_threshold: float = Field(0.35, env="PASSIVE_SPY_CASH_THRESHOLD")  # deploy when cash > 35% of equity
+    passive_spy_max_pct: float = Field(0.60, env="PASSIVE_SPY_MAX_PCT")     # max passive SPY allocation
+    passive_spy_rebalance_band: float = Field(0.05, env="PASSIVE_SPY_REBALANCE_BAND")  # tolerance before rebalancing
+
     # ── Crypto execution ──────────────────────────────────────────────────────
     crypto_cash_buffer: float = Field(0.99, env="CRYPTO_CASH_BUFFER")
     crypto_min_notional_usd: float = Field(1.0, env="CRYPTO_MIN_NOTIONAL_USD")

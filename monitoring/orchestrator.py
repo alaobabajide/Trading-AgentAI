@@ -1303,6 +1303,115 @@ class Orchestrator:
         except Exception as exc:
             log.warning("Daily portfolio snapshot failed (non-fatal): %s", exc)
 
+    # ── Passive SPY core ──────────────────────────────────────────────────────
+
+    def _manage_passive_spy(self, portfolio: "PortfolioState") -> None:
+        """Deploy idle cash into SPY when cash > threshold; liquidate when cash is needed.
+
+        Core-satellite strategy: active signals (HOT trades) are the satellites;
+        SPY is the always-on core that prevents idle cash drag during bull markets.
+        Only runs when PASSIVE_SPY_ENABLED=true in environment config.
+        """
+        cfg = self._cfg
+        equity = portfolio.equity
+        if equity <= 0:
+            return
+
+        cash_ratio = portfolio.cash / equity
+        # Find current SPY position from Alpaca
+        spy_value = 0.0
+        spy_qty   = 0.0
+        try:
+            from alpaca.trading.client import TradingClient
+            from alpaca.trading.requests import GetAssetsRequest
+            is_paper_alpaca = "paper" in cfg.alpaca_base_url.lower()
+            tc = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper_alpaca)
+            try:
+                pos = tc.get_open_position("SPY")
+                spy_value = float(pos.market_value or 0)
+                spy_qty   = float(pos.qty or 0)
+            except Exception:
+                spy_value = 0.0
+                spy_qty   = 0.0
+        except Exception as exc:
+            log.debug("Passive SPY: could not fetch SPY position — %s", exc)
+            return
+
+        spy_ratio   = spy_value / equity
+        target_ratio = min(cfg.passive_spy_max_pct, cash_ratio - 0.05)  # leave 5% cash buffer
+        target_ratio = max(0.0, target_ratio)
+        band         = cfg.passive_spy_rebalance_band
+
+        # Only act if regime is risk-on (no buying passive SPY in a downtrend)
+        if not self._spy_is_uptrend():
+            if spy_qty > 0:
+                log.info("Passive SPY: risk-off regime — liquidating passive SPY position (qty=%.2f)", spy_qty)
+                try:
+                    httpx.post(
+                        f"{self._brain_url}/execute",
+                        json={"symbol": "SPY", "asset_class": "stock", "action": "SELL",
+                              "suggested_position_pct": 0.0, "stop_loss_pct": 0.0, "take_profit_pct": 0.0},
+                        headers={"X-API-Key": cfg.brain_api_key},
+                        timeout=15,
+                    )
+                    log.info("Passive SPY: liquidated in risk-off regime")
+                except Exception as exc:
+                    log.warning("Passive SPY: liquidation failed — %s", exc)
+            return
+
+        # Count active (non-SPY) positions to avoid crowding out trades
+        active_positions = sum(1 for p in portfolio.positions if p.symbol != "SPY")
+        max_passive_pct  = cfg.passive_spy_max_pct
+
+        # Reduce passive target if many active positions are open (preserve cash headroom)
+        if active_positions >= cfg.max_concurrent_positions * 0.7:
+            max_passive_pct = min(max_passive_pct, 0.25)  # pull back when nearly full
+            target_ratio    = min(target_ratio, max_passive_pct)
+
+        if cash_ratio > cfg.passive_spy_cash_threshold and spy_ratio < target_ratio - band:
+            # BUY: deploy excess cash into SPY
+            buy_pct = min(target_ratio - spy_ratio, cash_ratio - 0.05)
+            notional = equity * buy_pct
+            if notional >= 100:  # minimum trade size
+                log.info(
+                    "Passive SPY: cash=%.1f%% > threshold=%.0f%% → BUY SPY (notional=$%.0f, +%.1f%%)",
+                    cash_ratio * 100, cfg.passive_spy_cash_threshold * 100, notional, buy_pct * 100,
+                )
+                try:
+                    httpx.post(
+                        f"{self._brain_url}/execute",
+                        json={"symbol": "SPY", "asset_class": "stock", "action": "BUY",
+                              "suggested_position_pct": buy_pct,
+                              "stop_loss_pct": 0.05, "take_profit_pct": 0.25},
+                        headers={"X-API-Key": cfg.brain_api_key},
+                        timeout=15,
+                    )
+                    log.info("Passive SPY: BUY order submitted")
+                except Exception as exc:
+                    log.warning("Passive SPY: BUY order failed — %s", exc)
+
+        elif spy_ratio > target_ratio + band and active_positions > int(cfg.max_concurrent_positions * 0.5):
+            # SELL partial SPY: active trades are crowding the portfolio, free up cash
+            sell_ratio = spy_ratio - target_ratio
+            sell_notional = equity * sell_ratio
+            if sell_notional >= 100:
+                log.info(
+                    "Passive SPY: many active positions (%d) → trim SPY by $%.0f (−%.1f%%)",
+                    active_positions, sell_notional, sell_ratio * 100,
+                )
+                try:
+                    from alpaca.trading.client import TradingClient
+                    from alpaca.trading.requests import ClosePositionRequest
+                    is_paper_alpaca = "paper" in cfg.alpaca_base_url.lower()
+                    tc = TradingClient(cfg.alpaca_api_key, cfg.alpaca_secret_key, paper=is_paper_alpaca)
+                    sell_qty = (sell_notional / (spy_value / max(spy_qty, 1e-9)))
+                    sell_qty = min(sell_qty, spy_qty)
+                    if sell_qty > 0.01:
+                        tc.close_position("SPY", close_options=ClosePositionRequest(qty=str(round(sell_qty, 4))))
+                        log.info("Passive SPY: partial liquidation %.4f shares", sell_qty)
+                except Exception as exc:
+                    log.warning("Passive SPY: partial sell failed — %s", exc)
+
     # ── Scheduled jobs ────────────────────────────────────────────────────────
 
     def _run_cycle(self) -> None:
@@ -1369,6 +1478,13 @@ class Orchestrator:
                     fut.result()
                 except Exception as exc:
                     log.error("Unhandled error processing %s: %s", sym, exc)
+
+        # After all active signals: rebalance passive SPY core (if enabled)
+        if self._cfg.passive_spy_enabled and stock_window_open:
+            try:
+                self._manage_passive_spy(portfolio)
+            except Exception as exc:
+                log.warning("Passive SPY rebalance failed (non-fatal): %s", exc)
 
         log.info("=== Cycle complete ===")
 

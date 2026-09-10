@@ -156,7 +156,7 @@ def _precompute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 # ── Signal generation ─────────────────────────────────────────────────────────
 
 def _paper_signal(
-    indicators: dict, asset_class: str
+    indicators: dict, asset_class: str, atr_stop_cap: float = 0.04
 ) -> tuple[str, str, float, float, float, float, float]:
     """Return (action, tier, pos_pct, stop_pct, tp_pct, partial_exit_pct, runner_trail_pct)."""
     from brain.debate import (
@@ -221,7 +221,7 @@ def _paper_signal(
     price    = float(indicators.get("price", 1.0))
     atr14    = float(indicators.get("atr_14", 0.0))
     atr_pct  = atr14 / max(price, 1e-9)
-    stop_pct = max(0.005, min(0.04, 1.5 * atr_pct))
+    stop_pct = max(0.005, min(atr_stop_cap, 1.5 * atr_pct))
 
     # Position size: fixed at 5% for all tiers — measured data showed HOT at 8%
     # had a sub-break-even win rate (33-36%), making the size premium a net negative
@@ -601,6 +601,8 @@ def run_backtest(
     drawdown_scale_threshold: float = 0.08,
     drawdown_scale_factor: float = 0.80,
     market_regime_filter: bool = True,
+    hot_only_entry: bool = False,
+    atr_stop_cap: float = 0.04,
     min_bars: int = 60,
     profile: dict | None = None,
 ) -> BacktestResult:
@@ -759,12 +761,14 @@ def run_backtest(
 
             try:
                 (action, tier, pos_pct, stop_pct, tp_pct,
-                 partial_exit_pct, runner_trail_pct) = _paper_signal(indicators, asset_class)
+                 partial_exit_pct, runner_trail_pct) = _paper_signal(indicators, asset_class,
+                                                                      atr_stop_cap=atr_stop_cap)
             except Exception as exc:
                 log.debug("Signal error %s %s: %s", sym, date_str, exc)
                 continue
 
-            if action == "BUY" and tier != "COLD":
+            entry_ok = (tier == "HOT") if hot_only_entry else (tier != "COLD")
+            if action == "BUY" and entry_ok:
                 if market_regime_filter and not market_is_up:
                     continue
 
