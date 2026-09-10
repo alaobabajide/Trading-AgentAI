@@ -287,6 +287,10 @@ class Orchestrator:
         # more than max_concurrent_positions to be submitted simultaneously.
         self._pending_buys: set[str] = set()
         self._gate5_lock = threading.Lock()
+        # Time-based loss exit — counts consecutive 1-minute monitor cycles where
+        # a position is meaningfully underwater (plpc <= -1%).  After 60 consecutive
+        # minutes the position is force-closed regardless of bracket status.
+        self._loss_streak: dict[str, int] = {}
 
     # ── Portfolio refresh ──────────────────────────────────────────────────────
 
@@ -331,11 +335,16 @@ class Orchestrator:
     # ── Signal + execution ────────────────────────────────────────────────────
 
     def _spy_is_uptrend(self) -> bool:
-        """True when SPY last daily close ≥ its 20-day SMA (broad market uptrend).
+        """True only when the broad market regime is genuinely bullish.
 
-        Cached for 5 minutes so it doesn't hit yfinance on every symbol. Fails
-        open (returns True) when data is unavailable so we never block all trades
-        on a network hiccup.
+        Requires ALL THREE conditions simultaneously:
+          1. SPY above its 20-day SMA  (short-term momentum)
+          2. SPY above its 50-day SMA  (medium-term trend — filters bounces in downtrends)
+          3. VIX below 25              (market not in fear/panic territory)
+
+        Cached 5 minutes. Fails open (True) on data errors so a yfinance outage
+        never halts all trading. Open positions are never blocked by this check —
+        it is only consulted before opening NEW long entries.
         """
         now = time.monotonic()
         with self._spy_cache_lock:
@@ -343,21 +352,30 @@ class Orchestrator:
                 cached_ts, cached_val = self._spy_cache
                 if now - cached_ts < 300:
                     return cached_val
+        result = True  # safe default (fail open)
         try:
             import yfinance as yf
-            spy = yf.download("SPY", period="30d", progress=False, auto_adjust=True, threads=False)
-            if spy.empty or len(spy) < 20:
-                return True
-            closes = spy["Close"].squeeze()
-            sma20 = float(closes.rolling(20).mean().iloc[-1])
-            last_close = float(closes.iloc[-1])
-            result = last_close >= sma20
-            log.info(
-                "SPY trend filter: last=%.2f SMA20=%.2f → %s",
-                last_close, sma20, "UPTREND" if result else "DOWNTREND/FLAT",
-            )
+            spy = yf.download("SPY", period="60d", progress=False, auto_adjust=True, threads=False)
+            vix = yf.download("^VIX", period="5d",  progress=False, auto_adjust=True, threads=False)
+            if spy.empty or len(spy) < 50:
+                result = True  # insufficient history — fail open
+            else:
+                closes = spy["Close"].squeeze()
+                last_close = float(closes.iloc[-1])
+                sma20     = float(closes.rolling(20).mean().iloc[-1])
+                sma50     = float(closes.rolling(50).mean().iloc[-1])
+                vix_val   = float(vix["Close"].squeeze().iloc[-1]) if not vix.empty else 20.0
+                above_20  = last_close >= sma20
+                above_50  = last_close >= sma50
+                vix_ok    = vix_val < 25.0
+                result    = above_20 and above_50 and vix_ok
+                log.info(
+                    "Market regime: SPY=%.2f SMA20=%.2f SMA50=%.2f VIX=%.1f → %s",
+                    last_close, sma20, sma50, vix_val,
+                    "BULLISH (new entries allowed)" if result else "RISK-OFF (new entries blocked)",
+                )
         except Exception as exc:
-            log.debug("SPY trend check failed: %s — failing open", exc)
+            log.debug("Market regime check failed: %s — failing open", exc)
             result = True
         with self._spy_cache_lock:
             self._spy_cache = (time.monotonic(), result)
@@ -463,11 +481,24 @@ class Orchestrator:
                           symbol, self._cfg.cold_skip_cycles)
                 return
 
-        # ── Gate 3.6: Loss cooldown — 2 stop-loss hits in 5 days → skip 2 cycles ──
+        # ── Gate 3.6: Loss cooldown — 2 stop-loss hits in 5 days → skip 6 cycles ──
         with self._loss_lock:
             cooldown_end = self._loss_cooldown_end.get(symbol, 0)
         if time.time() < cooldown_end:
             log.info("SKIP %s — loss cooldown active (too many stop-loss hits recently)", symbol)
+            return
+
+        # ── Gate 1.5: Macro regime pre-filter ────────────────────────────────
+        # For symbols we don't currently hold: skip signal generation entirely when
+        # the broad market is in a risk-off state (VIX elevated, SPY below key trend
+        # lines).  This saves LLM credits AND prevents new entries in bad conditions.
+        # Symbols we DO hold always proceed — we still need to generate SELL signals.
+        if not _has_open_pos and not self._spy_is_uptrend():
+            log.info(
+                "SKIP %s — market regime risk-off (SPY below 20/50-SMA or VIX≥25); "
+                "no new entries until conditions improve",
+                symbol,
+            )
             return
 
         payload = {
@@ -525,21 +556,52 @@ class Orchestrator:
             with self._pos_thresholds_lock:
                 self._pos_thresholds[symbol] = (sl_pct, tp_pct)
 
-        # ── Gate 4: only act on WARM or HOT signals ───────────────────────────
-        if action == "HOLD" or tier == "COLD":
-            log.info("  → %s for %s (tier=%s) — no order submitted", action, symbol, tier)
+        # ── Gate 4: asymmetric entry/exit thresholds ─────────────────────────
+        #
+        # ENTRIES need high conviction — require HOT tier (≥17/27 weighted votes).
+        # WARM (13–16 votes) used to trigger buys; at 48% agent agreement that is
+        # barely majority and produces too many noise entries in choppy markets.
+        #
+        # EXITS should be easy — require only 8+ bearish votes when we hold the
+        # position.  Waiting for the same 13-vote threshold to SELL that was needed
+        # to BUY means positions bleed slowly while the debate stays inconclusive.
+        # Asymmetry: it takes more conviction to enter than to leave.
+        if action == "SELL":
+            if _has_open_pos and votes_for >= 8.0:
+                pass  # meaningful bearish signal on a position we hold → proceed to close
+            elif not _has_open_pos:
+                log.info("  → SELL skipped for %s — no open position to close", symbol)
+                return
+            else:
+                log.info(
+                    "  → SELL on %s held — bearish votes %.1f < 8 (waiting for stronger signal)",
+                    symbol, votes_for,
+                )
+                return
+        elif action == "BUY":
+            if tier == "HOT":
+                # Highest-conviction only — proceed
+                if confidence < self._cfg.signal_confidence_threshold:
+                    log.info(
+                        "  → HOT BUY skipped for %s — confidence %.2f < %.2f threshold",
+                        symbol, confidence, self._cfg.signal_confidence_threshold,
+                    )
+                    return
+            else:
+                # WARM or COLD: not selective enough for a new entry
+                log.info(
+                    "  → BUY skipped for %s — tier=%s votes=%.1f (HOT/17+ votes required for entry)",
+                    symbol, tier, votes_for,
+                )
+                if tier == "COLD":
+                    with self._cold_lock:
+                        self._curr_cold_symbols.add(symbol)
+                return
+        else:
+            # HOLD
+            log.info("  → HOLD for %s (tier=%s votes=%.1f) — no action", symbol, tier, votes_for)
             with self._cold_lock:
                 self._curr_cold_symbols.add(symbol)
-            return
-
-        # ── Gate 4b: confidence gate — BUY only ──────────────────────────────
-        # Low-confidence BUY signals deploy capital into weak-conviction setups.
-        # SELL is never gated on confidence — we always want to be able to exit.
-        if action == "BUY" and confidence < self._cfg.signal_confidence_threshold:
-            log.info(
-                "  → BUY skipped for %s — confidence %.2f < threshold %.2f",
-                symbol, confidence, self._cfg.signal_confidence_threshold,
-            )
             return
 
         # ── Gate 3 (order execution guard): market hours for stocks ──────────
@@ -862,6 +924,22 @@ class Orchestrator:
                 reason = f"TAKE PROFIT (up {plpc*100:.2f}% >= {tp_pct*100:.1f}%)"
             elif plpc <= -sl_pct:
                 reason = f"STOP LOSS (down {plpc*100:.2f}% <= -{sl_pct*100:.1f}%)"
+
+            # Time-based loss exit: if a position has been meaningfully underwater
+            # (plpc <= -1%) for 60 consecutive monitor cycles (≈ 60 minutes), close it.
+            # This catches the "slow bleed" zone (-1% to -3%) where the bracket stop
+            # hasn't fired yet but the position is clearly not recovering.
+            if not reason and plpc <= -0.01:
+                streak = self._loss_streak.get(symbol, 0) + 1
+                self._loss_streak[symbol] = streak
+                if streak >= 60:
+                    reason = (
+                        f"TIME-BASED EXIT (down {plpc*100:.2f}% for "
+                        f"{streak} consecutive minutes — exiting non-recovering loss)"
+                    )
+                    log.warning("  %s: %s", symbol, reason)
+            elif not reason:
+                self._loss_streak.pop(symbol, None)  # reset on recovery or neutral
 
             # Circuit-breaker escalation: when the portfolio is in deep drawdown, force-close
             # every losing position regardless of its individual stop-loss threshold.

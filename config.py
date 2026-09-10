@@ -51,13 +51,13 @@ class Settings(BaseSettings):
     brain_port: int = Field(default_factory=lambda: int(os.environ.get("PORT") or os.environ.get("BRAIN_PORT") or 8000))
 
     # ── Position sizing ───────────────────────────────────────────────────────
-    max_position_pct: float = Field(0.05, env="MAX_POSITION_PCT")          # WARM signal max, % of equity
+    max_position_pct: float = Field(0.04, env="MAX_POSITION_PCT")          # WARM signal max, % of equity
     hot_position_pct: float = Field(0.08, env="HOT_POSITION_PCT")          # HOT signal max (overrides max_position_pct)
     max_crypto_allocation_pct: float = Field(0.30, env="MAX_CRYPTO_ALLOCATION_PCT")
 
     # ── Portfolio exposure ────────────────────────────────────────────────────
     max_exposure_pct: float = Field(0.50, env="MAX_EXPOSURE_PCT")          # max % of equity deployed at once
-    max_concurrent_positions: int = Field(15, env="MAX_CONCURRENT_POSITIONS")
+    max_concurrent_positions: int = Field(10, env="MAX_CONCURRENT_POSITIONS")
 
     # ── Entry / exit thresholds ───────────────────────────────────────────────
     stop_loss_pct: float = Field(0.02, env="STOP_LOSS_PCT")                # fallback when ATR data unavailable
